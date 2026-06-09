@@ -1372,3 +1372,90 @@ body[data-palette-open] {
     display: none;
   }
 }
+
+
+/* ------------------------------------------------------------------ */
+/* Layer stack — vertical technical stack diagram (custom HTML, used   */
+/* in place of mermaid for the env-layers visualization)              */
+/* ------------------------------------------------------------------ */
+.lesson-article .layer-stack {
+  display: flex;
+  flex-direction: column;
+  max-width: 580px;
+  margin: 2rem auto;
+  font-family: var(--font-body);
+}
+.lesson-article .layer-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--paper-rule);
+  border-left: 4px solid var(--ink-mute);
+  border-radius: 4px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-left-color 0.15s ease;
+}
+.lesson-article .layer-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+.lesson-article .layer-card.layer-4 { border-left-color: var(--blueprint); }
+.lesson-article .layer-card.layer-3 { border-left-color: var(--ink-soft); }
+.lesson-article .layer-card.layer-1 { border-left-color: var(--ink); }
+
+.lesson-article .layer-num {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lesson-article .layer-card.layer-4 .layer-num { background: var(--blueprint); }
+.lesson-article .layer-card.layer-3 .layer-num { background: var(--ink-soft); }
+.lesson-article .layer-card.layer-1 .layer-num { background: var(--ink); }
+
+.lesson-article .layer-body { flex: 1; min-width: 0; }
+.lesson-article .layer-title {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 500;
+  color: var(--ink);
+  margin-bottom: 0.2rem;
+  letter-spacing: 0.02em;
+}
+.lesson-article .layer-tools {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+.lesson-article .layer-link {
+  align-self: center;
+  padding: 0.4rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+.lesson-article .layer-link::before,
+.lesson-article .layer-link::after {
+  content: '';
+  width: 1px;
+  height: 10px;
+  background: var(--paper-rule);
+}
+.lesson-article .layer-link span {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}

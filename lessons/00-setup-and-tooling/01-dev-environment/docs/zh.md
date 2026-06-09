@@ -24,12 +24,39 @@
 
 AI 工程环境有四层：
 
-```mermaid
-graph TD
-    A["4. AI/ML 库\nPyTorch、JAX、transformers 等"] --> B["3. 语言运行时\nPython 3.11+、Node 20+、Rust、Julia"]
-    B --> C["2. 包管理器\nuv、pnpm、cargo、juliaup"]
-    C --> D["1. 系统基础\n操作系统、shell、git、编辑器、GPU 驱动"]
-```
+<div class="layer-stack">
+  <div class="layer-card layer-4">
+    <span class="layer-num">4</span>
+    <div class="layer-body">
+      <div class="layer-title">AI/ML 库</div>
+      <div class="layer-tools">PyTorch · JAX · transformers · vLLM 等</div>
+    </div>
+  </div>
+  <div class="layer-link"><span>依赖</span></div>
+  <div class="layer-card layer-3">
+    <span class="layer-num">3</span>
+    <div class="layer-body">
+      <div class="layer-title">语言运行时</div>
+      <div class="layer-tools">Python 3.11+ · Node 20+ · Rust · Julia</div>
+    </div>
+  </div>
+  <div class="layer-link"><span>依赖</span></div>
+  <div class="layer-card layer-2">
+    <span class="layer-num">2</span>
+    <div class="layer-body">
+      <div class="layer-title">包管理器</div>
+      <div class="layer-tools">uv · pnpm · cargo · juliaup</div>
+    </div>
+  </div>
+  <div class="layer-link"><span>依赖</span></div>
+  <div class="layer-card layer-1">
+    <span class="layer-num">1</span>
+    <div class="layer-body">
+      <div class="layer-title">系统基础</div>
+      <div class="layer-tools">操作系统 · shell · git · 编辑器 · GPU 驱动</div>
+    </div>
+  </div>
+</div>
 
 我们从下往上安装。每一层依赖于它下面的一层。
 

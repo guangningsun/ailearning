@@ -1875,6 +1875,7 @@
         console.log('about to set innerHTML');
         el.innerHTML = '<article class="lesson-article">' + html + '</article>';
         console.log('innerHTML set successfully');
+        convertMermaidInCodeHilites(el);
         document.title = extractTitle(found.content) + ' - 从零学 AI 工程';
         console.log('calling initCode复制');
         initCode复制();
@@ -2583,6 +2584,52 @@
             });
           });
         });
+      }
+
+      // Pygments-rendered ```mermaid``` blocks in data.js arrive as
+      // <div class="codehilite"><pre><code>...</code></pre></div>. parseMd's
+      // mermaid path only runs on raw markdown, so detect the keyword at
+      // the start of the code and swap the wrapper for the structure
+      // rerenderMermaidBlocks expects.
+      function convertMermaidInCodeHilites(root) {
+        var MERMAID = /^\s*(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|gitGraph|requirementDiagram|C4(?:Context|Container|Component|Dynamic|Deployment)|architecture-beta|radar-beta|treemap|kanban|timeline|sankey-beta|xychart-beta|block-beta|mindmap)\b/;
+        if (!window._mermaidRuntimeIndex) window._mermaidRuntimeIndex = 1000;
+        var pres = root.querySelectorAll('pre');
+        for (var i = 0; i < pres.length; i++) {
+          var pre = pres[i];
+          if (!pre.parentNode) continue;
+          if (pre.classList.contains('mermaid-source')) continue;
+          var codeEl = pre.querySelector('code') || pre;
+          var text = codeEl.textContent || '';
+          if (!MERMAID.test(text)) continue;
+          var idx = ++window._mermaidRuntimeIndex;
+          var block = pre.closest('div.codehilite') || pre;
+          var container = document.createElement('div');
+          container.className = 'mermaid-container';
+          var mBlock = document.createElement('div');
+          mBlock.className = 'mermaid-block';
+          mBlock.setAttribute('data-mermaid-index', String(idx));
+          var toolbar = document.createElement('div');
+          toolbar.className = 'mermaid-toolbar';
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'mermaid-btn mermaid-expand';
+          btn.setAttribute('data-mermaid-index', String(idx));
+          btn.textContent = 'Expand';
+          toolbar.appendChild(btn);
+          mBlock.appendChild(toolbar);
+          var newPre = document.createElement('pre');
+          newPre.className = 'mermaid mermaid-source';
+          newPre.id = 'mermaid-' + idx;
+          newPre.textContent = text;
+          mBlock.appendChild(newPre);
+          var render = document.createElement('div');
+          render.className = 'mermaid-render';
+          render.id = 'mermaid-render-' + idx;
+          mBlock.appendChild(render);
+          container.appendChild(mBlock);
+          block.parentNode.replaceChild(container, block);
+        }
       }
 
       function renderMermaidBlocks() {
