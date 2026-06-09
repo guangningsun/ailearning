@@ -1,0 +1,18 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backups
+*.bak
+*.orig
+*.original
+*.rej
+
+# Build artifacts
+node_modules/
+*.log
+
+# Generated site data (large; regenerate via site/build.js)
+# site/data.js  # tracked on purpose for the static site
