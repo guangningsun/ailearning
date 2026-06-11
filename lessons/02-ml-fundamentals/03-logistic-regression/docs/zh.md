@@ -1,177 +1,177 @@
-# Logistic Regression
+# 逻辑回归
 
-> Logistic regression bends a straight line into an S-curve to answer yes-or-no questions with probabilities.
+> 逻辑回归将一条直线弯成 S 曲线，用概率来回答是非问题。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 2 Lesson 1-2 (What Is ML, Linear Regression)
-**Time:** ~90 minutes
+**类型：** 实战型
+**语言：** Python
+**前置条件：** 阶段 2 第 1-2 课（什么是机器学习、线性回归）
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Implement logistic regression from scratch using the sigmoid function and binary cross-entropy loss
-- Compute and interpret precision, recall, F1 score, and the confusion matrix for binary classification
-- Explain why MSE fails for classification and why binary cross-entropy produces a convex cost surface
-- Build a softmax regression model for multi-class classification and evaluate threshold tuning tradeoffs
+- 从零实现逻辑回归，使用 sigmoid 函数和二元交叉熵损失
+- 计算并解释二元分类的精确率、召回率、F1 分数和混淆矩阵
+- 解释为什么 MSE 对分类任务失效，以及为什么二元交叉熵能产生凸损失面
+- 构建 Softmax 回归模型用于多分类，并评估阈值调整的权衡
 
-## The Problem
+## 问题
 
-You want to predict whether a tumor is malignant or benign given its size. You try linear regression. It outputs numbers like 0.3 or 1.7 or -0.5. What do those mean? Is 1.7 "very malignant"? Is -0.5 "very benign"? Linear regression outputs unbounded numbers. Classification needs bounded probabilities between 0 and 1, and a clear decision: yes or no.
+你想根据肿瘤大小来预测它是恶性还是良性。你尝试用线性回归。它输出 0.3、1.7 或 -0.5 这样的数字。这些是什么意思？1.7 是"很恶性"吗？-0.5 是"很良性"吗？线性回归输出的是无界数值。分类需要的是 0 到 1 之间的有界概率，以及一个明确的决策：是或否。
 
-Logistic regression solves this. It takes the same linear combination (wx + b) and passes it through the sigmoid function, which squashes any number into the range (0, 1). The output is a probability. You set a threshold (usually 0.5) and make a decision.
+逻辑回归解决了这个问题。它取相同的线性组合（wx + b），然后通过 sigmoid 函数，把任意数值压缩到 (0, 1) 区间。输出是一个概率。你设定一个阈值（通常是 0.5），然后做出决策。
 
-This is one of the most widely used algorithms in practice. Despite its name, logistic regression is a classification algorithm, not a regression algorithm. The name comes from the logistic (sigmoid) function it uses.
+这是实际应用中最广泛使用的算法之一。尽管名字里带着"回归"，逻辑回归其实是一个分类算法，而不是回归算法。这个名字来源于它所使用的 logistic（S 形）函数。
 
-## The Concept
+## 概念
 
-### Why Linear Regression Fails for Classification
+### 为什么线性回归不适用于分类
 
-Imagine predicting pass/fail (1/0) based on study hours. Linear regression fits a line through the data:
+想象根据学习小时数来预测通过/不通过（1/0）。线性回归在数据上拟合一条直线：
 
 ```
-hours:  1   2   3   4   5   6   7   8   9   10
-actual: 0   0   0   0   1   1   1   1   1   1
+小时数:   1   2   3   4   5   6   7   8   9   10
+实际值:   0   0   0   0   1   1   1   1   1   1
 ```
 
-A linear fit might produce predictions like -0.2 at hour 1 and 1.3 at hour 10. These values are not probabilities. They go below 0 and above 1. Worse, a single outlier (someone who studied 50 hours) would drag the entire line, changing predictions for everyone.
+线性拟合可能在第 1 小时产生 -0.2 的预测，在第 10 小时产生 1.3 的预测。这些值不是概率，它们低于 0 或高于 1。更糟糕的是，一个离群点（某个学了 50 小时的人）会拉动整条直线，改变所有人的预测。
 
-Classification needs a function that:
-- Outputs values between 0 and 1 (probabilities)
-- Creates a sharp transition (a decision boundary)
-- Is not distorted by outliers far from the boundary
+分类需要一个函数，它能：
+- 输出 0 到 1 之间的值（概率）
+- 创建一个急剧的转变（决策边界）
+- 不被远离边界的离群点扭曲
 
-### The Sigmoid Function
+### Sigmoid 函数
 
-The sigmoid function does exactly this:
+Sigmoid 函数正好能做到这一点：
 
 ```
 sigmoid(z) = 1 / (1 + e^(-z))
 ```
 
-Properties:
-- When z is large and positive, sigmoid(z) approaches 1
-- When z is large and negative, sigmoid(z) approaches 0
-- When z = 0, sigmoid(z) = 0.5
-- The output is always between 0 and 1
-- The function is smooth and differentiable everywhere
+性质：
+- 当 z 为大正数时，sigmoid(z) 趋近于 1
+- 当 z 为大负数时，sigmoid(z) 趋近于 0
+- 当 z = 0 时，sigmoid(z) = 0.5
+- 输出始终在 0 和 1 之间
+- 函数处处光滑可导
 
-The derivative has a convenient form: sigmoid'(z) = sigmoid(z) * (1 - sigmoid(z)). This makes gradient computation efficient.
+导数有一个简洁的形式：sigmoid'(z) = sigmoid(z) * (1 - sigmoid(z))。这使得梯度计算非常高效。
 
-### Logistic Regression = Linear Model + Sigmoid
+### 逻辑回归 = 线性模型 + Sigmoid
 
-The model computes z = wx + b (same as linear regression), then applies sigmoid:
+模型计算 z = wx + b（与线性回归相同），然后应用 sigmoid：
 
 ```mermaid
 flowchart LR
-    X[Input features x] --> L["Linear: z = wx + b"]
+    X[输入特征 x] --> L["线性: z = wx + b"]
     L --> S["Sigmoid: p = 1/(1+e^-z)"]
     S --> D{"p >= 0.5?"}
-    D -->|Yes| P[Predict 1]
-    D -->|No| N[Predict 0]
+    D -->|是| P[预测 1]
+    D -->|否| N[预测 0]
 ```
 
-The output p is interpreted as P(y=1 | x), the probability that the input belongs to class 1. The decision boundary is where wx + b = 0, which makes sigmoid output exactly 0.5.
+输出 p 被解释为 P(y=1 | x)，即输入属于类别 1 的概率。决策边界是 wx + b = 0 的位置，此时 sigmoid 输出恰好为 0.5。
 
-### Binary Cross-Entropy Loss
+### 二元交叉熵损失
 
-You cannot use MSE for logistic regression. MSE with a sigmoid creates a non-convex cost surface with many local minima. Instead, use binary cross-entropy (log loss):
+你不能对逻辑回归使用 MSE。MSE 配合 sigmoid 会产生非凸损失面，存在许多局部最小值。应该使用二元交叉熵（对数损失）：
 
 ```
-Loss = -(1/n) * sum(y * log(p) + (1-y) * log(1-p))
+损失 = -(1/n) * sum(y * log(p) + (1-y) * log(1-p))
 ```
 
-Why this works:
-- When y=1 and p is close to 1: log(1) = 0, so loss is near 0 (correct, low cost)
-- When y=1 and p is close to 0: log(0) approaches negative infinity, so loss is huge (wrong, high cost)
-- When y=0 and p is close to 0: log(1) = 0, so loss is near 0 (correct, low cost)
-- When y=0 and p is close to 1: log(0) approaches negative infinity, so loss is huge (wrong, high cost)
+为什么这样有效：
+- 当 y=1 且 p 接近 1 时：log(1) = 0，所以损失接近 0（正确，低成本）
+- 当 y=1 且 p 接近 0 时：log(0) 趋近负无穷，所以损失巨大（错误，高成本）
+- 当 y=0 且 p 接近 0 时：log(1) = 0，所以损失接近 0（正确，低成本）
+- 当 y=0 且 p 接近 1 时：log(0) 趋近负无穷，所以损失巨大（错误，高成本）
 
-This loss function is convex for logistic regression, guaranteeing a single global minimum.
+对于逻辑回归，这个损失函数是凸的，保证有唯一的全局最小值。
 
-### Gradient Descent for Logistic Regression
+### 逻辑回归的梯度下降
 
-The gradients for binary cross-entropy with sigmoid have a clean form:
+二元交叉熵配合 sigmoid 的梯度有一个简洁的形式：
 
 ```
 dL/dw = (1/n) * sum((p - y) * x)
 dL/db = (1/n) * sum(p - y)
 ```
 
-These look identical to the linear regression gradients. The difference is that p = sigmoid(wx + b) instead of p = wx + b. The sigmoid introduces the nonlinearity, but the gradient update rule stays the same.
+这些公式看起来与线性回归的梯度完全相同。区别在于 p = sigmoid(wx + b) 而不是 p = wx + b。Sigmoid 引入了非线性，但梯度更新规则保持不变。
 
 ```mermaid
 flowchart TD
-    A[Initialize w=0, b=0] --> B[Forward pass: z = wx+b, p = sigmoid z]
-    B --> C[Compute loss: binary cross-entropy]
-    C --> D["Compute gradients: dw = (1/n) * sum((p-y)*x)"]
-    D --> E[Update: w = w - lr*dw, b = b - lr*db]
-    E --> F{Converged?}
-    F -->|No| B
-    F -->|Yes| G[Model trained]
+    A[初始化 w=0, b=0] --> B[前向传播: z = wx+b, p = sigmoid z]
+    B --> C[计算损失: 二元交叉熵]
+    C --> D["计算梯度: dw = (1/n) * sum((p-y)*x)"]
+    D --> E[更新: w = w - lr*dw, b = b - lr*db]
+    E --> F{收敛了吗？]
+    F -->|否| B
+    F -->|是| G[模型训练完成]
 ```
 
-### The Decision Boundary
+### 决策边界
 
-For a 2D input (two features), the decision boundary is the line where:
+对于二维输入（两个特征），决策边界是以下方程对应的直线：
 
 ```
 w1*x1 + w2*x2 + b = 0
 ```
 
-Points on one side get classified as 1, points on the other side as 0. Logistic regression always produces a linear decision boundary. If you need a curved boundary, you either add polynomial features or use a nonlinear model.
+一侧的点被归类为 1，另一侧的为 0。逻辑回归始终产生线性决策边界。如果你需要曲线边界，可以添加多项式特征或使用非线性模型。
 
-### Multi-Class Classification with Softmax
+### 使用 Softmax 的多分类
 
-Binary logistic regression handles two classes. For k classes, use the softmax function:
+二元逻辑回归处理两个类别。对于 k 个类别，使用 softmax 函数：
 
 ```
 softmax(z_i) = e^(z_i) / sum(e^(z_j) for all j)
 ```
 
-Each class has its own weight vector. The model computes a score z_i for each class, then softmax converts scores to probabilities that sum to 1. The predicted class is the one with the highest probability.
+每个类别都有自己的权重向量。模型为每个类别计算一个分数 z_i，然后 softmax 将分数转换为概率，所有概率之和为 1。预测的类别是概率最高的那个。
 
-The loss function becomes categorical cross-entropy:
+损失函数变为分类交叉熵：
 
 ```
-Loss = -(1/n) * sum(sum(y_k * log(p_k)))
+损失 = -(1/n) * sum(sum(y_k * log(p_k)))
 ```
 
-where y_k is 1 for the true class and 0 for all others (one-hot encoding).
+其中 y_k 在真实类别处为 1，其他地方为 0（独热编码）。
 
-### Evaluation Metrics
+### 评估指标
 
-Accuracy alone is not enough. For a dataset with 95% negative and 5% positive, a model that always predicts negative gets 95% accuracy but is useless.
+仅看准确率是不够的。对于一个 95% 负类、5% 正类的数据集，一个总是预测负类的模型可以得到 95% 的准确率，但它毫无用处。
 
-**Confusion Matrix**:
+**混淆矩阵**：
 
-| | Predicted Positive | Predicted Negative |
+| | 预测为正类 | 预测为负类 |
 |---|---|---|
-| Actually Positive | True Positive (TP) | False Negative (FN) |
-| Actually Negative | False Positive (FP) | True Negative (TN) |
+| 实际为正类 | 真阳性 (TP) | 假阴性 (FN) |
+| 实际为负类 | 假阳性 (FP) | 真阴性 (TN) |
 
-**Precision**: Of all predicted positives, how many are actually positive?
+**精确率**：在所有预测为正类的样本中，实际为正类的有多少？
 ```
-Precision = TP / (TP + FP)
-```
-
-**Recall** (Sensitivity): Of all actual positives, how many did we catch?
-```
-Recall = TP / (TP + FN)
+精确率 = TP / (TP + FP)
 ```
 
-**F1 Score**: Harmonic mean of precision and recall. Balances both metrics.
+**召回率**（灵敏度）：在所有实际为正类的样本中，我们捕获了多少？
 ```
-F1 = 2 * (Precision * Recall) / (Precision + Recall)
+召回率 = TP / (TP + FN)
 ```
 
-When to prioritize:
-- **Precision**: when false positives are costly (spam filter, you do not want to block legitimate email)
-- **Recall**: when false negatives are costly (cancer screening, you do not want to miss a tumor)
-- **F1**: when you need a single balanced metric
+**F1 分数**：精确率和召回率的调和平均。平衡两个指标。
+```
+F1 = 2 * (精确率 * 召回率) / (精确率 + 召回率)
+```
 
-## Build It
+何时优先考虑：
+- **精确率**：当假阳性成本高昂时（垃圾邮件过滤器，你不想拦截正常邮件）
+- **召回率**：当假阴性成本高昂时（癌症筛查，你不想漏掉肿瘤）
+- **F1**：当你需要一个单一的平衡指标时
 
-### Step 1: Sigmoid function and data generation
+## 动手实现
+
+### 第 1 步：Sigmoid 函数与数据生成
 
 ```python
 import random
@@ -201,14 +201,14 @@ X, y = zip(*combined)
 X = list(X)
 y = list(y)
 
-print(f"Generated {N} samples (2 classes, 2 features)")
-print(f"Class 0 center: (2, 2), Class 1 center: (5, 5)")
-print(f"First 5 samples:")
+print(f"生成了 {N} 个样本（2 个类别，2 个特征）")
+print(f"类别 0 中心: (2, 2), 类别 1 中心: (5, 5)")
+print(f"前 5 个样本：")
 for i in range(5):
-    print(f"  Features: [{X[i][0]:.2f}, {X[i][1]:.2f}], Label: {y[i]}")
+    print(f"  特征: [{X[i][0]:.2f}, {X[i][1]:.2f}], 标签: {y[i]}")
 ```
 
-### Step 2: Logistic regression from scratch
+### 第 2 步：从零实现逻辑回归
 
 ```python
 class LogisticRegression:
@@ -252,7 +252,7 @@ class LogisticRegression:
             loss = self.compute_loss(X, y)
             self.loss_history.append(loss)
             if epoch % print_every == 0:
-                print(f"  Epoch {epoch:4d} | Loss: {loss:.4f} | w: [{self.weights[0]:.3f}, {self.weights[1]:.3f}] | b: {self.bias:.3f}")
+                print(f"  轮次 {epoch:4d} | 损失: {loss:.4f} | w: [{self.weights[0]:.3f}, {self.weights[1]:.3f}] | b: {self.bias:.3f}")
         return self
 
     def accuracy(self, X, y):
@@ -264,17 +264,17 @@ split = int(0.8 * N)
 X_train, X_test = X[:split], X[split:]
 y_train, y_test = y[:split], y[split:]
 
-print("\n=== Training Logistic Regression ===")
+print("\n=== 训练逻辑回归 ===")
 model = LogisticRegression(n_features=2, learning_rate=0.1)
 model.fit(X_train, y_train, epochs=1000, print_every=200)
 
-print(f"\nTrain accuracy: {model.accuracy(X_train, y_train):.4f}")
-print(f"Test accuracy:  {model.accuracy(X_test, y_test):.4f}")
-print(f"Weights: [{model.weights[0]:.4f}, {model.weights[1]:.4f}]")
-print(f"Bias: {model.bias:.4f}")
+print(f"\n训练集准确率: {model.accuracy(X_train, y_train):.4f}")
+print(f"测试集准确率:  {model.accuracy(X_test, y_test):.4f}")
+print(f"权重: [{model.weights[0]:.4f}, {model.weights[1]:.4f}]")
+print(f"偏置: {model.bias:.4f}")
 ```
 
-### Step 3: Confusion matrix and metrics from scratch
+### 第 3 步：从零实现混淆矩阵与指标
 
 ```python
 class ClassificationMetrics:
@@ -302,37 +302,37 @@ class ClassificationMetrics:
         return 2 * p * r / (p + r) if (p + r) > 0 else 0
 
     def print_confusion_matrix(self):
-        print(f"\n  Confusion Matrix:")
-        print(f"                  Predicted")
-        print(f"                  Pos   Neg")
-        print(f"  Actual Pos     {self.tp:4d}  {self.fn:4d}")
-        print(f"  Actual Neg     {self.fp:4d}  {self.tn:4d}")
+        print(f"\n  混淆矩阵：")
+        print(f"                  预测")
+        print(f"                  正   负")
+        print(f"  实际 正       {self.tp:4d}  {self.fn:4d}")
+        print(f"  实际 负       {self.fp:4d}  {self.tn:4d}")
 
     def print_report(self):
         self.print_confusion_matrix()
-        print(f"\n  Accuracy:  {self.accuracy():.4f}")
-        print(f"  Precision: {self.precision():.4f}")
-        print(f"  Recall:    {self.recall():.4f}")
-        print(f"  F1 Score:  {self.f1():.4f}")
+        print(f"\n  准确率:  {self.accuracy():.4f}")
+        print(f"  精确率: {self.precision():.4f}")
+        print(f"  召回率:    {self.recall():.4f}")
+        print(f"  F1 分数:  {self.f1():.4f}")
 
 
 y_pred_test = [model.predict(x) for x in X_test]
-print("\n=== Classification Report (Test Set) ===")
+print("\n=== 分类报告（测试集）===")
 metrics = ClassificationMetrics(y_test, y_pred_test)
 metrics.print_report()
 ```
 
-### Step 4: Decision boundary analysis
+### 第 4 步：决策边界分析
 
 ```python
-print("\n=== Decision Boundary ===")
+print("\n=== 决策边界 ===")
 w1, w2 = model.weights
 b = model.bias
-print(f"Decision boundary: {w1:.4f}*x1 + {w2:.4f}*x2 + {b:.4f} = 0")
+print(f"决策边界: {w1:.4f}*x1 + {w2:.4f}*x2 + {b:.4f} = 0")
 if abs(w2) > 1e-10:
-    print(f"Solved for x2:     x2 = {-w1/w2:.4f}*x1 + {-b/w2:.4f}")
+    print(f"解出 x2:     x2 = {-w1/w2:.4f}*x1 + {-b/w2:.4f}")
 
-print("\nSample predictions near the boundary:")
+print("\n边界附近的样本预测：")
 test_points = [
     [3.0, 3.0],
     [3.5, 3.5],

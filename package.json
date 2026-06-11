@@ -1,0 +1,23 @@
+{
+  "name": "ai-from-scratch-cn",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guangningsun/ailearning.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/guangningsun/ailearning/issues"
+  },
+  "homepage": "https://github.com/guangningsun/ailearning#readme",
+  "dependencies": {
+    "marked2": "^0.2.7"
+  }
+}

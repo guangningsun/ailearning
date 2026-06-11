@@ -16,3 +16,6 @@ node_modules/
 
 # Generated site data (large; regenerate via site/build.js)
 # site/data.js  # tracked on purpose for the static site
+
+# Translation backups (local only, regenerated from zh.md if needed)
+lessons/*/.lesson-backup-*/

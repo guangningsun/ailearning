@@ -1,73 +1,73 @@
-# Feature Engineering & Selection
+# 特征工程与特征选择
 
-> A good feature is worth a thousand data points.
+> 一个好的特征值得一千个数据点。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 1 (Statistics for ML, Linear Algebra), Phase 2 Lessons 1-7
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python
+**前置条件：** 阶段 1（统计学、线性代数），阶段 2 第 1-7 课
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Implement numerical transforms (standardization, min-max scaling, log transform, binning) and explain when each is appropriate
-- Build one-hot, label, and target encoding for categorical features and identify the data leakage risk in target encoding
-- Construct a TF-IDF vectorizer from scratch and explain why it outperforms raw word counts for text classification
-- Apply filter-based feature selection (variance threshold, correlation, mutual information) to reduce dimensionality
+- 从零实现数值变换（标准化、min-max 缩放、对数变换、分箱），并解释何时适合使用每种方法
+- 构建类别特征的单热编码、标签编码和目标编码，并识别目标编码中的数据泄露风险
+- 从零构建 TF-IDF 向量化器，并解释为什么它优于文本分类中的原始词计数
+- 应用基于过滤器的特征选择（方差阈值、相关性、互信息）来降低维度
 
-## The Problem
+## 问题
 
-You have a dataset. You pick an algorithm. You train it. The results are mediocre. You try a fancier algorithm. Still mediocre. You spend a week tuning hyperparameters. Marginal improvement.
+你有一个数据集。你选择了一个算法，训练它。结果平平。你尝试了更花哨的算法。仍然平平。你花了一周时间调超参数。改进微乎其微。
 
-Then someone transforms the raw data into better features and a simple logistic regression beats your tuned gradient-boosted ensemble.
+然后有人把原始数据转换成更好的特征，一个简单的逻辑回归就打败了你调优的梯度提升集成。
 
-This happens constantly. In classical ML, the representation of the data matters more than the choice of algorithm. A house price model with "square footage" and "number of bedrooms" will beat a model with "address as a raw string" no matter how sophisticated the learner is. The algorithm can only work with what you give it.
+这种情况经常发生。在传统 ML 中，数据的表示比算法选择更重要。具有"面积"和"卧室数量"的房价模型，无论学习器多么复杂，都会打败用"原始字符串地址"作为特征的模型。算法只能用你给它的东西来工作。
 
-Feature engineering is the process of transforming raw data into representations that make patterns easier for models to find. Feature selection is the process of throwing away features that add noise without adding signal. Together, they are the highest-leverage activity in classical ML.
+特征工程是将原始数据转换为使模型更容易找到模式的表示形式的过程。特征选择是丢弃那些添加了噪声而没有添加信号的特征的过程。两者加在一起，是传统 ML 中杠杆效应最高的活动。
 
-## The Concept
+## 核心概念
 
-### The Feature Pipeline
+### 特征流水线
 
 ```mermaid
 flowchart LR
-    A[Raw Data] --> B[Handle Missing Values]
-    B --> C[Numerical Transforms]
-    B --> D[Categorical Encoding]
-    B --> E[Text Features]
-    C --> F[Feature Interactions]
+    A[原始数据] --> B[处理缺失值]
+    B --> C[数值变换]
+    B --> D[类别编码]
+    B --> E[文本特征]
+    C --> F[特征交互]
     D --> F
     E --> F
-    F --> G[Feature Selection]
-    G --> H[Model-Ready Data]
+    F --> G[特征选择]
+    G --> H[模型就绪数据]
 ```
 
-### Numerical Features
+### 数值特征
 
-Raw numbers are rarely model-ready. Common transforms:
+原始数字很少能直接用于模型。常见变换：
 
-**Scaling:** Put features on the same range so distance-based algorithms (K-Means, KNN, SVM) treat all features equally. Min-max scaling maps to [0, 1]. Standardization (z-score) maps to mean=0, std=1.
+**缩放：** 将特征放在相同的范围内，这样基于距离的算法（K-Means、KNN、SVM）会平等对待所有特征。Min-max 缩放到 [0, 1]。标准化（z-score）映射到 mean=0, std=1。
 
-**Log transform:** Compresses right-skewed distributions (income, population, word counts). Turns multiplicative relationships into additive ones.
+**对数变换：** 压缩右偏分布（收入、人口、词频）。将乘法关系转换为加法关系。
 
-**Binning:** Converts continuous values into categories. Useful when the relationship between feature and target is non-linear but step-wise (e.g., age groups).
+**分箱：** 将连续值转换为类别。当特征与目标之间的关系是非线性的但呈阶梯式时很有用（例如年龄段）。
 
-**Polynomial features:** Creates x^2, x^3, x1*x2 terms. Lets linear models capture non-linear relationships at the cost of more features.
+**多项式特征：** 创建 x^2、x^3、x1*x2 项。让线性模型能够以更多特征为代价捕捉非线性关系。
 
-### Categorical Features
+### 类别特征
 
-Models need numbers. Categories need encoding.
+模型需要数字。类别需要编码。
 
-**One-hot encoding:** Creates a binary column for each category. "color = red/blue/green" becomes three columns: is_red, is_blue, is_green. Works well for low-cardinality features but explodes with many categories.
+**单热编码：** 为每个类别创建一个二进制列。"颜色 = 红/蓝/绿"变成三列：is_red、is_blue、is_green。适用于低基数特征，但在类别较多时会爆炸。
 
-**Label encoding:** Maps each category to an integer: red=0, blue=1, green=2. Introduces false ordering (the model might think green > blue > red). Only appropriate for tree-based models that split on individual values.
+**标签编码：** 将每个类别映射到一个整数：红=0，蓝=1，绿=2。引入了虚假的排序（模型可能认为绿 > 蓝 > 红）。仅适用于基于树的模型，这些模型在单个值上进行分裂。
 
-**Target encoding:** Replaces each category with the mean of the target variable for that category. Powerful but dangerous: high risk of data leakage. Must be computed only on training data and applied to test data.
+**目标编码：** 用该类别目标变量的均值替换每个类别。强大但危险：数据泄露风险很高。必须仅在训练数据上计算，并应用于测试数据。
 
-### Text Features
+### 文本特征
 
-**Count vectorizer:** Counts how many times each word appears in a document. "the cat sat on the mat" becomes {the: 2, cat: 1, sat: 1, on: 1, mat: 1}.
+**词计数向量化器：** 计算每个词在文档中出现的次数。"the cat sat on the mat"变成 {the: 2, cat: 1, sat: 1, on: 1, mat: 1}。
 
-**TF-IDF:** Term Frequency-Inverse Document Frequency. Weighs words by how unique they are across documents. Common words like "the" get low weight. Rare, distinctive words get high weight.
+**TF-IDF：** 词频-逆文档频率。通过词在文档中的独特程度来加权词。像"the"这样的常见词获得低权重。罕见的、独特的词获得高权重。
 
 ```
 TF(word, doc) = count(word in doc) / total words in doc
@@ -75,38 +75,38 @@ IDF(word) = log(total docs / docs containing word)
 TF-IDF = TF * IDF
 ```
 
-### Missing Values
+### 缺失值
 
-Real data has holes. Strategies:
+真实数据有漏洞。策略：
 
-- **Drop rows:** Only when missing data is rare and random
-- **Mean/median imputation:** Simple, preserves distribution shape (median is more robust to outliers)
-- **Mode imputation:** For categorical features
-- **Indicator column:** Add a binary column "was_this_missing" before imputing. The fact that data is missing can itself be informative
-- **Forward/backward fill:** For time series data
+- **删除行：** 仅当缺失数据很少且随机时
+- **均值/中位数填充：** 简单，保留分布形状（中位数对异常值更稳健）
+- **众数填充：** 用于类别特征
+- **指示列：** 在填充之前添加一个"was_this_missing"二进制列。数据缺失的事实本身就可能是信息
+- **前向/后向填充：** 用于时间序列数据
 
-### Feature Interaction
+### 特征交互
 
-Sometimes the relationship is in the combination. "Height" and "weight" alone are less predictive than "BMI = weight / height^2". Feature interactions multiply the feature space, so use domain knowledge to pick the right ones.
+有时关系在于组合。"身高"和"体重"单独预测能力不如"BMI = 体重 / 身高^2"。特征交互成倍增加特征空间，所以要用领域知识来选择正确的交互。
 
-### Feature Selection
+### 特征选择
 
-More features is not always better. Irrelevant features add noise, increase training time, and can cause overfitting.
+更多特征并不总是更好。不相关特征添加噪声，增加训练时间，并可能导致过拟合。
 
-**Filter methods (pre-model):**
-- Correlation: remove features highly correlated with each other (redundant)
-- Mutual information: measures how much knowing a feature reduces uncertainty about the target
-- Variance threshold: remove features that barely vary
+**过滤方法（模型前）：**
+- 相关性：移除高度相关的特征（冗余）
+- 互信息：衡量知道一个特征能减少多少关于目标的不确定性
+- 方差阈值：移除几乎没有变化的特征
 
-**Wrapper methods (model-based):**
-- L1 regularization (Lasso): drives irrelevant feature weights to exactly zero
-- Recursive feature elimination: train, remove least important feature, repeat
+**包装方法（基于模型）：**
+- L1 正则化（Lasso）：将不相关特征的权重精确推到零
+- 递归特征消除：训练，移除最不重要的特征，重复
 
-**Why selection matters:** A model with 10 good features will usually outperform a model with 10 good features and 90 noisy ones. The noisy features give the model opportunities to overfit on training data patterns that do not generalize.
+**为什么选择重要：** 具有 10 个好特征的模型通常优于具有 10 个好特征和 90 个噪声特征的模型。噪声特征给模型提供了在训练数据模式上过拟合的机会，而这些模式不能泛化。
 
-## Build It
+## 动手实现
 
-### Step 1: Numerical transforms from scratch
+### 第 1 步：从零实现数值变换
 
 ```python
 import math
@@ -158,7 +158,7 @@ def polynomial_features(row, degree=2):
     return result
 ```
 
-### Step 2: Categorical encoding from scratch
+### 第 2 步：从零实现类别编码
 
 ```python
 def one_hot_encode(values):
@@ -200,7 +200,7 @@ def target_encode(feature_values, target_values, smoothing=10):
     return [encoding[v] for v in feature_values], encoding
 ```
 
-### Step 3: Text features from scratch
+### 第 3 步：从零实现文本特征
 
 ```python
 def count_vectorize(documents):
@@ -259,7 +259,7 @@ def tfidf(documents):
     return vectors, vocab
 ```
 
-### Step 4: Missing value imputation from scratch
+### 第 4 步：从零实现缺失值填充
 
 ```python
 def impute_mean(values):
@@ -297,7 +297,7 @@ def add_missing_indicator(values):
     return [0 if v is not None else 1 for v in values]
 ```
 
-### Step 5: Feature selection from scratch
+### 第 5 步：从零实现特征选择
 
 ```python
 def correlation(x, y):
@@ -380,7 +380,7 @@ def remove_correlated(features, threshold=0.9):
     return [i for i in range(n_features) if i not in to_remove]
 ```
 
-### Step 6: Full pipeline and demo
+### 第 6 步：完整流水线和演示
 
 ```python
 import random
@@ -519,9 +519,9 @@ if __name__ == "__main__":
         print(f"    {feature_names[j]}: r={corr:.4f}")
 ```
 
-## Use It
+## 使用框架
 
-With scikit-learn, these transforms are composable pipelines:
+使用 scikit-learn，这些变换可以组合成流水线：
 
 ```python
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, PolynomialFeatures
@@ -546,35 +546,35 @@ preprocessor = ColumnTransformer([
 ])
 ```
 
-The from-scratch versions show exactly what happens inside each transform. The library versions add edge-case handling, sparse matrix support, and pipeline composition, but the math is the same.
+从零实现的版本精确展示了每个变换内部发生的事情。库版本增加了边缘情况处理、稀疏矩阵支持和流水线组合，但数学原理是相同的。
 
-## Ship It
+## 交付
 
-This lesson produces:
-- `outputs/prompt-feature-engineer.md` - a prompt for systematically engineering features from raw data
+本课产出：
+- `outputs/prompt-feature-engineer.md` - 一个用于从原始数据系统化工程化特征的提示词
 
-## Exercises
+## 练习
 
-1. Add robust scaling (using median and interquartile range instead of mean and standard deviation) to the numerical transforms. Compare it to standard scaling on data with extreme outliers.
-2. Implement leave-one-out target encoding: for each row, compute the target mean excluding that row's own target value. Show how this reduces overfitting compared to naive target encoding.
-3. Build an automated feature selection pipeline that combines variance threshold, correlation filtering, and mutual information ranking. Apply it to the housing dataset and compare model performance (use a simple linear regression) with all features vs selected features.
+1. 添加稳健缩放（使用中位数和四分位距而不是均值和标准差）到数值变换。在有极端异常值的数据上将其与标准缩放进行比较。
+2. 实现留一目标编码：对于每一行，计算排除该行自身目标值的目标均值。展示这如何减少过拟合与朴素目标编码相比。
+3. 构建一个结合方差阈值、相关性过滤和互信息排序的自动化特征选择流水线。将其应用于房价数据集，并比较使用全部特征与选定特征的模型性能（使用简单的线性回归）。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 人们怎么说 | 实际含义 |
 |------|----------------|----------------------|
-| Feature engineering | "Making new columns" | Transforming raw data into representations that expose patterns to the model |
-| Standardization | "Making it normal" | Subtracting the mean and dividing by standard deviation so the feature has mean=0 and std=1 |
-| One-hot encoding | "Making dummy variables" | Creating one binary column per category, where exactly one column is 1 for each row |
-| Target encoding | "Using the answer to encode" | Replacing each category with the average target value for that category, with smoothing to prevent overfitting |
-| TF-IDF | "Fancy word counts" | Term Frequency times Inverse Document Frequency: words weighted by how distinctive they are across the corpus |
-| Imputation | "Filling in blanks" | Replacing missing values with estimated values (mean, median, mode, or model-predicted) |
-| Feature selection | "Throwing out bad columns" | Removing features that add noise or redundancy, keeping only those with signal about the target |
-| Mutual information | "How much one thing tells you about another" | A measure of the reduction in uncertainty about variable Y gained by observing variable X |
-| Data leakage | "Accidentally cheating" | Using information during training that would not be available at prediction time, giving falsely optimistic results |
+| 特征工程 | "制作新列" | 将原始数据转换为向模型暴露模式的表示形式 |
+| 标准化 | "让它变成正态" | 减去均值并除以标准差，使特征具有 mean=0 和 std=1 |
+| 单热编码 | "制作虚拟变量" | 为每个类别创建一个二进制列，其中每行恰好有一列为 1 |
+| 目标编码 | "用答案来编码" | 用该类别目标值的平均值替换每个类别，并使用平滑来防止过拟合 |
+| TF-IDF | "花哨的词计数" | 词频乘以逆文档频率：词根据其在语料库中的独特程度加权 |
+| 填充 | "填补空白" | 用估计值（均值、中位数、众数或模型预测）替换缺失值 |
+| 特征选择 | "扔掉坏列" | 移除添加噪声或冗余的特征，只保留对目标有信号的特卡 |
+| 互信息 | "一个事物告诉你另一个事物的多少" | 通过观察变量 X 获得的对变量 Y 不确定性的减少程度的度量 |
+| 数据泄露 | "意外作弊" | 在训练期间使用在预测时不可用的信息，导致虚假乐观的结果 |
 
-## Further Reading
+## 延伸阅读
 
-- [Feature Engineering and Selection (Max Kuhn & Kjell Johnson)](http://www.feat.engineering/) - free online book covering the full landscape of feature engineering
-- [scikit-learn Preprocessing Guide](https://scikit-learn.org/stable/modules/preprocessing.html) - practical reference for all standard transforms
-- [Target Encoding Done Right (Micci-Barreca, 2001)](https://dl.acm.org/doi/10.1145/507533.507538) - the original paper on target encoding with smoothing
+- [特征工程与选择（Max Kuhn & Kjell Johnson）](http://www.feat.engineering/) - 涵盖特征工程全貌的免费在线书籍
+- [scikit-learn 预处理指南](https://scikit-learn.org/stable/modules/preprocessing.html) - 所有标准变换的实用参考
+- [正确做目标编码（Micci-Barreca, 2001）](https://dl.acm.org/doi/10.1145/507533.507538) - 关于带平滑的目标编码的原始论文

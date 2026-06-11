@@ -1,140 +1,140 @@
-# Graph Theory for Machine Learning
+# 机器学习中的图论
 
-> Graphs are the data structure of relationships. If your data has connections, you need graph theory.
+> 图是关系的数据结构。如果你的数据里有连接，你就需要图论。
 
-**Type:** Build
-**Language:** Python
-**Prerequisites:** Phase 1, Lessons 01-03 (linear algebra, matrices)
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python
+**前置条件：** 阶段 1，第 01-03 课（线性代数、矩阵）
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Build a graph class with adjacency matrix/list representations and implement BFS and DFS traversals
-- Compute the graph Laplacian and use its eigenvalues to detect connected components and cluster nodes
-- Implement one round of GNN-style message passing as a normalized adjacency matrix multiplication
-- Apply spectral clustering to partition a graph using the Fiedler vector
+- 构建一个图（graph）类，支持邻接矩阵（adjacency matrix）和邻接表两种表示方式，并实现 BFS 和 DFS 遍历
+- 计算图拉普拉斯矩阵（graph Laplacian），利用其特征值（eigenvalue）检测连通分量并进行节点聚类
+- 实现一轮 GNN 风格的消息传递（message passing），本质上就是归一化邻接矩阵乘法
+- 使用 Fiedler 向量对图进行谱聚类（spectral clustering）分割
 
-## The Problem
+## 问题
 
-Social networks, molecules, knowledge bases, citation networks, road maps -- all are graphs. Traditional ML treats data as flat tables. Each row is independent. Each feature is a column. But when the structure of connections matters, tables fail.
+社交网络、分子结构、知识图谱、引文网络、道路地图 —— 这些都是图。传统机器学习把数据当扁平表格处理，每一行互相独立，每一列是一个特征。但当连接结构本身有意义时，表格就失效了。
 
-Consider a social network. You want to predict what product a user will buy. Their purchase history matters. But their friends' purchase history matters more. The connections carry signal.
+想想社交网络。你要预测一个用户会买什么产品。他的购买历史很重要，但他朋友的购买历史更重要。连接本身就携带信号。
 
-Or consider a molecule. You want to predict if it binds to a protein. The atoms matter, but what really matters is how atoms are bonded to each other. The structure is the data.
+再想想分子。你要预测它是否会与某个蛋白质结合。原子本身很重要，但真正关键的是原子之间如何键合。结构就是数据。
 
-Graph Neural Networks (GNNs) are the fastest-growing area in deep learning. They power drug discovery, social recommendation, fraud detection, and knowledge graph reasoning. Every GNN builds on the same foundation: basic graph theory.
+图神经网络（GNN）是深度学习里增长最快的领域。它们在药物发现、社交推荐、欺诈检测和知识图谱推理中发挥着核心作用。每个 GNN 都建立在同一个基础之上：基本的图论。
 
-You need four things:
-1. A way to represent graphs as matrices (so you can multiply them)
-2. Traversal algorithms to explore graph structure
-3. The Laplacian -- the single most important matrix in spectral graph theory
-4. Message passing -- the operation that makes GNNs work
+你需要四样东西：
+1. 把图表示成矩阵的方法（才能做乘法）
+2. 探索图结构的遍历算法
+3. 图拉普拉斯矩阵 —— 谱图论中最重要的单个矩阵
+4. 消息传递 —— 让 GNN 运转起来的核心操作
 
-## The Concept
+## 概念
 
-### Graphs: Nodes and Edges
+### 图：节点与边
 
-A graph G = (V, E) consists of vertices (nodes) V and edges E. Each edge connects two nodes.
+图 G = (V, E) 由顶点（vertex，也称节点 node）集合 V 和边（edge）集合 E 组成。每条边连接两个节点。
 
-**Directed vs undirected.** In an undirected graph, edge (u, v) means u connects to v AND v connects to u. In a directed graph (digraph), edge (u, v) means u points to v, but not necessarily the reverse.
+**有向 vs 无向。** 在无向图（undirected graph）中，边 (u, v) 表示 u 连接到 v 且 v 也连接到 u。在有向图（directed graph，也称 digraph）中，边 (u, v) 表示 u 指向 v，反过来不一定成立。
 
-**Weighted vs unweighted.** In an unweighted graph, edges either exist or they don't. In a weighted graph, each edge has a numerical weight -- a distance, a cost, a strength.
+**带权 vs 无权。** 在无权图（unweighted graph）中，边要么存在要么不存在。在带权图（weighted graph）中，每条边有一个数值权重 —— 可以是距离、成本或强度。
 
-| Graph type | Example |
+| 图类型 | 示例 |
 |-----------|---------|
-| Undirected, unweighted | Facebook friendship network |
-| Directed, unweighted | Twitter follow network |
-| Undirected, weighted | Road map (distances) |
-| Directed, weighted | Web page links (PageRank scores) |
+| 无向、无权 | Facebook 好友网络 |
+| 有向、无权 | Twitter 关注网络 |
+| 无向、带权 | 道路地图（按距离加权） |
+| 有向、带权 | 网页链接（PageRank 分数） |
 
-### The Adjacency Matrix
+### 邻接矩阵
 
-The adjacency matrix A is the core representation. For a graph with n nodes:
-
-```
-A[i][j] = 1    if there is an edge from node i to node j
-A[i][j] = 0    otherwise
-```
-
-For undirected graphs, A is symmetric: A[i][j] = A[j][i]. For weighted graphs, A[i][j] = weight of edge (i, j).
-
-**Example -- a triangle:**
+邻接矩阵（adjacency matrix）A 是最核心的表示。对于有 n 个节点的图：
 
 ```
-Nodes: 0, 1, 2
-Edges: (0,1), (1,2), (0,2)
+A[i][j] = 1    如果存在从节点 i 到节点 j 的边
+A[i][j] = 0    否则
+```
+
+对于无向图，A 是对称的：A[i][j] = A[j][i]。对于带权图，A[i][j] = 边 (i, j) 的权重。
+
+**示例 —— 一个三角形：**
+
+```
+节点：0, 1, 2
+边：(0,1), (1,2), (0,2)
 
 A = [[0, 1, 1],
      [1, 0, 1],
      [1, 1, 0]]
 ```
 
-The adjacency matrix is the input to every GNN. Matrix operations on A correspond to operations on the graph.
+邻接矩阵是每个 GNN 的输入。对 A 的矩阵运算，就是对图的操作。
 
-### Degree
+### 度
 
-The degree of a node is the number of edges connected to it. For directed graphs, you have in-degree (edges coming in) and out-degree (edges going out).
+节点的度（degree）是连接到它的边的数量。对于有向图，分为入度（in-degree，进来的边）和出度（out-degree，出去的边）。
 
-The degree matrix D is diagonal:
-
-```
-D[i][i] = degree of node i
-D[i][j] = 0    for i != j
-```
-
-For the triangle example: D = diag(2, 2, 2) because every node connects to two others.
-
-Degree tells you about node importance. High degree = hub node. The degree distribution of a network reveals its structure. Social networks follow power laws (few hubs, many leaf nodes). Random graphs have Poisson-distributed degrees.
-
-### BFS and DFS
-
-The two fundamental graph traversal algorithms. You need both.
-
-**Breadth-First Search (BFS):** Explore all neighbors first, then neighbors' neighbors. Uses a queue (FIFO).
+度矩阵（degree matrix）D 是对角矩阵：
 
 ```
-BFS from node 0:
-  Visit 0
-  Queue: [1, 2]        (neighbors of 0)
-  Visit 1
-  Queue: [2, 3]        (add neighbors of 1)
-  Visit 2
-  Queue: [3]           (neighbors of 2 already visited)
-  Visit 3
-  Queue: []            (done)
+D[i][i] = 节点 i 的度
+D[i][j] = 0    当 i != j 时
 ```
 
-BFS finds shortest paths in unweighted graphs. The distance from the start to any node equals the BFS level at which that node is first discovered. This is why BFS is used for hop-count distances in social networks.
+对于上面的三角形示例：D = diag(2, 2, 2)，因为每个节点连接到另外两个节点。
 
-**Depth-First Search (DFS):** Go as deep as possible before backtracking. Uses a stack (LIFO) or recursion.
+度告诉你节点的重要性。高度数 = 枢纽节点（hub node）。网络的度分布能揭示其结构特征。社交网络遵循幂律（power law）分布（少数枢纽，大量叶子节点），随机图的度则服从泊松分布。
+
+### BFS 与 DFS
+
+两种最基本的图遍历算法，你都需要掌握。
+
+**广度优先搜索（BFS）：** 先把所有邻居探索完，再进入邻居的邻居。使用队列（FIFO）。
 
 ```
-DFS from node 0:
-  Visit 0
-  Stack: [1, 2]        (neighbors of 0)
-  Visit 2               (pop from stack)
-  Stack: [1, 3]         (add neighbors of 2)
-  Visit 3               (pop from stack)
-  Stack: [1]
-  Visit 1               (pop from stack)
-  Stack: []             (done)
+从节点 0 开始 BFS：
+  访问 0
+  队列：[1, 2]          （0 的邻居）
+  访问 1
+  队列：[2, 3]          （加入 1 的邻居）
+  访问 2
+  队列：[3]             （2 的邻居已访问过）
+  访问 3
+  队列：[]              （结束）
 ```
 
-DFS is useful for:
-- Finding connected components (run DFS from unvisited nodes)
-- Cycle detection (back edges in DFS tree)
-- Topological sorting (reverse DFS finish order)
+BFS 能在无权图中找到最短路径。从起点到任意节点的距离等于该节点在 BFS 中首次被发现的层级。正因如此，BFS 常用于社交网络中的跳数距离计算。
 
-| Algorithm | Data structure | Finds | Use case |
+**深度优先搜索（DFS）：** 尽可能往深走，走不通再回溯。使用栈（LIFO）或递归。
+
+```
+从节点 0 开始 DFS：
+  访问 0
+  栈：[1, 2]            （0 的邻居）
+  访问 2                （从栈中弹出）
+  栈：[1, 3]            （加入 2 的邻居）
+  访问 3                （从栈中弹出）
+  栈：[1]
+  访问 1                （从栈中弹出）
+  栈：[]                （结束）
+```
+
+DFS 适用于：
+- 查找连通分量（从每个未访问节点运行 DFS）
+- 环路检测（DFS 树中的回边）
+- 拓扑排序（DFS 完成时间的逆序）
+
+| 算法 | 数据结构 | 能找到什么 | 使用场景 |
 |-----------|---------------|-------|----------|
-| BFS | Queue | Shortest paths | Social network distance, knowledge graph traversal |
-| DFS | Stack | Components, cycles | Connectivity, topological sort |
+| BFS | 队列 | 最短路径 | 社交网络距离、知识图谱遍历 |
+| DFS | 栈 | 连通分量、环路 | 连通性判断、拓扑排序 |
 
-### The Graph Laplacian
+### 图拉普拉斯矩阵
 
-L = D - A. The most important matrix in spectral graph theory.
+L = D - A。这是谱图论中最重要的矩阵。
 
-For the triangle:
+对于三角形示例：
 
 ```
 D = [[2, 0, 0],    A = [[0, 1, 1],    L = [[2, -1, -1],
@@ -142,82 +142,82 @@ D = [[2, 0, 0],    A = [[0, 1, 1],    L = [[2, -1, -1],
      [0, 0, 2]]         [1, 1, 0]]         [-1, -1,  2]]
 ```
 
-The Laplacian has remarkable properties:
+拉普拉斯矩阵拥有出色的性质：
 
-1. **L is positive semi-definite.** All eigenvalues are >= 0.
+1. **L 是半正定的。** 所有特征值 >= 0。
 
-2. **The number of zero eigenvalues equals the number of connected components.** A connected graph has exactly one zero eigenvalue. A graph with 3 disconnected components has three zero eigenvalues.
+2. **零特征值的个数等于连通分量（connected component）的个数。** 一个连通图恰好有一个零特征值。一个有 3 个断开分量的图则有三个零特征值。
 
-3. **The smallest non-zero eigenvalue (Fiedler value) measures connectivity.** A large Fiedler value means the graph is well-connected. A small Fiedler value means the graph has a weak point -- a bottleneck.
+3. **最小的非零特征值（Fiedler 值）度量连通性。** Fiedler 值大，说明图连通性很好。Fiedler 值小，说明图存在薄弱环节 —— 一处瓶颈。
 
-4. **The eigenvector of the Fiedler value (Fiedler vector) reveals the best split.** Nodes with positive values go in one group, nodes with negative values go in the other. This is spectral clustering.
+4. **Fiedler 值的特征向量（Fiedler 向量）能揭示最佳分割。** 值为正的节点归入一组，值为负的归入另一组。这就是谱聚类。
 
 ```mermaid
 graph TD
-    subgraph "Graph to Matrices"
-        G["Graph G"] --> A["Adjacency Matrix A"]
-        G --> D["Degree Matrix D"]
-        A --> L["Laplacian L = D - A"]
+    subgraph "从图到矩阵"
+        G["图 G"] --> A["邻接矩阵 A"]
+        G --> D["度矩阵 D"]
+        A --> L["拉普拉斯矩阵 L = D - A"]
         D --> L
     end
-    subgraph "Spectral Analysis"
-        L --> E["Eigenvalues of L"]
-        L --> V["Eigenvectors of L"]
-        E --> C["Connected components (zeros)"]
-        E --> F["Connectivity (Fiedler value)"]
-        V --> S["Spectral clustering"]
+    subgraph "谱分析"
+        L --> E["L 的特征值"]
+        L --> V["L 的特征向量"]
+        E --> C["连通分量（零特征值）"]
+        E --> F["连通性（Fiedler 值）"]
+        V --> S["谱聚类"]
     end
 ```
 
-### Spectral Properties
+### 谱性质
 
-The eigenvalues of the adjacency matrix and Laplacian reveal structural properties without any traversal.
+邻接矩阵和拉普拉斯矩阵的特征值能揭示图的结构性质，无需任何遍历。
 
-**Spectral clustering** works like this:
-1. Compute the Laplacian L
-2. Find the k smallest eigenvectors of L (skip the first, which is all-ones for connected graphs)
-3. Use those eigenvectors as new coordinates for each node
-4. Run k-means on those coordinates
+**谱聚类（spectral clustering）** 的工作流程如下：
+1. 计算拉普拉斯矩阵 L
+2. 找到 L 的 k 个最小特征向量（跳过第一个，对连通图它是全 1 向量）
+3. 将这些特征向量作为每个节点的新坐标
+4. 在这些坐标上运行 k-means
 
-Why does this work? The eigenvectors of L encode the "smoothest" functions on the graph. Nodes that are well-connected get similar eigenvector values. Nodes separated by a bottleneck get different values. The eigenvectors naturally separate clusters.
+为什么这样行得通？L 的特征向量编码了图上"最平滑"的函数。连接紧密的节点会获得相似的特征向量值，被瓶颈隔开的节点则获得不同的值。特征向量天然地把簇分开了。
 
-**Random walk connection.** The normalized Laplacian relates to random walks on the graph. The stationary distribution of a random walk is proportional to node degree. The mixing time (how fast the walk converges) depends on the spectral gap.
+**与随机游走的联系。** 归一化拉普拉斯矩阵与图上的随机游走（random walk）有关。随机游走的平稳分布与节点度数成正比，而混合时间（mixing time，即游走收敛的速度）取决于谱间隙（spectral gap）。
 
-### Message Passing
+### 消息传递
 
-The core operation of Graph Neural Networks. Each node collects messages from its neighbors, aggregates them, and updates its own state.
+图神经网络的核心操作。每个节点从它的邻居那里收集消息，聚合它们，然后更新自己的状态。
 
 ```
 h_v^(k+1) = UPDATE(h_v^(k), AGGREGATE({h_u^(k) : u in neighbors(v)}))
 ```
 
-In the simplest form, AGGREGATE = mean, and UPDATE = linear transform + activation:
+最简单的情况下，AGGREGATE = 均值，UPDATE = 线性变换 + 激活：
 
 ```
 h_v^(k+1) = sigma(W * mean({h_u^(k) : u in neighbors(v)}))
 ```
 
-This is matrix multiplication in disguise. If H is the matrix of all node features and A is the adjacency matrix:
+这其实就是矩阵乘法。如果 H 是所有节点特征的矩阵，A 是邻接矩阵：
 
 ```
 H^(k+1) = sigma(A_norm * H^(k) * W)
 ```
 
-where A_norm is the normalized adjacency matrix (each row sums to 1).
+其中 A_norm 是归一化的邻接矩阵（每行之和为 1）。
 
-One round of message passing lets each node "see" its immediate neighbors. Two rounds let it see neighbors of neighbors. K rounds give each node information from its K-hop neighborhood.
+一轮消息传递让每个节点能"看到"它的直接邻居。两轮让它看到邻居的邻居。k 轮让每个节点获得其 k 跳邻域内的信息。
 
 ```mermaid
 graph LR
-    subgraph "Round 0"
-        A0["Node A: [1,0]"]
-        B0["Node B: [0,1]"]
-        C0["Node C: [1,1]"]
+    subgraph "第 0 轮"
+        A0["节点 A: [1,0]"]
+        B0["节点 B: [0,1]"]
+        C0["节点 C: [1,1]"]
     end
-    subgraph "Round 1 (aggregate neighbors)"
-        A1["Node A: avg(B,C) = [0.5, 1.0]"]
-        B1["Node B: avg(A,C) = [1.0, 0.5]"]
-        C1["Node C: avg(A,B) = [0.5, 0.5]"]
+    subgraph "第 1 轮（聚合邻居）"
+        A1["节点 A: avg(B,C) = [0.5, 1.0]"]
+        B1["节点 B: avg(A,C) = [1.0, 0.5]"]
+        C1["节点 C: avg(A,B) = [0.5, 0.5]"]
     end
     A0 --> A1
     B0 --> A1
@@ -228,22 +228,22 @@ graph LR
     B0 --> C1
 ```
 
-### Concepts and ML Applications
+### 概念与 ML 应用
 
-| Concept | ML Application |
+| 概念 | ML 应用 |
 |---------|---------------|
-| Adjacency matrix | GNN input representation |
-| Graph Laplacian | Spectral clustering, community detection |
-| BFS/DFS | Knowledge graph traversal, path finding |
-| Degree distribution | Node importance, feature engineering |
-| Message passing | GNN layers (GCN, GAT, GraphSAGE) |
-| Eigenvalues of L | Community detection, graph partitioning |
-| Spectral clustering | Unsupervised node grouping |
-| PageRank | Node importance, web search |
+| 邻接矩阵 | GNN 的输入表示 |
+| 图拉普拉斯矩阵 | 谱聚类、社区发现 |
+| BFS / DFS | 知识图谱遍历、路径查找 |
+| 度分布 | 节点重要性、特征工程 |
+| 消息传递 | GNN 层（GCN、GAT、GraphSAGE） |
+| L 的特征值 | 社区发现、图分割 |
+| 谱聚类 | 无监督节点分组 |
+| PageRank | 节点重要性、网页搜索 |
 
-## Build It
+## 动手实现
 
-### Step 1: Graph class from scratch
+### 第 1 步：从零构建 Graph 类
 
 ```python
 class Graph:
@@ -282,9 +282,9 @@ class Graph:
         return self.degree_matrix() - self.adjacency_matrix()
 ```
 
-The adjacency list (`self.adj`) stores neighbors efficiently. The adjacency matrix conversion uses numpy because all the spectral operations need it.
+邻接表（`self.adj`）用来高效地存储邻居信息。邻接矩阵的转换使用了 numpy，因为所有的谱操作都需要它。
 
-### Step 2: BFS and DFS
+### 第 2 步：BFS 和 DFS
 
 ```python
 from collections import deque
@@ -322,9 +322,9 @@ def dfs(graph, start):
     return order
 ```
 
-BFS uses a deque (double-ended queue) for O(1) popleft. DFS uses a list as a stack. Both visit every node exactly once -- O(V + E) time.
+BFS 使用 deque（双端队列）实现 O(1) 的左端弹出。DFS 用列表当栈。两者都恰好访问每个节点一次 —— O(V + E) 时间复杂度。
 
-### Step 3: Connected components and Laplacian eigenvalues
+### 第 3 步：连通分量与拉普拉斯特征值
 
 ```python
 def connected_components(graph):
@@ -345,9 +345,9 @@ def laplacian_eigenvalues(graph):
     return eigenvalues
 ```
 
-`eigvalsh` is for symmetric matrices -- the Laplacian is always symmetric for undirected graphs. It returns eigenvalues in ascending order. Count the zeros to find the number of connected components.
+`eigvalsh` 专用于对称矩阵 —— 无向图的拉普拉斯矩阵总是对称的。它按升序返回特征值。数零特征值的个数就能得到连通分量的数量。
 
-### Step 4: Spectral clustering
+### 第 4 步：谱聚类
 
 ```python
 def spectral_clustering(graph, k=2):
@@ -365,9 +365,9 @@ def spectral_clustering(graph, k=2):
     return labels
 ```
 
-For k=2, the sign of the Fiedler vector splits the graph into two clusters. For k>2, you would run k-means on the first k eigenvectors (excluding the trivial all-ones eigenvector).
+对于 k=2，Fiedler 向量的符号就把图分成了两个簇。对于 k>2，你需要在除去平凡全 1 特征向量之后的前 k 个特征向量上运行 k-means。
 
-### Step 5: Message passing
+### 第 5 步：消息传递
 
 ```python
 def message_passing(graph, features, weight_matrix):
@@ -381,11 +381,11 @@ def message_passing(graph, features, weight_matrix):
     return output
 ```
 
-This is one round of GNN message passing. Each node's new features are the weighted average of its neighbors' features, transformed by the weight matrix. Stack multiple rounds to propagate information further.
+这就是一轮 GNN 消息传递。每个节点的新特征是它邻居特征的加权平均，再经过权重矩阵的变换。堆叠多轮就能把信息传播得更远。
 
-## Use It
+## 实际使用
 
-With networkx and numpy, the same operations are one-liners:
+用 networkx 和 numpy，同样的操作只需一行：
 
 ```python
 import networkx as nx
@@ -408,9 +408,9 @@ top_nodes = sorted(pr.items(), key=lambda x: x[1], reverse=True)[:5]
 print(f"Top 5 PageRank nodes: {top_nodes}")
 ```
 
-networkx handles graphs of any size with optimized C backends. Use it in production. Use your from-scratch implementation to understand what it does.
+networkx 借助优化的 C 后端处理任意规模的图，生产环境中请直接使用它。你自己从零实现的版本则用来理解它到底做了什么。
 
-### numpy spectral analysis
+### numpy 谱分析
 
 ```python
 import numpy as np
@@ -438,65 +438,65 @@ print(f"Cluster A: {group_a}")
 print(f"Cluster B: {group_b}")
 ```
 
-The Fiedler vector does the heavy lifting. Positive entries in one cluster, negative in the other. No iterative optimization needed -- just one eigendecomposition.
+Fiedler 向量完成了核心工作。值为正的条目归入一个簇，值为负的归入另一个簇。不需要迭代优化 —— 一次特征分解就搞定。
 
-## Ship It
+## 交付物
 
-This lesson produces:
-- `outputs/skill-graph-analysis.md` -- a skill reference for analyzing graph-structured data
+本课产出：
+- `outputs/skill-graph-analysis.md` —— 分析图结构数据的技能参考文档
 
-## Connections
+## 联系
 
-| Concept | Where it shows up |
+| 概念 | 出现在哪里 |
 |---------|------------------|
-| Adjacency matrix | GCN, GAT, GraphSAGE input |
-| Laplacian | Spectral clustering, ChebNet filters |
-| BFS | Knowledge graph traversal, shortest path queries |
-| Message passing | Every GNN layer, neural message passing |
-| Spectral gap | Graph connectivity, mixing time of random walks |
-| Degree distribution | Power-law networks, node feature engineering |
-| Connected components | Preprocessing, handling disconnected graphs |
-| PageRank | Node importance ranking, attention initialization |
+| 邻接矩阵 | GCN、GAT、GraphSAGE 的输入 |
+| 拉普拉斯矩阵 | 谱聚类、ChebNet 滤波器 |
+| BFS | 知识图谱遍历、最短路径查询 |
+| 消息传递 | 每个 GNN 层、神经消息传递 |
+| 谱间隙 | 图连通性、随机游走的混合时间 |
+| 度分布 | 幂律网络、节点特征工程 |
+| 连通分量 | 预处理、处理非连通图 |
+| PageRank | 节点重要性排序、注意力初始化 |
 
-GNNs deserve special mention. The graph convolution operation in GCN (Kipf & Welling, 2017) uses the adjacency matrix with added self-loops, A_hat = A + I:
+GNN 值得特别一说。GCN（Kipf & Welling, 2017）中的图卷积操作使用了加了自环的邻接矩阵 A_hat = A + I：
 
 ```text
 H^(l+1) = sigma(D_hat^(-1/2) * A_hat * D_hat^(-1/2) * H^(l) * W^(l))
 ```
 
-where A_hat = A + I (adjacency plus self-loops) and D_hat is the degree matrix of A_hat. The self-loops ensure each node includes its own features during aggregation. This is exactly message passing with symmetric normalization. D_hat^(-1/2) * A_hat * D_hat^(-1/2) is the normalized adjacency matrix. The Laplacian shows up because this normalization is related to L_sym = I - D^(-1/2) * A * D^(-1/2). Understanding the Laplacian means understanding why GCNs work.
+其中 A_hat = A + I（邻接矩阵加自环），D_hat 是 A_hat 的度矩阵。自环确保每个节点在聚合时也包含自身特征。这正是一次带对称归一化的消息传递。D_hat^(-1/2) * A_hat * D_hat^(-1/2) 就是归一化的邻接矩阵。拉普拉斯矩阵之所以出现，是因为这种归一化与 L_sym = I - D^(-1/2) * A * D^(-1/2) 相关。理解了拉普拉斯矩阵，也就理解了 GCN 为什么有效。
 
-## Exercises
+## 练习
 
-1. **Implement PageRank from scratch.** Start with uniform scores. At each step: score(v) = (1-d)/n + d * sum(score(u)/out_degree(u)) for all u pointing to v. Use d=0.85. Run until convergence (change < 1e-6). Test on a small web graph.
+1. **从零实现 PageRank。** 从均匀分数开始。每一步：score(v) = (1-d)/n + d * sum(score(u)/out_degree(u))，对所有指向 v 的 u 求和。取 d=0.85。运行直到收敛（变化 < 1e-6）。在一个小规模网页图上测试。
 
-2. **Find communities using spectral clustering.** Create a graph with two clearly separated clusters (e.g., two cliques connected by a single edge). Run spectral clustering and verify it finds the right split. What happens as you add more cross-cluster edges?
+2. **用谱聚类发现社区。** 构造一个包含两个明显独立簇的图（例如两个团，中间仅由一条边连接）。运行谱聚类，验证它找到了正确的分割。当你增加跨簇的边时，会发生什么？
 
-3. **Implement Dijkstra's algorithm** for shortest paths in weighted graphs. Compare results to BFS on the same graph with uniform weights.
+3. **实现 Dijkstra 算法**，用于带权图的最短路径。在同一张图上将结果与统一权重的 BFS 结果进行对比。
 
-4. **Build a 2-layer message passing network.** Apply message passing twice with different weight matrices. Show that after 2 rounds, each node has information from its 2-hop neighborhood.
+4. **构建一个 2 层消息传递网络。** 使用不同的权重矩阵执行两次消息传递。展示经过 2 轮之后，每个节点都获得了来自其 2 跳邻域的信息。
 
-5. **Analyze a real-world graph.** Use the Karate Club graph (34 nodes, 78 edges). Compute degree distribution, Laplacian eigenvalues, and spectral clustering. Compare the spectral clustering result to the known ground truth split.
+5. **分析一个真实图。** 使用 Karate Club 图（34 个节点，78 条边）。计算度分布、拉普拉斯特征值和谱聚类结果。将谱聚类结果与已知的真实分割进行比较。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|----------------------|
-| Graph | "Nodes and edges" | A mathematical structure G=(V,E) encoding pairwise relationships |
-| Adjacency matrix | "The connection table" | An n x n matrix where A[i][j] = 1 if nodes i and j are connected |
-| Degree | "How connected a node is" | The number of edges touching a node |
-| Laplacian | "D minus A" | L = D - A, the matrix whose eigenvalues reveal graph structure |
-| Fiedler value | "The algebraic connectivity" | The smallest non-zero eigenvalue of L, measuring how well-connected the graph is |
-| BFS | "Level-by-level search" | Traversal that visits all neighbors before going deeper, finds shortest paths |
-| DFS | "Go deep first" | Traversal that follows one path to its end before backtracking |
-| Message passing | "Nodes talk to neighbors" | Each node aggregates information from its neighbors, the core of GNNs |
-| Spectral clustering | "Cluster by eigenvectors" | Partition a graph using eigenvectors of its Laplacian |
-| Connected component | "A separate piece" | A maximal subgraph where every node can reach every other node |
+| 图（Graph） | "节点和边" | 一个数学结构 G=(V,E)，编码成对关系 |
+| 邻接矩阵（Adjacency matrix） | "连接表" | 一个 n×n 矩阵，若节点 i 和 j 相连则 A[i][j]=1 |
+| 度（Degree） | "一个节点有多连接" | 与某个节点相连的边的数量 |
+| 拉普拉斯矩阵（Laplacian） | "D 减 A" | L = D - A，其特征值能揭示图的结构 |
+| Fiedler 值 | "代数连通度" | L 的最小非零特征值，度量图的连通程度 |
+| 广度优先搜索（BFS） | "一层一层地搜" | 先访问所有邻居再往深的遍历，能找到最短路径 |
+| 深度优先搜索（DFS） | "先往深走" | 沿着一条路径走到底再回溯的遍历方式 |
+| 消息传递（Message passing） | "节点和邻居对话" | 每个节点从邻居聚合信息，这是 GNN 的核心 |
+| 谱聚类（Spectral clustering） | "用特征向量聚类" | 使用拉普拉斯矩阵的特征向量对图进行分割 |
+| 连通分量（Connected component） | "独立的一块" | 一个极大子图，其中每个节点都能到达其余所有节点 |
 
-## Further Reading
+## 进一步阅读
 
-- **Kipf & Welling (2017)** -- "Semi-Supervised Classification with Graph Convolutional Networks." The paper that launched modern GNNs. Shows that spectral graph convolutions simplify to message passing.
-- **Spielman (2012)** -- "Spectral Graph Theory" lecture notes. The definitive introduction to Laplacians, spectral gaps, and graph partitioning.
-- **Hamilton (2020)** -- "Graph Representation Learning." Book covering GNNs from fundamentals to applications.
-- **Bronstein et al. (2021)** -- "Geometric Deep Learning: Grids, Groups, Graphs, Geodesics, and Gauges." The unifying framework paper.
-- **Veličković et al. (2018)** -- "Graph Attention Networks." Extends message passing with attention mechanisms.
+- **Kipf & Welling (2017)** —— "Semi-Supervised Classification with Graph Convolutional Networks." 开启现代 GNN 时代的论文。证明了谱图卷积可以简化为消息传递。
+- **Spielman (2012)** —— "Spectral Graph Theory" 讲义。关于拉普拉斯矩阵、谱间隙和图分割的权威入门资料。
+- **Hamilton (2020)** —— "Graph Representation Learning." 一本从基础到应用全面覆盖 GNN 的著作。
+- **Bronstein et al. (2021)** —— "Geometric Deep Learning: Grids, Groups, Graphs, Geodesics, and Gauges." 统一框架论文。
+- **Veličković et al. (2018)** —— "Graph Attention Networks." 用注意力机制扩展消息传递。
