@@ -1,36 +1,36 @@
-# Open-Vocabulary Vision — CLIP
+# 开放词汇视觉 — CLIP
 
-> Train an image encoder and a text encoder together so that matching (image, caption) pairs land at the same point in a shared space. That is the whole trick.
+> 将图像编码器和文本编码器联合训练，使匹配的（图像，描述）对落在共享空间的同一点上。这就是全部诀窍。
 
-**Type:** Build + Use
-**Languages:** Python
-**Prerequisites:** Phase 4 Lesson 14 (ViT), Phase 4 Lesson 17 (Self-Supervised)
-**Time:** ~45 minutes
+**类型：** 构建型 + 使用型
+**语言：** Python
+**前置条件：** 阶段 4 第 14 课（ViT）、阶段 4 第 17 课（自监督）
+**时间：**约 45 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain CLIP's two-tower architecture and contrastive training objective
-- Use a pretrained CLIP (or SigLIP) for zero-shot classification without any task-specific training
-- Implement zero-shot classification from scratch: encode class prompts, compute cosine similarity, take argmax
-- Distinguish CLIP, SigLIP, OpenCLIP, and LLaVA/LLaMA-vision models — what each is for in 2026
+- 解释 CLIP 的双塔架构和对比训练目标
+- 使用预训练的 CLIP（或 SigLIP）进行零样本分类，无需任何任务特定的训练
+- 从零实现零样本分类：编码类别提示词，计算余弦相似度，取 argmax
+- 区分 CLIP、SigLIP、OpenCLIP 和 LLaVA/LLaMA-vision 模型——2026 年各自用于什么
 
-## The Problem
+## 问题
 
-Traditional classifiers are closed-vocabulary: a 1000-class ImageNet model can only predict 1000 labels. Every new category requires labelled data and a retrained head.
+传统分类器是封闭词汇的：1000 类 ImageNet 模型只能预测 1000 个标签。每个新类别都需要带标签的数据和重新训练的头。
 
-CLIP (Radford et al., OpenAI 2021) showed that training on 400M (image, caption) pairs scraped from the web produces a model that can classify into any set of categories at inference, described purely in natural language. You give it a new class by writing a sentence.
+CLIP（Radford et al., OpenAI 2021）表明，在从网络抓取的 4 亿对（图像，描述）对上训练，会产生一个可以在推理时分类到任意类别集合的模型，纯用自然语言描述。你可以通过写一个句子来给定一个新类别。
 
-That capability — zero-shot transfer — is why every modern vision system starts with a CLIP-family checkpoint. Detection (Grounding DINO, OWL-ViT), segmentation (CLIPSeg, SAM), retrieval, content moderation, VLMs, and text-to-image generation all build on CLIP-style joint embeddings.
+这种能力——零样本迁移——是为什么每个现代视觉系统都以 CLIP 家族检查点开头。检测（Grounding DINO、OWL-ViT）、分割（CLIPSeg、SAM）、检索、内容审核、VLMs 和文本到图像生成都建立在 CLIP 式联合嵌入之上。
 
-## The Concept
+## 概念
 
-### Two towers
+### 双塔
 
 ```mermaid
 flowchart LR
-    IMG["Image"] --> IENC["Image encoder<br/>(ViT-L/14)"] --> IEMB["Image embedding<br/>(1024,)"]
-    TXT["Caption"] --> TENC["Text encoder<br/>(transformer)"] --> TEMB["Text embedding<br/>(1024,)"]
-    IEMB --> SIM["Cosine similarity"]
+    IMG["图像"] --> IENC["图像编码器<br/>(ViT-L/14)"] --> IEMB["图像嵌入<br/>(1024,)"]
+    TXT["描述"] --> TENC["文本编码器<br/>(transformer)"] --> TEMB["文本嵌入<br/>(1024,)"]
+    IEMB --> SIM["余弦相似度"]
     TEMB --> SIM
 
     style IENC fill:#dbeafe,stroke:#2563eb
@@ -38,11 +38,11 @@ flowchart LR
     style SIM fill:#dcfce7,stroke:#16a34a
 ```
 
-Both encoders end with a linear projection to the same embedding dimension (512 for CLIP-B/32, 1024 for CLIP-L/14). L2-normalise and compute cosine similarity.
+两个编码器末端都有一个线性投影到相同的嵌入维度（CLIP-B/32 为 512，CLIP-L/14 为 1024）。做 L2 归一化并计算余弦相似度。
 
-### The objective
+### 目标
 
-Given a batch of N (image, caption) pairs, build an NxN similarity matrix. Train both encoders so the diagonal (matching pairs) has high similarity and off-diagonals (non-matching) have low similarity.
+给定 N 个（图像，描述）对组成的 batch，构建一个 NxN 相似度矩阵。训练两个编码器，使对角线（匹配对）具有高相似度，非对角线（非匹配对）具有低相似度。
 
 ```
 sim_matrix = image_embeddings @ text_embeddings.T / tau
@@ -52,47 +52,47 @@ loss_t2i = cross_entropy(sim_matrix.T,     targets=arange(N))
 loss = (loss_i2t + loss_t2i) / 2
 ```
 
-Symmetric because both image-to-text and text-to-image retrieval should work. `tau` (temperature) is typically learned as a scalar parameter, initialised to 0.07.
+是对称的，因为图像到文本和文本到图像检索都应该能 work。`tau`（温度）通常作为一个标量参数学习，初始化为 0.07。
 
-### SigLIP: a better loss
+### SigLIP：一个更好的损失
 
-SigLIP (Zhai et al., 2023) replaced the softmax with per-pair sigmoid:
+SigLIP（Zhai et al., 2023）用每对 sigmoid 替代了 softmax：
 
 ```
 loss = mean over pairs of log(1 + exp(-y_ij * sim_ij))
 y_ij = +1 if matching, -1 otherwise
 ```
 
-Per-pair loss removes the batch-level normalisation that CLIP requires. SigLIP trains better at small batch sizes and matches or exceeds CLIP at equal data.
+每对损失去掉了 CLIP 所需的 batch 级归一化。SigLIP 在小 batch 大小时训练效果更好，在相同数据量时匹配或超越 CLIP。
 
-### Zero-shot classification
+### 零样本分类
 
-Given a trained CLIP:
+给定一个训练好的 CLIP：
 
-1. For each class, compose a prompt: "a photo of a {class}".
-2. Encode all class prompts with the text encoder -> `T` shape (C, d).
-3. Encode the test image -> `I` shape (1, d).
-4. Similarity = `I @ T.T` shape (1, C).
-5. Argmax -> predicted class.
+1. 对每个类别，组合一个提示词："a photo of a {class}"。
+2. 用文本编码器编码所有类别提示词 -> `T` shape (C, d)。
+3. 编码测试图像 -> `I` shape (1, d)。
+4. 相似度 = `I @ T.T` shape (1, C)。
+5. Argmax -> 预测类别。
 
-Prompt engineering matters. OpenAI published 80 prompt templates for ImageNet ("a photo of a {}", "a blurry photo of a {}", "a sketch of a {}", ...). Average the embeddings of all templates per class for an extra 1-3% top-1 accuracy.
+提示词工程很重要。OpenAI 发布了 80 个 ImageNet 提示词模板（"a photo of a {}"、"a blurry photo of a {}"、"a sketch of a {}"……）。对每个类别的所有模板嵌入取平均，可以额外获得 1-3% 的 top-1 准确率。
 
-### Where CLIP-style models are used in 2026
+### CLIP 式模型在 2026 年的使用场景
 
-- **Zero-shot classification** — direct use.
-- **Image retrieval** — encode all images once, embed query at inference.
-- **Text-conditioned detection** — Grounding DINO, OWL-ViT wrap a CLIP text tower around a detector.
-- **Text-conditioned segmentation** — CLIPSeg; SAM uses text-prompt inputs via CLIP.
-- **VLMs** — LLaVA, Qwen-VL, InternVL wire a CLIP-family vision encoder into an LLM.
-- **Text-to-image gen** — Stable Diffusion, DALL-E 3 condition on CLIP text embeddings.
+- **零样本分类**——直接使用。
+- **图像检索**——一次性编码所有图像，推理时嵌入查询。
+- **文本条件检测**——Grounding DINO、OWL-ViT 在检测器周围包裹一个 CLIP 文本塔。
+- **文本条件分割**——CLIPSeg；SAM 通过 CLIP 使用文本提示输入。
+- **VLMs**——LLaVA、Qwen-VL、InternVL 将 CLIP 家族视觉编码器接入 LLM。
+- **文本到图像生成**——Stable Diffusion、DALL-E 3 以 CLIP 文本嵌入为条件。
 
-Once you have a shared embedding space, every vision+language task becomes a distance computation.
+一旦有了共享嵌入空间，每个视觉+语言任务都变成了距离计算。
 
-## Build It
+## 构建
 
-### Step 1: A tiny two-tower model
+### 第 1 步：小型双塔模型
 
-Real CLIP is ViT + transformer. For this lesson the towers are small MLPs over pre-extracted features so the training signal is visible on CPU.
+真正的 CLIP 是 ViT + transformer。在本课中，塔是在预提取特征上的小型 MLP，这样训练信号在 CPU 上就可见。
 
 ```python
 import torch
@@ -113,9 +113,9 @@ class TwoTower(nn.Module):
         return i, t, self.logit_scale.exp()
 ```
 
-Two projections, shared-dim output, learned temperature. Same shape as the real CLIP API.
+两个投影、共享维输出、学习到的温度。与真实 CLIP API 形状相同。
 
-### Step 2: Contrastive loss
+### 第 2 步：对比损失
 
 ```python
 def clip_loss(image_emb, text_emb, logit_scale):
@@ -127,9 +127,9 @@ def clip_loss(image_emb, text_emb, logit_scale):
     return (l_i + l_t) / 2
 ```
 
-Symmetric. Higher logit_scale = sharper softmax = more confident but risk of instability.
+是对称的。logit_scale 越高 = softmax 越锐利 = 越自信但有不稳定风险。
 
-### Step 3: Zero-shot classifier
+### 第 3 步：零样本分类器
 
 ```python
 @torch.no_grad()
@@ -145,9 +145,9 @@ def zero_shot_classify(model, image_feats, class_text_feats, class_names):
     return [class_names[p] for p in pred.tolist()]
 ```
 
-One line per step. This is the exact zero-shot procedure used with a production CLIP checkpoint.
+每步一行。这就是与生产 CLIP 检查点一起使用的零样本流程。
 
-### Step 4: Sanity check
+### 第 4 步：完整性检查
 
 ```python
 torch.manual_seed(0)
@@ -160,11 +160,11 @@ loss = clip_loss(i, t, scale)
 print(f"batch size: {i.size(0)}   loss: {loss.item():.3f}")
 ```
 
-Loss should be close to `log(N) = log(8) = 2.08` for a randomly initialised model — the symmetric cross-entropy target when no structure is learned yet.
+损失应该接近 `log(N) = log(8) = 2.08`，对于随机初始化的模型——当还没有学到任何结构时的对称交叉熵目标。
 
-## Use It
+## 使用
 
-OpenCLIP is the community default in 2026:
+OpenCLIP 是 2026 年的社区默认：
 
 ```python
 import open_clip
@@ -187,11 +187,11 @@ with torch.no_grad():
 print(probs)
 ```
 
-SigLIP is newer, trains better at small scales, and is preferred for new work: `google/siglip-base-patch16-224`. Hugging Face ships both.
+SigLIP 是更新的，在小规模下训练效果更好，是新工作的首选：`google/siglip-base-patch16-224`。Hugging Face 同时提供两者。
 
-## Ship It
+## 交付
 
-This lesson produces:
+本课产出：
 
 - `outputs/prompt-zero-shot-class-picker.md` — a prompt that designs class templates for zero-shot CLIP given a list of classes and a domain.
 - `outputs/skill-image-text-retriever.md` — a skill that builds an image embedding index with any CLIP checkpoint, supports query-by-text and query-by-image.

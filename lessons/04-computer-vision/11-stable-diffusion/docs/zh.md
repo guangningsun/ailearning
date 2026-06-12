@@ -1,43 +1,43 @@
-# Stable Diffusion — Architecture & Fine-Tuning
+# Stable Diffusion — 架构与微调
 
-> Stable Diffusion is a DDPM that runs in the latent space of a pretrained VAE, conditioned on text via cross-attention, sampled with a fast deterministic ODE solver, and steered by classifier-free guidance.
+> Stable Diffusion 是一个 DDPM，它在预训练 VAE 的潜空间中进行前向扩散，通过交叉注意力机制注入文本条件，使用快速确定性 ODE 采样器进行采样，并借助无分类器引导来控制生成方向。
 
-**Type:** Learn + Use
-**Languages:** Python
-**Prerequisites:** Phase 4 Lesson 10 (Diffusion), Phase 7 Lesson 02 (Self-Attention)
-**Time:** ~75 minutes
+**类型：** 学习 + 使用
+**语言：** Python
+**前置条件：** 阶段 4 第 10 课（扩散模型）、阶段 7 第 2 课（自注意力）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Trace the five pieces of a Stable Diffusion pipeline: VAE, text encoder, U-Net, scheduler, safety checker — and what each of them actually does
-- Explain latent diffusion and why training in a 4x64x64 latent space (instead of a 3x512x512 image) reduces compute by 48x without quality loss
-- Use `diffusers` to generate images, run image-to-image, inpainting, and ControlNet-guided generation
-- Fine-tune Stable Diffusion with LoRA on a small custom dataset and load the LoRA adapter at inference
+- 追踪 Stable Diffusion 流水线的五个组成部分：VAE、文本编码器、U-Net、调度器、安全检查器——以及它们各自的作用
+- 解释潜扩散的原理，以及为什么在 4x64x64 的潜空间（而非 3x512x512 的图像）中训练能节省 48 倍的计算量而不损失质量
+- 使用 `diffusers` 生成图像、实现图生图、局部重绘（inpainting）和 ControlNet 引导生成
+- 在小型自定义数据集上用 LoRA 微调 Stable Diffusion，并在推理时加载 LoRA 适配器
 
-## The Problem
+## 问题
 
-Training a DDPM directly on 512x512 RGB images is expensive. Every training step backprops through a U-Net that sees 3x512x512 = 786,432 input values, and sampling takes 50+ forward passes through that same U-Net. At the quality level of Stable Diffusion 1.5 (released 2022), pixel-space diffusion would need roughly 256 GPU-months of training and 10-30 seconds per image on a consumer GPU.
+直接在 512x512 RGB 图像上训练 DDPM 代价极高。每一次训练步都通过一个接收 3x512x512 = 786,432 个输入值的 U-Net 进行反向传播，而采样需要 50+ 次对该 U-Net 的前向传递。以 Stable Diffusion 1.5（2022 年发布）的质量水平，像素空间扩散需要约 256 GPU 月的训练时间和消费级 GPU 上每张图 10-30 秒的采样时间。
 
-The trick that made open-weight text-to-image practical was **latent diffusion** (Rombach et al., CVPR 2022). Train a VAE that maps a 3x512x512 image to a 4x64x64 latent tensor and back, then do the diffusion in that latent space. Compute drops by `(3*512*512)/(4*64*64) = 48x`. Sampling drops from tens of seconds to under two seconds on the same GPU.
+使开源权重的文生图变得实用的关键技巧是**潜扩散**（Rombach et al., CVPR 2022）。训练一个 VAE，将 3x512x512 的图像映射为 4x64x64 的潜张量并能再解码回来，然后在这个潜空间中进行扩散。计算量降为原来的 `(3*512*512)/(4*64*64) = 1/48`。采样时间从数十秒降至同一 GPU 上的两秒以内。
 
-Almost every modern image-generation model — SDXL, SD3, FLUX, HunyuanDiT, Wan-Video — is a latent diffusion model with variations on the autoencoder, the denoiser (U-Net or DiT), and the text conditioning. Learn Stable Diffusion and you have learnt the template.
+几乎所有现代图像生成模型——SDXL、SD3、FLUX、HunyuanDiT、Wan-Video——都是潜扩散模型，差异在于自编码器、去噪器（U-Net 或 DiT）和文本条件的不同实现。学会了 Stable Diffusion，就学会了模板。
 
-## The Concept
+## 概念
 
-### The pipeline
+### 流水线
 
 ```mermaid
 flowchart LR
-    TXT["Text prompt"] --> TE["Text encoder<br/>(CLIP-L or T5)"]
-    TE --> CT["Text<br/>embedding"]
+    TXT["文本提示词"] --> TE["文本编码器<br/>(CLIP-L 或 T5)"]
+    TE --> CT["文本<br/>嵌入向量"]
 
-    NOISE["Noise<br/>4x64x64"] --> UNET["UNet<br/>(denoiser with<br/>cross-attention<br/>to text)"]
+    NOISE["噪声<br/>4x64x64"] --> UNET["UNet<br/>(去噪器，带<br/>对文本的<br/>交叉注意力)"]
     CT --> UNET
 
-    UNET --> SCHED["Scheduler<br/>(DPM-Solver++,<br/>Euler)"]
-    SCHED --> LATENT["Clean latent<br/>4x64x64"]
-    LATENT --> VAE["VAE decoder"]
-    VAE --> IMG["512x512<br/>RGB image"]
+    UNET --> SCHED["调度器<br/>(DPM-Solver++,<br/>Euler)"]
+    SCHED --> LATENT["干净潜向量<br/>4x64x64"]
+    LATENT --> VAE["VAE 解码器"]
+    VAE --> IMG["512x512<br/>RGB 图像"]
 
     style TE fill:#dbeafe,stroke:#2563eb
     style UNET fill:#fef3c7,stroke:#d97706
@@ -45,70 +45,70 @@ flowchart LR
     style IMG fill:#dcfce7,stroke:#16a34a
 ```
 
-- **VAE** — frozen autoencoder. Encoder turns image into latents (used for img2img and training). Decoder turns latents back into an image.
-- **Text encoder** — CLIP text encoder (SD 1.x/2.x), CLIP-L + CLIP-G (SDXL), or T5-XXL (SD3/FLUX). Produces a sequence of token embeddings.
-- **U-Net** — the denoiser. Has cross-attention layers that attend from latents to the text embedding at every resolution level.
-- **Scheduler** — the sampling algorithm (DDIM, Euler, DPM-Solver++). Picks sigmas, blends predicted noise back into the latent.
-- **Safety checker** — optional NSFW / illegal-content filter on the output image.
+- **VAE** — 冻结的自编码器。编码器将图像转换为潜向量（用于图生图和训练）。解码器将潜向量转换回图像。
+- **文本编码器** — CLIP 文本编码器（SD 1.x/2.x）、CLIP-L + CLIP-G（SDXL）或 T5-XXL（SD3/FLUX）。输出一系列 token 嵌入。
+- **U-Net** — 去噪器。在每个分辨率层级都有交叉注意力层，从潜向量关注到文本嵌入。
+- **调度器** — 采样算法（DDIM、Euler、DPM-Solver++）。选择 sigma 值，将预测的噪声混合回潜向量。
+- **安全检查器** — 对输出图像进行可选的 NSFW/非法内容过滤。
 
-### Classifier-free guidance (CFG)
+### 无分类器引导（CFG）
 
-Plain text conditioning learns `epsilon_theta(x_t, t, c)` for every prompt `c`. CFG trains the same network with `c` dropped 10% of the time (replaced by an empty embedding), giving a single model that predicts both the conditional and the unconditional noise. At inference:
+普通文本条件对每个提示词 `c` 学习 `epsilon_theta(x_t, t, c)`。CFG 在 10% 的时间内将 `c` 丢弃（替换为空嵌入向量）来训练同一个网络，从而让一个模型同时预测条件噪声和无条件噪声。推理时：
 
 ```
 eps = eps_uncond + w * (eps_cond - eps_uncond)
 ```
 
-`w` is the guidance scale. `w=0` is unconditional, `w=1` is plain conditional, `w>1` pushes the output toward being "more conditioned on the prompt" at the cost of diversity. SD default is `w=7.5`.
+`w` 是引导强度。`w=0` 为无条件生成，`w=1` 为普通条件生成，`w>1` 会让输出更"遵从提示词"，代价是多样性降低。SD 默认值为 `w=7.5`。
 
-CFG is the reason text-to-image works at production quality. Without it, prompts bias the output weakly; with it, prompts dominate.
+CFG 是文生图达到生产质量的关键。没有它，提示词对输出的影响很弱；有了它，提示词占据主导地位。
 
-### Latent space geometry
+### 潜空间几何
 
-The VAE's 4-channel latent is not just a compressed image. It is a manifold where arithmetic roughly corresponds to semantic edits (prompt engineering + interpolation both live here), and where the diffusion U-Net has been trained to spend its entire modelling budget. Decoding a random 4x64x64 latent does not produce a random-looking image — it produces garbage, because only a specific submanifold of latents decodes to valid images.
+VAE 的 4 通道潜向量不仅仅是一张压缩图像。它是一个流形，在这个流形中，算术运算大致对应于语义编辑（提示词工程和插值都基于此），扩散 U-Net 的全部建模预算都花在了这个流形上。随机解码一个 4x64x64 的潜向量不会产生一张看起来随机的图像——它会产生乱码，因为只有潜空间的一个特定子流形才能解码为有效图像。
 
-Two consequences:
+两个推论：
 
-1. **Img2img** = encode image to latent, add partial noise, run the denoiser, decode. Image structure survives because encoding is near-invertible; content changes based on the prompt.
-2. **Inpainting** = same as img2img but the denoiser only updates masked regions; unmasked regions are kept at the encoded latent.
+1. **图生图（Img2img）** = 将图像编码为潜向量，添加部分噪声，运行去噪器，解码。图像结构得以保留，因为编码几乎是可逆的；而内容根据提示词改变。
+2. **局部重绘（Inpainting）** = 与图生图相同，但去噪器只更新被遮罩的区域；未遮罩区域保持在编码后的潜向量状态。
 
-### The U-Net architecture
+### U-Net 架构
 
-The SD U-Net is a big version of the TinyUNet from Lesson 10 with three additions:
+SD 的 U-Net 是第 10 课中 TinyUNet 的放大版，增加了三样东西：
 
-- **Transformer blocks** at every spatial resolution, containing self-attention + cross-attention to the text embedding.
-- **Time embedding** via MLP on sinusoidal encoding.
-- **Skip connections** between encoder and decoder at matching resolutions.
+- **Transformer 块** 在每个空间分辨率层级，包含对文本嵌入的自注意力和交叉注意力。
+- **时间嵌入** 通过正弦编码的 MLP 生成。
+- **跳层连接** 在编码器和解码器的对应分辨率层级之间。
 
-Total parameters in SD 1.5: ~860M. SDXL: ~2.6B. FLUX: ~12B. The jump in params is mostly in attention layers.
+SD 1.5 的总参数量：约 860M。SDXL：约 2.6B。FLUX：约 12B。参数量跃升主要来自注意力层。
 
-### LoRA fine-tuning
+### LoRA 微调
 
-Full fine-tuning of Stable Diffusion needs 20+ GB of VRAM and updates 860M parameters. LoRA (Low-Rank Adaptation) keeps the base model frozen and injects small rank-decomposition matrices into the attention layers. A LoRA adapter for SD is typically 10-50 MB, trains in 10-60 minutes on a single consumer GPU, and loads at inference time as a drop-in modification.
+完全微调 Stable Diffusion 需要 20+ GB 的显存，并更新 860M 个参数。LoRA（Low-Rank Adaptation，低秩适配）保持基础模型冻结，向注意力层注入小的秩分解矩阵。SD 的 LoRA 适配器通常只有 10-50 MB，在单块消费级 GPU 上 10-60 分钟即可完成训练，在推理时作为即插即用的修改量加载。
 
 ```
-Original: W_q : (d_in, d_out)   frozen
-LoRA:     W_q + alpha * (A @ B)   where A : (d_in, r), B : (r, d_out)
+原始权重: W_q : (d_in, d_out)   冻结
+LoRA:     W_q + alpha * (A @ B)   其中 A : (d_in, r), B : (r, d_out)
 
-r is typically 4-32.
+r 通常为 4-32。
 ```
 
-LoRA is how almost every community fine-tune is distributed. CivitAI and Hugging Face host millions of them.
+LoRA 是几乎所有社区微调分发的方式。CivitAI 和 Hugging Face 上托管着数百万个 LoRA 适配器。
 
-### Schedulers you will see
+### 会遇到的调度器
 
-- **DDIM** — deterministic, ~50 steps, simple.
-- **Euler ancestral** — stochastic, 30-50 steps, slightly more creative samples.
-- **DPM-Solver++ 2M Karras** — deterministic, 20-30 steps, production default.
-- **LCM / TCD / Turbo** — consistency models and distilled variants; 1-4 steps at the cost of some quality.
+- **DDIM** — 确定性，约 50 步，简单。
+- **Euler ancestral** — 随机性，30-50 步，样本创意性稍强。
+- **DPM-Solver++ 2M Karras** — 确定性，20-30 步，生产环境默认选择。
+- **LCM / TCD / Turbo** — 一致性模型和蒸馏变体；1-4 步，代价是略微牺牲质量。
 
-Swapping schedulers is a one-line change in `diffusers` and sometimes fixes sample issues without any retraining.
+在 `diffusers` 中切换调度器只需一行代码，有时无需任何重训练就能解决采样问题。
 
-## Build It
+## 动手实现
 
-This lesson uses `diffusers` end-to-end rather than rebuilding Stable Diffusion from scratch. The pieces you would need to rebuild (VAE, text encoder, U-Net, scheduler) are topics of their own lessons; here the goal is fluency with the production API.
+本课使用 `diffusers` 端到端完成，而非从零重建 Stable Diffusion。你需要重建的各个组件（VAE、文本编码器、U-Net、调度器）都有各自的专题课程；这里的目标是熟练掌握生产级 API。
 
-### Step 1: Text-to-image
+### 第 1 步：文生图
 
 ```python
 import torch
