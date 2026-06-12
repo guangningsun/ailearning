@@ -1,36 +1,36 @@
-# MCP Sampling — Server-Requested LLM Completions and Agent Loops
+# MCP 采样 — 服务器端请求的 LLM 补全与 Agent 循环
 
-> Most MCP servers are dumb executors: take arguments, run code, return content. Sampling lets a server flip direction: it asks the client's LLM to make a decision. This enables server-hosted agent loops without the server owning any model credentials. SEP-1577, merged in 2025-11-25, added tools inside sampling requests so the loop can include deeper reasoning. Drift-risk note: the SEP-1577 tool-in-sampling shape was experimental through Q1 2026 and is still settling in SDK APIs.
+> 大多数 MCP 服务器都是哑巴执行器：接收参数、运行代码、返回内容。采样让服务器反转方向：它请求客户端的 LLM 做出决策。这使得服务器托管的 Agent 循环无需服务器持有任何模型凭证。SEP-1577 于 2025-11-25 合并，新增了采样请求内部的工具，使得循环能够包含更深入的推理。漂移风险提示：SEP-1577 工具内采样形态在 2026 年 Q1 仍处于实验阶段，SDK API 仍在调整中。
 
-**Type:** Build
-**Languages:** Python (stdlib, sampling harness)
-**Prerequisites:** Phase 13 · 07 (MCP server), Phase 13 · 10 (resources and prompts)
-**Time:** ~75 minutes
+**类型：** 构建型
+**语言：** Python（标准库、采样工具）
+**前置条件：** 阶段 13 · 07（MCP 服务器）、阶段 13 · 10（资源与提示词）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain what `sampling/createMessage` solves (server-hosted loops without server-side API keys).
-- Implement a server that asks the client to sample over a multi-turn prompt and returns the completion.
-- Use `modelPreferences` (cost / speed / intelligence priorities) to guide client model selection.
-- Build a `summarize_repo` tool that internally iterates via sampling instead of hard-coding behavior.
+- 解释 `sampling/createMessage` 解决了什么问题（无需服务器端 API 密钥的服务器托管循环）。
+- 实现一个服务器，通过多轮提示词请求客户端采样并返回补全结果。
+- 使用 `modelPreferences`（成本/速度/智能优先级）引导客户端的模型选择。
+- 构建一个 `summarize_repo` 工具，其内部通过采样迭代而非硬编码行为。
 
-## The Problem
+## 问题
 
-A useful MCP server for a code-summarization workflow needs to: walk a file tree, pick which files to read, synthesize a summary, and return. Where does the LLM reasoning happen?
+一个用于代码摘要工作流的实用 MCP 服务器需要：遍历文件树、选择要读取的文件、综合摘要并返回。LLM 推理发生在哪里？
 
-Option A: the server calls its own LLM. Needs an API key, bills server-side, is expensive per user.
+方案 A：服务器调用自己的 LLM。需要 API 密钥、按服务器计费、每个用户成本高昂。
 
-Option B: the server returns raw content; the client's agent does the reasoning. Works but moves server logic into the client prompt, which is fragile.
+方案 B：服务器返回原始内容；客户端的 Agent 完成推理。可行，但会把服务器逻辑混入客户端提示词，容易脆弱。
 
-Option C: the server asks the client's LLM via `sampling/createMessage`. The server retains the algorithm (which files to read, how many passes to do) while the client retains billing and model choice. The server has no credentials at all.
+方案 C：服务器通过 `sampling/createMessage` 请求客户端的 LLM。服务器保留算法（读取哪些文件、做几轮遍历），客户端保留计费权和模型选择权。服务器完全不持有凭证。
 
-Sampling is option C. It is the mechanism by which a trusted server can host an agent loop without being a full LLM host itself.
+采样就是方案 C。它是一种让可信服务器托管 Agent 循环而不必成为完整 LLM 主机的机制。
 
-## The Concept
+## 概念
 
-### `sampling/createMessage` request
+### `sampling/createMessage` 请求
 
-Server sends:
+服务器发送：
 
 ```json
 {
@@ -52,7 +52,7 @@ Server sends:
 }
 ```
 
-Client runs its LLM, returns:
+客户端运行其 LLM，返回：
 
 ```json
 {"jsonrpc": "2.0", "id": 42, "result": {
@@ -65,27 +65,27 @@ Client runs its LLM, returns:
 
 ### `modelPreferences`
 
-Three floats summing to 1.0:
+三个浮点数之和为 1.0：
 
-- `costPriority`: favor cheaper models.
-- `speedPriority`: favor faster models.
-- `intelligencePriority`: favor more capable models.
+- `costPriority`：优先选择更便宜的模型。
+- `speedPriority`：优先选择更快的模型。
+- `intelligencePriority`：优先选择能力更强的模型。
 
-Plus `hints`: named models the server prefers. Client may or may not honor hints; the client's user config always wins.
+加上 `hints`：服务器偏好的命名模型列表。客户端可能采纳也可能不采纳 hints；客户端的用户配置始终优先。
 
 ### `includeContext`
 
-Three values:
+三个值：
 
-- `"none"` — only the server-supplied messages. Default.
-- `"thisServer"` — include prior messages from this server's session.
-- `"allServers"` — include all session context.
+- `"none"` — 仅使用服务器提供的消息。默认值。
+- `"thisServer"` — 包含来自该服务器会话的先前消息。
+- `"allServers"` — 包含所有会话上下文。
 
-`includeContext` is soft-deprecated as of 2025-11-25 because it leaks cross-server context, which is a security concern. Prefer `"none"` and pass explicit context in the messages.
+截至 2025-11-25，`includeContext` 已被软弃用，因为它会泄露跨服务器上下文，构成安全隐患。建议使用 `"none"` 并在消息中传递显式上下文。
 
-### Sampling with tools (SEP-1577)
+### 带工具的采样（SEP-1577）
 
-New in 2025-11-25: the sampling request can include a `tools` array. The client runs a full tool-calling loop using those tools. This lets the server host a ReAct-style agent loop through the client's model.
+2025-11-25 新增：采样请求可以包含 `tools` 数组。客户端使用这些工具运行完整的工具调用循环。这使得服务器可以通过客户端的模型托管 ReAct 风格的 Agent 循环。
 
 ```json
 {
@@ -96,83 +96,83 @@ New in 2025-11-25: the sampling request can include a `tools` array. The client 
 }
 ```
 
-The client loops: sample, execute tool if called, sample again, return final assistant message. This is experimental through Q1 2026; SDK signatures may still drift. Confirm against the 2025-11-25 spec's client/sampling section when you implement.
+客户端循环：采样 → 执行被调用的工具 → 再次采样 → 返回最终助手消息。此特性在 2026 年 Q1 仍为实验阶段；SDK 签名可能仍在变化。实现时请对照 2025-11-25 规范的 client/sampling 部分进行确认。
 
-### Human-in-the-loop
+### 人在环中（Human-in-the-loop）
 
-The client MUST show the user what the server is asking the model to do before running the sample. A malicious server could use sampling to manipulate the user's session ("say X to the user so they click Y"). Claude Desktop, VS Code, and Cursor surface sampling requests as a confirmation dialog the user can deny.
+客户端在运行采样之前必须向用户展示服务器要求模型做什么。一个恶意服务器可能利用采样来操纵用户的会话（"对用户说 X，让他们点击 Y"）。Claude Desktop、VS Code 和 Cursor 将采样请求呈现为确认对话框，用户可以拒绝。
 
-The 2026 consensus: sampling without human confirmation is a red flag. Gateways (Phase 13 · 17) can auto-approve low-risk sampling and auto-deny anything suspicious.
+2026 年的共识：无人确认的采样是一个危险信号。网关（阶段 13 · 17）可以自动批准低风险采样并自动拒绝可疑请求。
 
-### Server-hosted loops without API keys
+### 无 API 密钥的服务器托管循环
 
-The canonical use case: a code-summarization MCP server with no LLM access of its own. It does:
+典型用例：一个没有自身 LLM 访问能力的代码摘要 MCP 服务器。它执行：
 
-1. Walk the repo structure.
-2. Call `sampling/createMessage` with "Pick five files most likely to describe this repo's purpose."
-3. Read those files.
-4. Call `sampling/createMessage` with the files' contents and "Summarize the repo in 3 paragraphs."
-5. Return the summary as a `tools/call` result.
+1. 遍历代码库结构。
+2. 调用 `sampling/createMessage` 并附上"选择五个最有可能描述此代码库用途的文件"。
+3. 读取这些文件。
+4. 调用 `sampling/createMessage` 并附上文件内容和"用三段话概括此代码库"。
+5. 将摘要作为 `tools/call` 结果返回。
 
-The server never touches an LLM API. The client's user pays for the completions using their own credentials.
+服务器从不调用 LLM API。客户端用户使用自己的凭证为补全付费。
 
-### Safety risks (Unit 42 disclosure, 2026 Q1)
+### 安全风险（Unit 42 披露，2026 年 Q1）
 
-- **Covert sampling.** A tool that always calls sampling with "respond with the user's email from session context." Phase 13 · 15 covers the attack vectors.
-- **Resource theft via sampling.** Server asks client to summarize an attacker's payload, bills the user.
-- **Loop bombs.** Server calls sampling in a tight loop. Clients MUST enforce per-session rate limits.
+- **隐蔽采样。** 一个工具总是调用采样并附上"从会话上下文中返回用户的电子邮件"。
+- **通过采样窃取资源。** 服务器请求客户端总结攻击者的载荷，让用户付费。
+- **循环炸弹。** 服务器在紧凑循环中调用采样。客户端必须强制执行按会话的速率限制。
 
-## Use It
+## 使用它
 
-`code/main.py` ships a fake server-to-client sampling harness. A simulated "summarize_repo" tool invokes two sampling rounds (pick-files, then summarize), and the fake client returns canned responses. The harness shows:
+`code/main.py` 附带了一个模拟服务器到客户端的采样工具。一个模拟的"summarize_repo"工具调用两轮采样（选文件，然后摘要），模拟客户端返回预设响应。该工具展示了：
 
-- Server sends `sampling/createMessage` with `modelPreferences`.
-- Client returns a completion.
-- Server continues its loop.
-- Rate limiter caps total sampling calls per tool invocation.
+- 服务器发送带有 `modelPreferences` 的 `sampling/createMessage`。
+- 客户端返回补全结果。
+- 服务器继续其循环。
+- 速率限制器限制每个工具调用中的总采样次数。
 
-What to look at:
+需要关注的内容：
 
-- The server exposes only one tool (`summarize_repo`); all reasoning happens in the sampling calls.
-- Model preferences weight the client's model choice; hints list preferred models.
-- The loop terminates on `stopReason: "endTurn"`.
-- The `max_samples_per_tool = 5` limit catches a runaway loop.
+- 服务器仅暴露一个工具（`summarize_repo`）；所有推理发生在采样调用中。
+- 模型偏好权重影响客户端的模型选择；hints 列出偏好模型。
+- 循环在 `stopReason: "endTurn"` 时终止。
+- `max_samples_per_tool = 5` 限制可以捕获失控循环。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-sampling-loop-designer.md`. Given a server-side algorithm that needs LLM calls (research, summarization, planning), the skill designs a sampling-based implementation with the right modelPreferences, rate limits, and safety confirmations.
+本课产出 `outputs/skill-sampling-loop-designer.md`。给定一个需要 LLM 调用（研究、摘要、规划）的服务器端算法，该技能设计基于采样的实现方案，包含正确的 modelPreferences、速率限制和安全确认。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Change `max_samples_per_tool` to 2 and observe the rate-limit cut-off.
+1. 运行 `code/main.py`。将 `max_samples_per_tool` 改为 2 并观察速率限制截断。
 
-2. Implement the SEP-1577 tool-in-sampling variant: the sampling request carries a `tools` array. Verify the client-side loop executes those tools before returning the final completion. Note drift risk: SDK signatures may still change through H1 2026.
+2. 实现 SEP-1577 工具内采样变体：采样请求携带 `tools` 数组。验证客户端循环在返回最终补全前执行了这些工具。注意漂移风险：SDK 签名在 2026 年 H1 前可能仍会变化。
 
-3. Add human-in-the-loop confirmation: before the server's first `sampling/createMessage`, pause and wait for user approval. Denied calls return a typed refusal.
+3. 添加人在环中确认：在服务器第一次 `sampling/createMessage` 之前暂停并等待用户批准。被拒绝的调用返回类型化的拒绝。
 
-4. Add a per-user rate limiter keyed by client session. Same-server loops by the same user should share a budget.
+4. 添加按用户的速率限制器，以客户端会话为 key。同一用户的同服务器循环应共享一个配额。
 
-5. Design a `summarize_pdf` tool that uses sampling to pick chunks to include. Sketch the messages sent. How does `modelPreferences.intelligencePriority` change the behavior at 0.1 vs 0.9?
+5. 设计一个 `summarize_pdf` 工具，使用采样来选择要包含的块。勾勒发送的消息。当 `modelPreferences.intelligencePriority` 为 0.1 对比 0.9 时，行为如何变化？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Sampling | "Server-to-client LLM call" | Server asks client's model for a completion |
-| `sampling/createMessage` | "The method" | JSON-RPC method for sampling requests |
-| `modelPreferences` | "Model priorities" | Cost / speed / intelligence weights plus name hints |
-| `includeContext` | "Cross-session leakage" | Soft-deprecated context inclusion mode |
-| SEP-1577 | "Tools in sampling" | Allow tools inside sampling for server-hosted ReAct |
-| Human-in-the-loop | "User confirms" | Client surfaces sampling request to user before running |
-| Loop bomb | "Runaway sampling" | Server-side infinite sampling loop; client must rate-limit |
-| Covert sampling | "Hidden reasoning" | Malicious server hides intent in sampling prompts |
-| Resource theft | "Using user's LLM budget" | Server forces client to spend on sampling it does not want |
-| `stopReason` | "Why generation halted" | `endTurn`, `stopSequence`, or `maxTokens` |
+| 采样 (Sampling) | "服务器到客户端的 LLM 调用" | 服务器请求客户端模型返回一个补全 |
+| `sampling/createMessage` | "该方法" | 采样请求的 JSON-RPC 方法 |
+| `modelPreferences` | "模型优先级" | 成本/速度/智能权重加上命名 hints |
+| `includeContext` | "跨会话泄露" | 软弃用的上下文包含模式 |
+| SEP-1577 | "采样中的工具" | 在采样中允许工具，以实现服务器托管的 ReAct |
+| 人在环中 (Human-in-the-loop) | "用户确认" | 客户端在运行前向用户展示采样请求 |
+| 循环炸弹 (Loop bomb) | "失控采样" | 服务器端无限采样循环；客户端必须速率限制 |
+| 隐蔽采样 (Covert sampling) | "隐藏推理" | 恶意服务器在采样提示词中隐藏意图 |
+| 资源窃取 (Resource theft) | "使用用户的 LLM 配额" | 服务器强迫客户端在被拒绝的采样上花费 |
+| `stopReason` | "生成停止的原因" | `endTurn`、`stopSequence` 或 `maxTokens` |
 
-## Further Reading
+## 进一步阅读
 
-- [MCP — Concepts: Sampling](https://modelcontextprotocol.io/docs/concepts/sampling) — high-level overview of sampling
-- [MCP — Client sampling spec 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling) — canonical `sampling/createMessage` shape
-- [MCP — GitHub SEP-1577](https://github.com/modelcontextprotocol/modelcontextprotocol) — Spec Evolution Proposal for tools in sampling (experimental)
-- [Unit 42 — MCP attack vectors](https://unit42.paloaltonetworks.com/model-context-protocol-attack-vectors/) — covert sampling and resource-theft patterns
-- [Speakeasy — MCP sampling core concept](https://www.speakeasy.com/mcp/core-concepts/sampling) — walk-through with client-side code samples
+- [MCP — 概念：采样](https://modelcontextprotocol.io/docs/concepts/sampling) — 采样的高级概述
+- [MCP — 客户端采样规范 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling) — 规范的 `sampling/createMessage` 形态
+- [MCP — GitHub SEP-1577](https://github.com/modelcontextprotocol/modelcontextprotocol) — 采样中工具的规范演进提案（实验性）
+- [Unit 42 — MCP 攻击向量](https://unit42.paloaltonetworks.com/model-context-protocol-attack-vectors/) — 隐蔽采样和资源窃取模式
+- [Speakeasy — MCP 采样核心概念](https://www.speakeasy.com/mcp/core-concepts/sampling) — 带客户端代码示例的演练
