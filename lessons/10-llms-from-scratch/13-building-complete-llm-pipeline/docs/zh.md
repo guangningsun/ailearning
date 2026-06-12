@@ -1,50 +1,50 @@
-# Building a Complete LLM Pipeline
+# 构建完整的 LLM 训练流水线
 
-> Everything from Lessons 01 to 12 is one stage of one pipeline. This lesson is the scaffold that turns those stages into a single end-to-end run: tokenize, pre-train, scale, SFT, align, evaluate, quantize, serve. You will not train a 70B model on a laptop. You will produce the orchestration layer, the manifest, the eval gate, and the rollback plan that a 2026 frontier team uses to decide what gets shipped. This is the capstone.
+> 第一课到第十二课的内容，不过是整条流水线中某一个阶段的某一步而已。本课的目标是把这些阶段拼装成一条端到端的运行管线：分词、预训练、扩展、SFT、对齐、评估、量化、推理。你不需要在笔记本上训练一个 70B 的模型。你要做的是编排层、清单文件、评估门槛和回滚方案——这些才是 2026 年前沿团队用来决定「什么可以上线」的东西。这就是终极挑战。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** All Phase 10 lessons 01-12
-**Time:** ~120 minutes
+**类型：** 构建
+**语言：** Python（标准库）
+**前置条件：** 第十阶段所有课程 01-12
+**时间：** 约 120 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Compose the eleven prior lessons (tokenizer, data, pre-training, scaling, SFT, RLHF, DPO, CAI, eval, quantization, inference) into a single reproducible pipeline spec
-- Define the artifact contract between stages: what each stage consumes, what it produces, and how the next stage verifies the input
-- Build an orchestrator that tracks experiments, hashes artifacts, and gates ship decisions on eval thresholds
-- Design the rollback plan: which artifacts are cheap to re-run, which are expensive, and what a corrupted checkpoint costs
+- 将之前的十一课（分词器、数据、预训练、扩展、SFT、RLHF、DPO、CAI、评估、量化、推理）组合成一条可复现的流水线配置文件
+- 定义各阶段之间的产物契约：每个阶段消费什么、生产什么，以及下一阶段如何验证输入
+- 构建一个编排器，负责追踪实验、对产物进行哈希、在评估门槛处决定是否放行
+- 设计回滚方案：哪些产物便宜可重跑、哪些代价高昂、损坏的检查点意味着什么成本
 
-## The Problem
+## 问题
 
-The previous lessons each work. Tokenizer trained. Tiny GPT pre-trained. SFT dataset assembled. Reward model trained. DPO run. Evals measured. Quantized weights exported. Inference server spun up. Each one is a notebook. Each one has its own conventions, its own output paths, its own seed.
+之前的每一课都能跑起来。分词器训练好了。微型 GPT 预训练完了。SFT 数据集组装好了。Reward 模型训练好了。DPO 运行了。评估测完了。量化权重导出了。推理服务器启动了。每一课都是一个 notebook。每一个都有自己的一套规范、自己的输出路径、自己的随机种子。
 
-A frontier training run is not a notebook. Llama 3 405B took 30 million H100 hours over roughly 54 days. DeepSeek-V3 used around 2.8 million H800 hours. During that time, one corrupted checkpoint, one data contamination, one eval regression can cost a team a week of wall-clock and a month of GPU budget. The way teams survive this is through pipeline hygiene: every stage has a deterministic input, a deterministic output, a manifest, a hash, and a gate.
+前沿训练不是 notebook。Llama 3 405B 用了 3000 万 H100 小时，跨越约 54 天。DeepSeek-V3 大约用了 280 万 H800 小时。在此期间，一个损坏的检查点、一次数据污染、一次评估回退，就能让团队损失一周的墙上时间和一月的 GPU 预算。团队生存的秘诀在于流水线卫生：每个阶段都有确定的输入、确定的输出、清单文件、哈希值和门槛。
 
-This is the capstone. You will not run the pipeline end-to-end on a laptop. You will write the orchestrator that coordinates the stages, the manifest that describes the run, the verifier that gates ship decisions, and the replay plan that lets a third party re-run your work from a single file. The code is small; the discipline is large.
+这就是终极挑战。你不需要在笔记本上端到端跑这条流水线。你要写的是协调各阶段的编排器、描述本次运行的清单文件、在放行决策前验证的校验器，以及让第三方能从一个文件重跑全部工作的回放方案。代码很小；纪律要求很大。
 
-The pattern scales from 100M to 1T parameters unchanged. The same four components -- manifest, orchestrator, eval gate, artifact store -- run Llama 3 and also run your hobby GPT. The difference is the size of the numbers inside each stage's config, not the shape of the pipeline.
+这个模式从 100M 参数到 1T 参数 scale 都不变。相同的四个组件——清单、编排器、评估门槛、产物仓库——既能跑 Llama 3，也能跑你练手的 GPT。区别只在于每个阶段配置里的数字大小，流水线的形状不变。
 
-## The Concept
+## 概念
 
-### The Twelve Stages
+### 十二个阶段
 
-Every Phase 10 lesson is a stage. Here is the full dependency graph.
+每一个第十阶段的课程就是一个阶段。完整的依赖图如下：
 
 ```mermaid
 graph TD
-    S1["01 Tokenizer vocab"] --> S2["02 Trained tokenizer"]
-    S2 --> S3["03 Sharded dataset"]
-    S3 --> S4["04 Base model checkpoint"]
-    S4 --> S5["05 Scaled training recipe"]
-    S5 --> S6["06 SFT checkpoint"]
-    S6 --> S7["07 Reward model + PPO policy"]
-    S6 --> S8["08 DPO policy"]
-    S7 --> S9["09 CAI / GRPO refined policy"]
+    S1["01 分词器词表"] --> S2["02 训练好的分词器"]
+    S2 --> S3["03 分片数据集"]
+    S3 --> S4["04 基模型检查点"]
+    S4 --> S5["05 扩展训练配方"]
+    S5 --> S6["06 SFT 检查点"]
+    S6 --> S7["07 Reward 模型 + PPO 策略"]
+    S6 --> S8["08 DPO 策略"]
+    S7 --> S9["09 CAI / GRPO 精炼策略"]
     S8 --> S9
-    S9 --> S10["10 Eval report"]
-    S9 --> S11["11 Quantized weights"]
-    S11 --> S12["12 Inference server"]
-    S10 --> GATE["Ship gate"]
+    S9 --> S10["10 评估报告"]
+    S9 --> S11["11 量化权重"]
+    S11 --> S12["12 推理服务器"]
+    S10 --> GATE["上线门槛"]
     S12 --> GATE
 
     style S1 fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -53,11 +53,11 @@ graph TD
     style GATE fill:#1a1a2e,stroke:#51cf66,color:#fff
 ```
 
-Stages 07 and 08 can run in parallel. Everything else is a hard dependency. A change in stage 02 (tokenizer) invalidates every downstream artifact. A change in stage 10 (eval) invalidates only the ship decision.
+阶段 07 和 08 可以并行运行。其他一切都是硬依赖。阶段 02（分词器）的任何改变都会使所有下游产物失效。阶段 10（评估）的改变只会使上线决策失效。
 
-### The Manifest
+### 清单文件
 
-A manifest is a single file that describes a run completely enough to replay it. Nothing the pipeline produces should depend on state that is not in the manifest. The fields are boring and mandatory.
+清单是一个单独的文件，完整描述了一次运行，足以重放。流水线产生的任何东西都不应依赖于清单中未记录的状态。字段平庸但必须完备。
 
 ```
 pipeline_version: 1.2.3
@@ -72,96 +72,96 @@ stages:
     cost_usd: 12
 ```
 
-The output hash of stage N is the input hash of stage N+1. Any deviation and the pipeline halts. This is how you catch data corruption early. It is also how a teammate on a different continent verifies that their replay produced the same artifact as yours.
+阶段 N 的输出哈希就是阶段 N+1 的输入哈希。任何偏差都会让流水线停下来。这就是早期捕获数据损坏的方法。也是让不同大陆的同事验证他们的重放产生了与你相同产物的方法。
 
-In practice teams use a small YAML schema plus a manifest checker that diffs against the previous successful run. Any delta outside the expected fields (cost, wall clock) is a red flag.
+实践中团队使用小型 YAML schema 加上清单检查器，与上一次成功运行做 diff。除预期字段（成本、墙上时间）以外的任何增量都是红旗。
 
-### Artifact Typing
+### 产物类型化
 
-Each stage's output is a typed artifact. Not a directory blob, not a pickle, but a named type with a known schema.
+每个阶段的输出都是有类型的产物。不是目录 blob，不是 pickle，而是有已知 schema 的命名类型。
 
-| Stage | Artifact Type | Key Fields |
+| 阶段 | 产物类型 | 关键字段 |
 |-------|--------------|-----------|
-| 01-02 | Tokenizer | vocab.json, merges.txt, config.json, hash |
-| 03 | Dataset | shards[], row count, token count, dedup stats |
-| 04-05 | Checkpoint | weights.safetensors, config.json, optimizer state, step count |
-| 06 | SFT Model | checkpoint + SFT recipe + data mix |
-| 07 | Reward Model | RM checkpoint + preference data hash |
-| 08-09 | Policy | checkpoint + reference hash + beta + KL budget consumed |
-| 10 | Eval Report | benchmark scores + regression diffs + eval data hash |
-| 11 | Quantized Model | quantized weights + calibration data + accuracy delta vs FP16 |
-| 12 | Server Spec | endpoint + model hash + config + observability hooks |
+| 01-02 | 分词器 | vocab.json, merges.txt, config.json, hash |
+| 03 | 数据集 | shards[], 行数, token 数, 去重统计 |
+| 04-05 | 检查点 | weights.safetensors, config.json, 优化器状态, step 数 |
+| 06 | SFT 模型 | 检查点 + SFT 配方 + 数据配比 |
+| 07 | Reward 模型 | RM 检查点 + 偏好数据哈希 |
+| 08-09 | 策略 | 检查点 + 参考哈希 + beta + 已消耗的 KL 预算 |
+| 10 | 评估报告 | 基准分数 + 回退 diff + 评估数据哈希 |
+| 11 | 量化模型 | 量化权重 + 校准数据 + 相对 FP16 的精度差 |
+| 12 | 服务器规格 | 端点 + 模型哈希 + 配置 + 可观测性钩子 |
 
-The typing prevents the most common failure mode: using a stage 08 output as a stage 06 input, shipping a DPO-trained model through the SFT path. Typed artifacts and typed stage signatures make these errors compile-time failures, not day-five failures.
+类型化防止了最常见的失败模式：用阶段 08 的输出作为阶段 06 的输入，让 DPO 训练过的模型走 SFT 路径。类型化产物和类型化阶段签名让这些错误成为编译时失败，而不是第五天失败。
 
-### The Eval Gate
+### 评估门槛
 
-Shipping is not "training finished." Shipping is "training finished and the eval gate passed." The gate is defined before the run starts.
+上线不是「训练完成了」。上线是「训练完成了且评估门槛通过了」。门槛在运行开始前就定义好了。
 
 ```
 gates:
-  mmlu:      >= baseline + 0.5   # no regression
+  mmlu:      >= baseline + 0.5   # 无回退
   humaneval: >= baseline + 1.0
-  truthfulqa: >= baseline         # no drop
+  truthfulqa: >= baseline         # 不下降
   safety_refusal_rate: <= 0.05
   kl_from_reference: <= 25.0
   cost_total_usd: <= 50000
 ```
 
-Every gate is a numeric threshold. No "looks good" gates. No subjective sign-offs. If every gate passes, the artifact is marked shippable. If any gate fails, the run is held pending explicit override by a named reviewer, which itself is logged in the manifest.
+每个门槛都是一个数值阈值。没有「看起来不错」的门槛。没有主观签收。如果每个门槛都通过，产物被标记为可上线。如果任何门槛失败，运行被暂停，等待指定的审核者明确覆盖，而覆盖本身也会被记录在清单中。
 
-Two gates catch most disasters. A *regression* gate (the new model must be at least as good as the previous on core benchmarks) catches training bugs. A *KL budget* gate (the aligned policy must not have drifted further than X from its reference) catches alignment overcooking. Every production pipeline has both.
+两个门槛能捕获大部分灾难。*回退*门槛（新模型必须在核心基准上至少与之前一样好）捕获训练 bug。*KL 预算*门槛（对齐后的策略不得偏离参考策略超过 X）捕获过度对齐。每一个生产流水线都有这两个。
 
-### The Orchestrator
+### 编排器
 
-A small piece of code that reads the manifest, dispatches stages, tracks artifacts, and halts on any contract violation. This is not Airflow. This is not Kubeflow. For pipeline hygiene you want something boring that you wrote.
+一小段代码，读取清单、分发阶段、追踪产物、在任何契约违规时停下。这不是 Airflow。这不是 Kubeflow。流水线的卫生要求的是你自己写的一个无聊的东西。
 
-The orchestrator's job is narrow:
+编排器的工作很窄：
 
-1. Resolve the DAG from the manifest.
-2. For each stage, check if the expected output already exists at the correct hash (skip if so).
-3. Run the stage, capture stdout/stderr, measure wall clock and cost.
-4. Verify the output hash against the downstream stage's expected input hash.
-5. On failure, write a partial manifest with the exact failing stage and exit nonzero.
+1. 从清单解析 DAG。
+2. 对每个阶段，检查期望的输出是否已存在于正确的哈希处（若是则跳过）。
+3. 运行阶段，捕获 stdout/stderr，测量墙上时间和成本。
+4. 验证输出哈希是否与下游阶段的期望输入哈希一致。
+5. 失败时，写入部分清单，包含确切失败的阶段，并 nonzero 退出。
 
-That is 200 lines of Python. It will look like the file `code/main.py` in this lesson. Under the hood, the real pipeline uses `torchrun` or `ray` to execute individual stages on clusters, but the orchestrator itself runs on a single box.
+这只需要 200 行 Python。看起来会像本课中 `code/main.py` 的文件。在底层，真正的流水线用 `torchrun` 或 `ray` 在集群上执行各个阶段，但编排器本身跑在一台机器上。
 
-### Experiment Tracking and Artifact Storage
+### 实验追踪与产物存储
 
-Two external systems anchor the pipeline.
+两个外部系统锚定流水线。
 
-**Experiment tracker (wandb, neptune, mlflow).** Logs loss curves, eval metrics, system telemetry per stage. The tracker is where you go when you need to compare run A against run B three weeks later. Teams almost always use a hosted tracker for this -- writing your own loses time that should go into training.
+**实验追踪器（wandb、neptune、mlflow）。** 记录每个阶段的损失曲线、评估指标、系统遥测。追踪器是你三周后需要比较运行 A 和运行 B 时去的地方。团队几乎总是使用托管的追踪器——自己写会浪费时间，而这些时间应该用在训练上。
 
-**Artifact store (S3, R2, GCS).** Immutable object store for checkpoints, datasets, tokenizers, eval reports. Artifacts are addressed by hash, not by filename. A filename like `latest.pt` is a foot-gun; `ckpt-7b-step-20000-sha256:abc123.safetensors` is a contract.
+**产物仓库（S3、R2、GCS）。** 不可变的对象存储，用于检查点、数据集、分词器、评估报告。产物按哈希寻址，而非文件名。`latest.pt` 这样的文件名是陷阱；`ckpt-7b-step-20000-sha256:abc123.safetensors` 才是一份契约。
 
-The orchestrator writes to both. The tracker is for humans looking at charts. The artifact store is for the next stage looking up inputs.
+编排器向两者写入。追踪器给人看图表用。产物仓库给下一阶段查输入用。
 
-### Costing
+### 成本核算
 
-A frontier run has a dollar number attached. Budget discipline happens in two places.
+前沿运行有美元数字。预算纪律发生在两个地方。
 
-**Pre-run estimate.** From the manifest, compute expected FLOPs (for pre-training: 6 x params x tokens), expected GPU hours (FLOPs / peak throughput / utilization), and dollar cost at the current rental rate. If the estimate exceeds the budget gate, the pipeline refuses to start.
+**运行前估算。** 从清单计算期望的 FLOPs（预训练：6 × params × tokens）、期望的 GPU 小时数（FLOPs / 峰值吞吐量 / 利用率）、按当前租用价格的美元成本。如果估算超出预算门槛，流水线拒绝启动。
 
-**In-run tracking.** Stage-by-stage wall clock and cost are logged to the manifest. After every stage, the remaining budget is checked. If a stage overran, the next stage's gate is evaluated with the new remaining budget. You do not find out you are out of money when the VC calls.
+**运行中追踪。** 逐阶段记录墙上时间和成本到清单。每个阶段后检查剩余预算。如果某阶段超支，下一阶段的门槛用新的剩余预算评估。你不会在 VC 来电时才发现自己没钱了。
 
-Llama 3's reported cost was $61M. DeepSeek-V3 reported $5.6M for the main pre-training run. The ratio is mostly hardware efficiency plus mixture-of-experts -- but the specific cost is visible because both teams tracked it per stage, not per run.
+Llama 3 报告的成本是 6100 万美元。DeepSeek-V3 为主训练运行报告的成本是 560 万美元。差距主要来自硬件效率加 MoE——但具体成本是可见的，因为两队都逐阶段追踪，而非逐运行追踪。
 
-### Reproducibility vs Determinism
+### 可复现性 vs 确定性
 
-These are not the same. *Reproducible* means the same manifest plus the same code plus the same infrastructure produces a checkpoint with equivalent downstream metrics. *Deterministic* means bit-identical output.
+这不是一回事。*可复现*意味着相同的清单加上相同的代码加上相同的基础设施产生一个下游指标等效的检查点。*确定性*意味着逐位一致的输出。
 
-Modern LLM training is reproducible but not deterministic. Distributed training's reduce-order, GPU kernel non-determinism (cuBLAS, flash-attn), and mixed precision rounding combine to produce floats that differ at the 1e-5 level between runs. This is fine for the final metrics, which do not move. It is fatal if you are trying to debug with bit-level diffs. The cure is to log every stage's input hash, output hash, and headline metrics -- if those match, the run is "reproduced" even if the weights are not bit-identical.
+现代 LLM 训练可复现但不确定。分布式训练的 reduce 顺序、GPU 内核不确定性（cuBLAS、flash-attn）和混合精度舍入结合，使得两次运行之间在 1e-5 级别上产生不同的浮点数。这对最终指标没问题，指标不会变。如果你想用位级 diff 调试，这就致命了。治疗方法：记录每个阶段的输入哈希、输出哈希和摘要指标——如果这些匹配，运行就是「可复现的」，即使权重不是逐位一致的。
 
 ```mermaid
 graph LR
-    M["Manifest v1.2.3"] --> O["Orchestrator"]
-    O --> S["Stages 01 → 12"]
-    S --> AS["Artifact Store\n(content-addressed)"]
-    S --> ET["Experiment Tracker\n(metrics, curves)"]
-    AS --> GATE["Eval Gate"]
+    M["清单 v1.2.3"] --> O["编排器"]
+    O --> S["阶段 01 → 12"]
+    S --> AS["产物仓库\n(内容寻址)"]
+    S --> ET["实验追踪器\n(指标、曲线)"]
+    AS --> GATE["评估门槛"]
     ET --> GATE
-    GATE -->|pass| SHIP["Ship"]
-    GATE -->|fail| ROLL["Rollback plan"]
+    GATE -->|通过| SHIP["上线"]
+    GATE -->|失败| ROLL["回滚计划"]
 
     style M fill:#1a1a2e,stroke:#0f3460,color:#fff
     style GATE fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -169,95 +169,95 @@ graph LR
     style ROLL fill:#1a1a2e,stroke:#c0392b,color:#fff
 ```
 
-### Rollback Plan
+### 回滚计划
 
-Before the run starts, write down what happens on failure of each stage. Three categories.
+运行开始前，写下每个阶段失败时会发生什么。三类。
 
-- **Cheap to re-run** (hours): tokenizer, eval, quantization, inference server. Just re-run.
-- **Medium** (days): SFT, DPO, CAI. Keep the base model; re-run only the alignment stages.
-- **Expensive** (weeks and millions of dollars): pre-training. The rollback plan here is not "re-run." It is "use the last good checkpoint and re-run the cheaper downstream stages with revised data."
+- **便宜可重跑**（小时级）：分词器、评估、量化、推理服务器。重跑即可。
+- **中等**（天级）：SFT、DPO、CAI。保留基模型；只重跑对齐阶段。
+- **昂贵**（周级和数百万美元）：预训练。这里的回滚计划不是「重跑」。而是「用最后一个好的检查点，用修订后的数据重跑下游便宜阶段」。
 
-Because stage dependencies are typed and hashed, the orchestrator can compute the rollback set automatically: invalidate the failed stage plus every descendant. A failure at stage 06 (SFT) invalidates 06, 07, 08, 09, 10, 11, 12. A failure at stage 11 (quantization) invalidates only 11 and 12. Naming this up front avoids improvising while the team is exhausted at 4am.
+因为阶段依赖是类型化和哈希化的，编排器可以自动计算回滚集：失效失败的阶段及其所有下游。一个阶段 06（SFT）的失败会使 06、07、08、09、10、11、12 全部失效。一个阶段 11（量化）的失败只会使 11 和 12 失效。提前命名这些可以在团队凌晨 4 点筋疲力尽时不用现场发挥。
 
-### Production Recipes Observed in 2026
+### 2026 年观察到的生产配方
 
-Most frontier teams converged on the same skeleton.
+大多数前沿团队收敛到了相同的骨架。
 
-- Tokenizer: 128k BPE with byte fallback. Trained on a small, balanced multilingual slice.
-- Pre-training: 10-20T tokens, mostly web plus code plus synthetic. Muon or AdamW optimizer. FSDP2 or DeepSpeed ZeRO-3. Gradient checkpointing. BF16 weights, FP32 master.
-- SFT: 500k-2M instruction pairs, mixed human and synthetic, with strict dedup against the eval set.
-- Alignment: DPO or CAI + GRPO. RLHF only where the preference signal is too multidimensional for DPO.
-- Eval: MMLU-Pro, MATH, HumanEval+, GPQA, SWE-Bench Verified, LiveBench, plus a private held-out set the public never sees.
-- Quantization: 4-bit GPTQ or AWQ for serving, 8-bit for safety evals where accuracy deltas matter.
-- Serving: vLLM, TensorRT-LLM, or in-house. Continuous batching. Speculative decoding. KV cache eviction.
+- 分词器：128k BPE，带字节回退。在小型均衡多语言切片上训练。
+- 预训练：10-20T tokens，大部分是网页加代码加合成数据。Muon 或 AdamW 优化器。FSDP2 或 DeepSpeed ZeRO-3。梯度检查点。BF16 权重，FP32 master。
+- SFT：500k-2M 条指令对，混合人类和合成数据，严格对评估集去重。
+- 对齐：DPO 或 CAI + GRPO。RLHF 仅在偏好信号太复杂以至于 DPO 不够用时使用。
+- 评估：MMLU-Pro、MATH、HumanEval+、GPQA、SWE-Bench Verified、LiveBench，外加一个私有保留集，公众永远看不到。
+- 量化：4 位 GPTQ 或 AWQ 用于推理服务，8 位用于安全评估（精度差很重要的地方）。
+- 服务：vLLM、TensorRT-LLM 或自研。连续批处理。投机解码。KV cache 逐出。
 
-The numbers change every six months. The skeleton does not.
+数字每六个月变一次。骨架不变。
 
-## Build It
+## 构建它
 
-The lesson's code is an orchestrator and a manifest checker, not twelve training scripts. Each stage is simulated with a placeholder that produces an output artifact with the correct shape and hash. Running the orchestrator end-to-end proves the pipeline's plumbing works before you burn GPU money on the real stages.
+本课的代码是一个编排器和一个清单检查器，不是十二个训练脚本。每个阶段用一个占位符模拟，产生形状和哈希都正确的输出产物。端到端运行编排器可以证明流水线的管道工程在你为真实阶段烧 GPU 钱之前是工作的。
 
-See `code/main.py` for the full implementation. The key pieces:
+参见 `code/main.py` 获取完整实现。关键部分：
 
-- `Manifest` dataclass: pipeline version, seed, git commit, stages, gates.
-- `Stage` dataclass: name, type, inputs (hashes), output (hash), wall clock, cost.
-- `Orchestrator.run()`: resolves DAG, dispatches stages, verifies hashes, updates manifest.
-- `EvalGate.check()`: reads thresholds, compares against latest eval report, returns pass/fail.
-- `ArtifactStore` (in-memory stub): put/get by hash, simulates S3.
-- `CostTracker`: per-stage and cumulative, halts when cap exceeded.
+- `Manifest` 数据类：流水线版本、种子、git commit、阶段、门槛。
+- `Stage` 数据类：名称、类型、输入（哈希）、输出（哈希）、墙上时间、成本。
+- `Orchestrator.run()`：解析 DAG、分发阶段、验证哈希、更新清单。
+- `EvalGate.check()`：读取阈值、与最新评估报告比较、返回通过/失败。
+- `ArtifactStore`（内存存根）：按哈希 put/get，模拟 S3。
+- `CostTracker`：逐阶段和累计，超出上限时停止。
 
-The pipeline in `main.py` runs twelve placeholder stages, produces a manifest, and exercises a failing eval gate to show what a held run looks like. Swap each placeholder for the real training script from the corresponding lesson and you have the skeleton a real frontier pipeline uses.
+`main.py` 中的流水线运行十二个占位符阶段、生成清单，并执行一个失败的评估门槛以展示暂停运行的样子。将每个占位符替换为对应课程的真实训练脚本，你就有了真实前沿流水线使用的骨架。
 
-## Use It
+## 使用它
 
-The canonical workflow has three commands.
+规范工作流有三个命令。
 
 ```
-python code/main.py plan    # validate manifest, compute cost estimate, print DAG
-python code/main.py run     # execute stages, writing to manifest.out.yaml
-python code/main.py gate    # read manifest.out.yaml, apply eval gates, ship-or-hold
+python code/main.py plan    # 验证清单，计算成本估算，打印 DAG
+python code/main.py run     # 执行阶段，写入 manifest.out.yaml
+python code/main.py gate    # 读取 manifest.out.yaml，应用评估门槛，上线或暂停
 ```
 
-Run `plan` first every time. Most pipeline bugs show up at plan time -- missing gate thresholds, stale hashes, budget overruns. Running `plan` is free. Running `run` is expensive. Save money by catching bugs on the cheap side.
+每次先运行 `plan`。大多数流水线 bug 在 plan 阶段暴露——缺失的门槛阈值、过时的哈希、预算超支。运行 `plan` 是免费的。运行 `run` 是昂贵的。在便宜的一端捕获 bug 来省钱。
 
-The output of `gate` is either `SHIP` or `HOLD: <reason>`. A held run is not a failure; it is a decision point. A named reviewer either overrides (and the override is logged), or they approve the rollback.
+`gate` 的输出要么是 `SHIP` 要么是 `HOLD: <reason>`。暂停的运行不是失败；它是一个决策点。指定的审核者要么覆盖（覆盖被记录），要么批准回滚。
 
-## Ship It
+## 上线它
 
-This lesson produces `outputs/skill-llm-pipeline-reviewer.md`. Feed it a proposed pipeline manifest and it checks all the contracts: stage typing, hash chain, gates, rollback plan, cost estimate. It refuses to approve a manifest with a missing eval gate, an unbounded KL budget, or a run that mixes eval and training data.
+本课产出 `outputs/skill-llm-pipeline-reviewer.md`。给它一个提议的流水线清单，它会检查所有契约：阶段类型化、哈希链、门槛、回滚计划、成本估算。它拒绝批准缺少评估门槛、无界 KL 预算或混合评估和训练数据的清单。
 
-## Exercises
+## 练习
 
-1. Extend the orchestrator to support parallel execution of stages 07 and 08. Use the stdlib `concurrent.futures` module. Confirm the final manifest records both stages' outputs and that stage 09's input hash is a deterministic combination of both.
+1. 扩展编排器以支持阶段 07 和 08 的并行执行。使用标准库的 `concurrent.futures` 模块。确认最终清单记录了两个阶段的输出，且阶段 09 的输入哈希是两者的确定性组合。
 
-2. Add a "contamination check" gate. Given the eval dataset hash and the training dataset shards, compute the overlap (exact string match or 13-gram match). The gate fails if overlap exceeds 0.1%. Feed it a contaminated training set and confirm the gate holds the run.
+2. 添加一个「污染检查」门槛。给定评估数据集哈希和训练数据集分片，计算重叠（精确字符串匹配或 13-gram 匹配）。如果重叠超过 0.1% 则门槛失败。喂入一个被污染的训练集并确认门槛让运行停住。
 
-3. Implement a cost estimator from first principles. For stage 04 (pre-training), estimate FLOPs as 6 x params x tokens, assume 40% MFU (model FLOPs utilization) on H100 at 989 TFLOPs BF16, at $2.50/GPU-hour. Report the estimate for a 7B model trained on 2T tokens. Compare to published Llama 2 numbers.
+3. 从第一性原理实现成本估算器。对于阶段 04（预训练），估算 FLOPs 为 6 × params × tokens，假设 H100 在 989 TFLOPs BF16 下 40% MFU（模型 FLOPs 利用率），价格 $2.50/GPU 小时。报告 7B 模型在 2T tokens 上训练时的估算。与已发布的 Llama 2 数字比较。
 
-4. Build a partial rollback. Simulate a failure at stage 09 (CAI), then re-run stages 09 through 12 while leaving 01-08 cached. The orchestrator should detect the cached artifacts by hash and skip them. Measure wall-clock saved versus full re-run.
+4. 构建部分回滚。模拟阶段 09（CAI）失败，然后在保留 01-08 缓存的同时重跑 09 到 12。编排器应通过哈希检测缓存的产物并跳过它们。测量相对于完全重跑的墙上时间节省。
 
-5. Add observability. Emit OpenTelemetry spans for each stage, with attributes for params, tokens seen, loss, and cost. Pipe the spans to a local collector. The point is not dashboards; the point is that every stage's health is traceable from a single trace ID.
+5. 添加可观测性。为每个阶段发出 OpenTelemetry span，属性包括 params、见过的 tokens、损失和成本。将 span 输送到本地收集器。目的不是仪表盘；而是每个阶段的健康状况可以从一个 trace ID 追溯。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|----------------------|
-| Manifest | "The recipe file" | YAML or JSON describing pipeline version, seed, per-stage config, and gate thresholds — sufficient to replay a run |
-| Content-addressed | "By hash not name" | Artifacts stored by SHA-256 of their contents, so you can never confuse version A with version B |
-| Eval gate | "The ship criteria" | Numeric thresholds on benchmark metrics and safety scores that must pass before an artifact is marked shippable |
-| KL budget | "How far alignment drifted" | A cap on cumulative KL(policy || reference) across alignment stages, enforced as a gate |
-| MFU | "How much of the GPU you used" | Model FLOPs Utilization — achieved FLOPs divided by theoretical peak. 40% is typical at 70B scale, 55% at 7B |
-| Rollback plan | "What we do when it breaks" | Pre-written set of actions per stage on failure: re-run, fall back, retrain with revised inputs |
-| Orchestrator | "The conductor" | The process that reads the manifest, dispatches stages, verifies hashes, halts on any contract violation |
-| Artifact store | "Versioned S3 for weights" | Immutable content-addressed object store — single source of truth for checkpoints, datasets, eval reports |
-| Reproducible | "Same metrics on replay" | Different bit-level weights but equivalent downstream metrics — the realistic target for distributed LLM training |
-| Cost gate | "You cannot exceed X" | Pre-run cost estimate plus in-run tracker — the pipeline refuses to start if the estimate exceeds budget |
+| 清单 (Manifest) | 「配方文件」 | 描述流水线版本、种子、逐阶段配置和门槛阈值的 YAML 或 JSON——足以重放一次运行 |
+| 内容寻址 (Content-addressed) | 「按哈希而非名称」 | 产物按其内容的 SHA-256 存储，所以你永远不会把版本 A 和版本 B 搞混 |
+| 评估门槛 (Eval gate) | 「上线标准」 | 基准指标和安全分数上的数值阈值，必须通过才能将产物标记为可上线 |
+| KL 预算 (KL budget) | 「对齐漂移了多远」 | 对齐阶段中累积 KL(policy || reference) 的上限，作为门槛强制执行 |
+| MFU | 「你用了多少 GPU」 | 模型 FLOPs 利用率——实际 FLOPs 除以理论峰值。70B 量级典型为 40%，7B 为 55% |
+| 回滚计划 (Rollback plan) | 「坏了怎么办」 | 失败时每个阶段的预设动作集：重跑、回退、用修订后的输入重训 |
+| 编排器 (Orchestrator) | 「指挥」 | 读取清单、分发阶段、验证哈希、在任何契约违规时停止的进程 |
+| 产物仓库 (Artifact store) | 「权重的版本化 S3」 | 不可变内容寻址对象存储——检查点、数据集、评估报告的唯一真实来源 |
+| 可复现 (Reproducible) | 「重放时指标相同」 | 位级权重不同但下游指标等效——分布式 LLM 训练的现实目标 |
+| 成本门槛 (Cost gate) | 「你不能超过 X」 | 运行前估算加运行中追踪——如果估算超出预算，流水线拒绝启动 |
 
-## Further Reading
+## 延伸阅读
 
-- [Dubey et al., 2024 -- "The Llama 3 Herd of Models"](https://arxiv.org/abs/2407.21783) -- the most detailed public description of a frontier pipeline including data, training, alignment, eval
-- [DeepSeek-AI, 2024 -- "DeepSeek-V3 Technical Report"](https://arxiv.org/abs/2412.19437) -- efficiency-first pipeline at roughly 1/10th the cost of Llama 3 class training
-- [Kaplan et al., 2020 -- "Scaling Laws for Neural Language Models"](https://arxiv.org/abs/2001.08361) -- the original compute-data-params scaling relationship
-- [Hoffmann et al., 2022 -- "Training Compute-Optimal Large Language Models (Chinchilla)"](https://arxiv.org/abs/2203.15556) -- the correction to Kaplan that recalibrated modern data budgets
-- [PyTorch FSDP2 documentation](https://pytorch.org/docs/stable/fsdp.html) -- the distributed training primitive replacing FSDP1 in PyTorch 2.4+
-- [Weights & Biases LLM Reports](https://wandb.ai/site/llms) -- real manifests and experiment tracker output for open-source LLM runs, useful as plagiarizable templates
+- [Dubey et al., 2024 -- "The Llama 3 Herd of Models"](https://arxiv.org/abs/2407.21783) —— 最详细的公开前沿流水线描述，包括数据、训练、对齐、评估
+- [DeepSeek-AI, 2024 -- "DeepSeek-V3 Technical Report"](https://arxiv.org/abs/2412.19437) —— 效率优先的流水线，成本约为 Llama 3 类训练的 1/10
+- [Kaplan et al., 2020 -- "Scaling Laws for Neural Language Models"](https://arxiv.org/abs/2001.08361) —— 最初的计算-数据-参数扩展关系
+- [Hoffmann et al., 2022 -- "Training Compute-Optimal Large Language Models (Chinchilla)"](https://arxiv.org/abs/2203.15556) —— 对 Kaplan 的修正，重新校准了现代数据预算
+- [PyTorch FSDP2 文档](https://pytorch.org/docs/stable/fsdp.html) —— 分布式训练原语，在 PyTorch 2.4+ 中取代了 FSDP1
+- [Weights & Biases LLM 报告](https://wandb.ai/site/llms) —— 开源 LLM 运行的实际清单和实验追踪器输出，可作为可借鉴的模板

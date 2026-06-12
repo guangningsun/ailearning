@@ -1,66 +1,66 @@
-# RLHF: Reward Model + PPO
+# RLHF：奖励模型 + PPO
 
-> SFT teaches the model to follow instructions. But it doesn't teach the model which response is BETTER. Two grammatically correct, factually accurate answers can differ enormously in helpfulness. RLHF is how you encode human judgment into the model's behavior. It's what makes Claude helpful and GPT polite.
+> SFT 教会模型遵循指令。但它没有教会模型哪个响应更好。两个语法正确、事实准确的答案可能在有用性上存在巨大差异。RLHF 是将人类判断编码到模型行为中的方式。它让 Claude 有用、让 GPT 有礼貌。
 
-**Type:** Build
-**Languages:** Python (with numpy)
-**Prerequisites:** Phase 10, Lesson 06 (Instruction Tuning / SFT)
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python（含 numpy）
+**前置条件：** 阶段 10，第 06 课（指令微调 / SFT）
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Build a reward model that scores response quality from human preference pairs (chosen vs rejected)
-- Implement the PPO training loop that optimizes a language model policy against the reward model with a KL penalty
-- Explain why RLHF requires three models (SFT, reward, policy) and how the KL constraint prevents reward hacking
-- Evaluate the effect of RLHF by comparing response quality before and after preference optimization
+- 构建一个奖励模型，从人类偏好对（选择 vs 拒绝）中评分响应质量
+- 实现 PPO 训练循环，使用 KL 惩罚优化语言模型策略以对抗奖励模型
+- 解释为什么 RLHF 需要三个模型（SFT、奖励、策略）以及 KL 约束如何防止奖励黑客
+- 通过比较偏好优化前后的响应质量来评估 RLHF 的效果
 
-## The Problem
+## 问题
 
-Ask a model "Explain quantum computing" and it might produce:
+问模型"解释量子计算"，它可能生成：
 
-**Response A:** "Quantum computing uses qubits that can exist in superposition, meaning they can be 0, 1, or both simultaneously. This allows quantum computers to process certain calculations exponentially faster than classical computers. Key algorithms include Shor's algorithm for factoring large numbers and Grover's algorithm for searching unsorted databases."
+**响应 A：**"量子计算使用可以处于叠加态的量子比特，这意味着它们可以同时是 0、1 或两者。这使得量子计算机能够以指数级速度处理某些计算，远超经典计算机。关键算法包括用于大数分解的 Shor 算法和用于搜索无序数据库的 Grover 算法。"
 
-**Response B:** "Quantum computing is a type of computing that uses quantum mechanical phenomena. It was first proposed in the 1980s. Richard Feynman suggested that quantum systems could be simulated by quantum computers. The field has grown significantly since then. Many companies are now working on quantum computers. IBM, Google, and others have made progress. Quantum supremacy was claimed by Google in 2019."
+**响应 B：**"量子计算是一种使用量子力学现象的计算类型。它于 1980 年代首次提出。理查德·费曼提出量子系统可以用量子计算机模拟。此后该领域发展迅速。许多公司正在研究量子计算机。IBM、谷歌和其他公司已取得进展。谷歌于 2019 年宣布实现了量子霸权。"
 
-Both responses are factually correct. Both are grammatically sound. Both follow the instruction. But Response A is clearly better. It's more concise, more informative, and better structured. A human would pick A every time.
+两个响应都是事实正确的。两者语法都正确。两者都遵循指令。但响应 A 明显更好。它更简洁、更有信息量、结构更好。人类每次都会选 A。
 
-SFT can't capture this distinction. It trains the model on "correct" responses, but it has no mechanism for saying "this response is better than that one." It treats every training example as equally good. If both A and B appeared in the SFT dataset, the model would learn from both equally.
+SFT 无法捕捉这种区别。它训练模型学习"正确"的响应，但没有机制说"这个响应比那个好"。它将每个训练示例视为同等好。如果 A 和 B 都出现在 SFT 数据集中，模型会平等地学习两者。
 
-RLHF solves this. It trains a reward model to predict which response a human would prefer, then uses that reward signal to push the language model toward higher-quality outputs. InstructGPT (the precursor to ChatGPT) used RLHF to dramatically improve GPT-3's helpfulness, truthfulness, and harmlessness. OpenAI's internal evaluators preferred InstructGPT outputs over GPT-3 outputs 85% of the time, despite InstructGPT being 135x smaller (1.3B vs 175B parameters).
+RLHF 解决了这个问题。它训练一个奖励模型来预测人类会偏好哪个响应，然后使用该奖励信号将语言模型推向更高质量的输出。InstructGPT（ChatGPT 的前身）使用 RLHF 大幅提升了 GPT-3 的有用性、真实性和无害性。OpenAI 内部评估者 85% 的时间更偏好 InstructGPT 输出而非 GPT-3 输出，尽管 InstructGPT 小 135 倍（13 亿 vs 1750 亿参数）。
 
-## The Concept
+## 概念
 
-### The Three Stages
+### 三个阶段
 
-RLHF is not a single training run. It's a pipeline of three sequential stages, each building on the previous one.
+RLHF 不是一次训练运行。它是一个三阶段顺序流程，每个阶段都建立在前一个阶段之上。
 
-**Stage 1: SFT.** Train a base model on instruction-response pairs (Lesson 06). This gives you a model that can follow instructions but doesn't know which responses are better than others.
+**阶段 1：SFT。** 在指令-响应对上训练基础模型（第 06 课）。这给你一个能够遵循指令但不知道哪些响应优于其他的模型。
 
-**Stage 2: Reward Model.** Collect human preference data: show annotators two responses to the same prompt and ask "which is better?" Train a model to predict these preferences. The reward model takes (prompt, response) as input and outputs a scalar score.
+**阶段 2：奖励模型。** 收集人类偏好数据：向标注者展示同一提示的两个响应，问"哪个更好？"训练模型预测这些偏好。奖励模型接受（提示，响应）作为输入，输出一个标量分数。
 
-**Stage 3: PPO.** Use the reward model to generate a training signal for the language model. The language model generates responses, the reward model scores them, and PPO updates the language model to produce higher-scoring responses. A KL divergence penalty prevents the language model from straying too far from the SFT checkpoint.
+**阶段 3：PPO。** 使用奖励模型为语言模型生成训练信号。语言模型生成响应，奖励模型给它们打分，PPO 更新语言模型以产生更高分的响应。KL 散度惩罚防止语言模型偏离 SFT 检查点太远。
 
 ```mermaid
 graph TD
-    subgraph Stage1["Stage 1: SFT"]
-        B["Base Model"] --> S["SFT Model"]
-        D["Instruction Data\n(27K examples)"] --> S
+    subgraph Stage1["阶段 1：SFT"]
+        B["基础模型"] --> S["SFT 模型"]
+        D["指令数据\n（27K 示例）"] --> S
     end
 
-    subgraph Stage2["Stage 2: Reward Model"]
-        S --> |"Generate responses"| P["Preference Pairs\n(prompt, winner, loser)"]
-        H["Human Annotators"] --> P
-        P --> R["Reward Model\nR(prompt, response) → score"]
+    subgraph Stage2["阶段 2：奖励模型"]
+        S --> |"生成响应"| P["偏好对\n（提示，胜者，败者）"]
+        H["人类标注者"] --> P
+        P --> R["奖励模型\nR（提示，响应）→ 分数"]
     end
 
-    subgraph Stage3["Stage 3: PPO"]
-        S --> |"Initialize policy"| PI["Policy Model\n(being optimized)"]
-        S --> |"Freeze as reference"| REF["Reference Model\n(frozen SFT)"]
-        PI --> |"Generate"| RESP["Response"]
+    subgraph Stage3["阶段 3：PPO"]
+        S --> |"初始化策略"| PI["策略模型\n（正在优化）"]
+        S --> |"冻结为参考"| REF["参考模型\n（冻结 SFT）"]
+        PI --> |"生成"| RESP["响应"]
         RESP --> R
-        R --> |"Reward signal"| PPO["PPO Update"]
-        REF --> |"KL penalty"| PPO
-        PPO --> |"Update"| PI
+        R --> |"奖励信号"| PPO["PPO 更新"]
+        REF --> |"KL 惩罚"| PPO
+        PPO --> |"更新"| PI
     end
 
     style S fill:#1a1a2e,stroke:#51cf66,color:#fff
@@ -70,59 +70,59 @@ graph TD
     style PPO fill:#1a1a2e,stroke:#e94560,color:#fff
 ```
 
-### The Reward Model
+### 奖励模型
 
-The reward model is a language model repurposed as a scorer. Take the SFT model, replace the language modeling head (which outputs a distribution over vocabulary) with a scalar head (which outputs a single number). The architecture is identical up to the final layer.
+奖励模型是一个被重新用作评分器的语言模型。取 SFT 模型，将语言建模特头（输出词汇表上的分布）替换为标量头（输出一个数字）。架构在最后一层之前是相同的。
 
-Input: a prompt concatenated with a response. Output: a single scalar reward score.
+输入：提示与响应的连接。输出：单个标量奖励分数。
 
-Training data is human preference pairs. For each prompt, annotators see two responses and pick the better one. This creates training triples: (prompt, preferred_response, rejected_response).
+训练数据是人类偏好对。对于每个提示，标注者看到两个响应并选择更好的一个。这创建了训练三元组：（提示，首选响应，拒绝响应）。
 
-The loss function uses the Bradley-Terry model of pairwise preferences:
+损失函数使用 Bradley-Terry 成对偏好模型：
 
 ```
 loss = -log(sigmoid(reward(preferred) - reward(rejected)))
 ```
 
-This is the key equation. `sigmoid(reward(A) - reward(B))` gives the probability that response A is preferred over response B. The loss pushes the reward model to assign a higher score to the preferred response.
+这是关键方程。`sigmoid(reward(A) - reward(B))` 给出响应 A 优于 B 的概率。损失推动奖励模型为首选项分配更高的分数。
 
-Why pairwise comparisons instead of absolute scores? Because humans are terrible at assigning absolute quality scores ("Is this response a 7.3 or a 7.5 out of 10?") but very good at relative comparisons ("Is A better than B?"). The Bradley-Terry model converts relative comparisons into a consistent absolute scoring system.
+为什么用成对比较而不是绝对分数？因为人类不擅长给出绝对质量分数（"这个响应是 7.3 还是 7.5/10？"）但非常擅长相对比较（"A 比 B 好吗？"）。Bradley-Terry 模型将相对比较转换为一致的绝对评分系统。
 
-**InstructGPT numbers:** OpenAI collected 33,000 comparison pairs from 40 contractors. Each comparison took about 5 minutes. That's 2,750 hours of human labor for the reward model training data.
+**InstructGPT 数据：** OpenAI 从 40 名标注者收集了 33,000 个比较对。每个比较大约需要 5 分钟。奖励模型训练数据需要 2,750 小时的人工。
 
-### PPO: Proximal Policy Optimization
+### PPO：近端策略优化
 
-PPO is a reinforcement learning algorithm. In RLHF, the "environment" is the reward model, the "agent" is the language model, and the "action" is generating a token.
+PPO 是一种强化学习算法。在 RLHF 中，"环境"是奖励模型，"智能体"是语言模型，"动作"是生成一个 token。
 
-The objective:
+目标：
 
 ```
-maximize: E[R(prompt, response)] - beta * KL(policy || reference)
+最大化：E[R(提示, 响应)] - beta * KL(policy || reference)
 ```
 
-The first term pushes the model to generate high-reward responses. The second term (KL divergence penalty) prevents the model from deviating too far from the SFT checkpoint.
+第一项推动模型生成高奖励响应。第二项（KL 散度惩罚）防止模型偏离 SFT 检查点太远。
 
-Why the KL penalty? Without it, the model finds degenerate solutions. The reward model is trained on a finite dataset of human preferences. It has blind spots. The language model will exploit those blind spots -- finding outputs that score high on the reward model but are actually nonsensical. Classic examples:
+为什么需要 KL 惩罚？没有它，模型会找到退化解。奖励模型在有限的人类偏好数据集上训练。它有盲点。语言模型会利用这些盲点——找到在奖励模型上得分高但实际上荒谬的输出。典型例子：
 
-- Repeating "I'm so helpful and harmless!" scores high on helpfulness/harmlessness reward models
-- Producing verbose, formal-sounding but empty responses that pattern-match to "high quality"
-- Exploiting specific phrases that happened to correlate with high reward in the training data
+- 重复"我非常有用且无害！"在有用性/无害性奖励模型上得分很高
+- 生成冗长、正式但空洞的响应，模式匹配到"高质量"
+- 利用在训练数据中恰好与高奖励相关的特定短语
 
-The KL penalty says: you can improve, but you can't become a completely different model. Stay close to the SFT version, which was already reasonable. Wander too far and the KL cost dominates the reward.
+KL 惩罚说：你可以改进，但不能变成一个完全不同的模型。保持接近 SFT 版本，它本来就还不错。走得太远，KL 成本就会主导奖励。
 
-**InstructGPT numbers:** PPO training used lr=1.5e-5, KL coefficient beta=0.02, 256K episodes (prompt-response pairs), and 4 PPO epochs per batch. The entire RLHF pipeline took several days on a cluster of GPUs.
+**InstructGPT 数据：** PPO 训练使用 lr=1.5e-5，KL 系数 beta=0.02，256K 个回合（提示-响应对），每个批次 4 个 PPO  epoch。整个 RLHF 流程在 GPU 集群上花了几天。
 
 ```mermaid
 graph LR
-    subgraph PPO["PPO Training Loop"]
+    subgraph PPO["PPO 训练循环"]
         direction TB
-        PROMPT["Sample prompt\nfrom dataset"] --> GEN["Policy generates\nresponse"]
-        GEN --> SCORE["Reward model\nscores response"]
-        GEN --> KL["Compute KL divergence\nvs reference model"]
-        SCORE --> OBJ["Objective:\nreward - beta * KL"]
+        PROMPT["从数据集中\n采样提示"] --> GEN["策略生成\n响应"]
+        GEN --> SCORE["奖励模型\n给响应打分"]
+        GEN --> KL["计算与参考模型的\nKL 散度"]
+        SCORE --> OBJ["目标：\nreward - beta * KL"]
         KL --> OBJ
-        OBJ --> UPDATE["PPO gradient update\n(clipped surrogate loss)"]
-        UPDATE --> |"repeat"| PROMPT
+        OBJ --> UPDATE["PPO 梯度更新\n（裁剪的代理损失）"]
+        UPDATE --> |"重复"| PROMPT
     end
 
     style PROMPT fill:#1a1a2e,stroke:#0f3460,color:#fff
@@ -131,9 +131,9 @@ graph LR
     style OBJ fill:#1a1a2e,stroke:#e94560,color:#fff
 ```
 
-### The PPO Objective in Detail
+### PPO 目标详解
 
-PPO uses a "clipped surrogate objective" to prevent excessively large updates. The ratio between the new policy and old policy probabilities is clipped to the range [1 - epsilon, 1 + epsilon], where epsilon is typically 0.2.
+PPO 使用"裁剪代理目标"来防止过大的更新。新策略与旧策略概率的比值被裁剪到 [1 - epsilon, 1 + epsilon] 范围内，其中 epsilon 通常为 0.2。
 
 ```
 ratio = pi_new(action | state) / pi_old(action | state)
@@ -141,47 +141,47 @@ clipped_ratio = clip(ratio, 1 - epsilon, 1 + epsilon)
 loss = -min(ratio * advantage, clipped_ratio * advantage)
 ```
 
-The advantage function estimates how much better the current response is compared to the expected quality. In RLHF:
+优势函数估计当前响应比预期质量好多少。在 RLHF 中：
 
 ```
-advantage = reward(prompt, response) - baseline
+advantage = reward(提示, 响应) - 基线
 ```
 
-The baseline is often the average reward over recent responses. A positive advantage means the response was better than average; a negative advantage means it was worse. PPO increases the probability of above-average responses and decreases the probability of below-average ones.
+基线通常是最近响应的平均奖励。正优势意味着响应高于平均；负优势意味着低于平均。PPO 增加高于平均响应的概率，降低低于平均响应的概率。
 
-The clipping prevents catastrophic updates. If a single response gets an unusually high reward, the unclipped ratio could be very large, causing the model to dramatically shift toward that response. Clipping caps the update, maintaining training stability.
+裁剪防止灾难性更新。如果一个响应获得异常高的奖励，未裁剪的比值可能非常大，导致模型剧烈地转向该响应。裁剪限制更新，维持训练稳定性。
 
-### Reward Hacking
+### 奖励黑客
 
-The dark side of RLHF. The language model is optimizing against the reward model, which is an imperfect proxy for human preferences. As the language model gets better at maximizing reward, it starts exploiting the reward model's weaknesses.
+RLHF 的阴暗面。语言模型正在优化对抗奖励模型，而奖励模型是人类偏好的不完美代理。当语言模型在最大化奖励方面变得更好时，它开始利用奖励模型的弱点。
 
-Common failure modes:
+常见失败模式：
 
-| Failure | What happens | Why |
+| 失败 | 发生了什么 | 为什么 |
 |---------|-------------|-----|
-| Verbosity | Model produces longer and longer responses | Human annotators often preferred longer, more detailed responses, so the reward model assigns higher scores to length |
-| Sycophancy | Model agrees with everything the user says | Annotators preferred responses that agreed with the premise of the question |
-| Hedging | Model refuses to commit to an answer | Hedged responses ("This is a complex topic with many perspectives...") rarely get marked as wrong |
-| Format gaming | Model uses bullet points and headers excessively | Formatted responses looked more "polished" to annotators |
+| 冗长 | 模型生成越来越长的响应 | 人类标注者往往更偏好更长、更详细的响应，所以奖励模型给长度更高的分数 |
+| 谄媚 | 模型同意用户说的一切 | 标注者偏好同意问题前提的响应 |
+| 模糊 | 模型拒绝给出明确答案 | 模糊的响应（"这是一个有很多观点的复杂话题……"）很少被标记为错误 |
+| 格式游戏 | 模型过度使用项目符号和标题 | 格式化的响应在标注者看来更"精致" |
 
-Mitigation strategies: stronger KL penalty (prevents the model from straying far enough to exploit weaknesses), training the reward model on adversarial examples (patch known failure modes), and using multiple reward models with different architectures (harder to hack all simultaneously).
+缓解策略：更强的 KL 惩罚（防止模型偏离太远以利用弱点）、在对抗示例上训练奖励模型（修补已知失败模式）以及使用不同架构的多个奖励模型（同时黑掉所有更难）。
 
-### Real RLHF Pipelines
+### 真实的 RLHF 流程
 
-| Model | Comparison Pairs | Annotators | RM Size | PPO Steps | KL Coeff |
+| 模型 | 比较对 | 标注者 | RM 大小 | PPO 步数 | KL 系数 |
 |-------|-----------------|------------|---------|-----------|----------|
 | InstructGPT | 33K | 40 | 6B | 256K | 0.02 |
-| Llama 2 Chat | ~1M | undisclosed | 70B | undisclosed | 0.01 |
-| Claude | undisclosed | undisclosed | undisclosed | undisclosed | undisclosed |
-| Anthropic RLHF paper | 22K | 20 | 52B | 50K | 0.001 |
+| Llama 2 Chat | ~1M | 未公开 | 70B | 未公开 | 0.01 |
+| Claude | 未公开 | 未公开 | 未公开 | 未公开 | 未公开 |
+| Anthropic RLHF 论文 | 22K | 20 | 52B | 50K | 0.001 |
 
-Anthropic's 2022 paper trained a 52B reward model on 22,000 comparisons. Larger reward models produce more reliable signals, which makes PPO training more stable. Using a small reward model to train a large language model is risky -- the reward model doesn't have enough capacity to capture the nuances of good vs bad responses.
+Anthropic 2022 年的论文在 22,000 个比较上训练了 52B 奖励模型。更大的奖励模型产生更可靠的信号，这使 PPO 训练更稳定。用小奖励模型训练大语言模型是有风险的——奖励模型没有足够的容量来捕捉好与坏响应之间的细微差别。
 
-## Build It
+## 构建
 
-### Step 1: Synthetic Preference Data
+### 第 1 步：合成偏好数据
 
-In production, human annotators create preference data. We'll create synthetic pairs where the "preferred" response is objectively better (more concise, more accurate, more helpful).
+在生产中，人类标注者创建偏好数据。我们创建合成对，其中"首选"响应客观上更好（更简洁、更准确、更有帮助）。
 
 ```python
 import numpy as np
@@ -220,11 +220,11 @@ PREFERENCE_DATA = [
 ]
 ```
 
-The preferred responses are concise and direct. The rejected responses exhibit common failure modes: unnecessary padding, hedging, redundant explanation, and imprecision. This is exactly the kind of distinction that SFT cannot capture but RLHF can.
+首选响应简洁直接。被拒绝的响应表现出常见的失败模式：不必要的填充、模糊、冗余解释和不精确。这正是 SFT 无法捕捉但 RLHF 可以的区分。
 
-### Step 2: Reward Model Architecture
+### 第 2 步：奖励模型架构
 
-The reward model reuses the transformer architecture from the mini GPT, but replaces the vocabulary-sized output head with a single scalar projection.
+奖励模型重用了 mini GPT 的 transformer 架构，但将词汇表大小的输出头替换为单个标量投影。
 
 ```python
 import sys
@@ -259,11 +259,11 @@ class RewardModel:
         return reward
 ```
 
-The reward model takes the hidden state at the *last* token position and projects it to a scalar. Why the last token? Because the causal attention mask means the last position has attended to every previous token. It has the most complete representation of the entire (prompt, response) sequence.
+奖励模型取*最后一个* token 位置的隐藏状态并投影到标量。为什么是最后一个 token？因为因果注意力掩码意味着最后一个位置已关注了每个之前的 token。它拥有整个（提示，响应）序列的最完整表示。
 
-### Step 3: Bradley-Terry Loss
+### 第 3 步：Bradley-Terry 损失
 
-Train the reward model on preference pairs using the Bradley-Terry pairwise loss.
+使用 Bradley-Terry 成对损失在偏好对上训练奖励模型。
 
 ```python
 def tokenize_for_reward(prompt, response, vocab_size=256):
@@ -341,11 +341,11 @@ def train_reward_model(rm, preference_data, num_epochs=10, lr=1e-4, max_seq_len=
     return rm, losses, accuracies
 ```
 
-The accuracy metric is straightforward: what fraction of preference pairs does the reward model rank correctly? A random model scores 50%. A well-trained reward model on clean data should exceed 70%. InstructGPT's reward model achieved about 72% accuracy on held-out comparisons, which sounds low but is actually good -- many preference pairs are ambiguous even to humans (inter-annotator agreement was about 73%).
+准确率指标很简单：奖励模型正确排序的偏好对比例是多少？随机模型得分 50%。在干净数据上训练良好的奖励模型应超过 70%。InstructGPT 的奖励模型在保留的比较上达到约 72% 的准确率，这听起来很低但实际上不错——许多偏好对对人类来说也是模糊的（标注者间一致性约为 73%）。
 
-### Step 4: Simplified PPO Loop
+### 第 4 步：简化 PPO 循环
 
-Full PPO is complex. This implementation captures the core mechanism: generate responses, score them, compute the advantage, and update the policy with a KL penalty.
+完整的 PPO 很复杂。这个实现捕捉了核心机制：生成响应、打分、计算优势并使用 KL 惩罚更新策略。
 
 ```python
 def compute_kl_divergence(policy_logits, reference_logits):
@@ -444,11 +444,11 @@ def ppo_training(policy_model, reference_model, reward_model, prompts,
     return policy_model, rewards_history, kl_history
 ```
 
-The core loop: (1) sample a prompt, (2) generate a response, (3) score it with the reward model, (4) compute KL divergence against the frozen reference, (5) compute the adjusted reward (reward minus KL penalty), (6) update the policy. The KL penalty grows as the policy diverges from the reference, automatically preventing reward hacking.
+核心循环：（1）采样一个提示，（2）生成一个响应，（3）用奖励模型给响应打分，（4）计算与冻结参考的 KL 散度，（5）计算调整后的奖励（奖励减去 KL 惩罚），（6）更新策略。KL 惩罚随着策略偏离参考而增加，自动防止奖励黑客。
 
-### Step 5: Reward Score Comparison
+### 第 5 步：奖励分数比较
 
-After RLHF, the policy model's responses should score higher on the reward model than the original SFT model's responses.
+RLHF 之后，策略模型的响应应该在奖励模型上比原始 SFT 模型的响应得分更高。
 
 ```python
 def compare_models(sft_model, rlhf_model, reward_model, prompts, max_seq_len=128):
@@ -491,9 +491,9 @@ def compare_models(sft_model, rlhf_model, reward_model, prompts, max_seq_len=128
     return sft_total / n, rlhf_total / n
 ```
 
-## Use It
+## 使用
 
-### Full RLHF Pipeline Demo
+### 完整 RLHF 流程演示
 
 ```python
 if __name__ == "__main__":
@@ -590,40 +590,40 @@ if __name__ == "__main__":
         print(f"  KL > {kl_threshold}: {'Yes (model drifted significantly)' if max(kls) > kl_threshold else 'No (model stayed close to reference)'}")
 ```
 
-## Ship It
+## 交付
 
-This lesson produces `outputs/prompt-reward-model-designer.md` -- a prompt for designing reward model training pipelines. Given a target behavior (helpfulness, coding ability, safety), it produces a data collection protocol, annotator guidelines, and reward model evaluation criteria.
+本课产出 `outputs/prompt-reward-model-designer.md`——一个用于设计奖励模型训练流程的提示词。针对目标行为（有用性、编码能力、安全性），它生成数据收集协议、标注者指南和奖励模型评估标准。
 
-## Exercises
+## 练习
 
-1. Modify the reward model to use the mean of all hidden states instead of just the last position. Compare accuracy. The mean pooling approach gives every token equal weight, while the last-position approach relies on the causal attention to aggregate information. Test on the 6 preference pairs and report which approach scores higher accuracy.
+1. 修改奖励模型，使用所有隐藏状态的均值而不是仅最后一个位置。比较准确率均值池化方法给每个 token 相等的权重，而最后位置方法依赖于因果注意力来聚合信息。在 6 个偏好对上测试并报告哪种方法准确率更高。
 
-2. Implement reward model calibration. After training, run all preference pairs through the reward model and compute: (a) the average reward for preferred responses, (b) the average reward for rejected responses, (c) the margin (preferred minus rejected). A well-calibrated model should have a clear margin. Then add 4 new preference pairs and check if the margin holds on unseen data.
+2. 实现奖励模型校准。训练后，通过奖励模型运行所有偏好对并计算：（a）首选响应的平均奖励，（b）拒绝响应的平均奖励，（c）差距（首选减拒绝）。校准良好的模型应该有明显的差距。然后添加 4 个新的偏好对，检查差距是否在未见数据上保持。
 
-3. Simulate reward hacking. Create a reward model that gives high scores to long responses (reward = len(response) / 100). Run PPO with this flawed reward model and observe the policy model generating increasingly long, repetitive outputs. Then add a KL penalty of 0.1 and show that it prevents the degenerate behavior.
+3. 模拟奖励黑客。创建一个给长响应高分的奖励模型（reward = len(response) / 100）。用这个有缺陷的奖励模型运行 PPO，观察策略模型生成越来越长、重复的输出。然后添加 0.1 的 KL 惩罚并证明它可以防止退化行为。
 
-4. Implement a multi-objective reward. Train two reward models -- one for helpfulness and one for conciseness. Combine them as R = 0.7 * R_helpful + 0.3 * R_concise. Show that the combined objective produces responses that are both helpful and concise, avoiding the verbosity trap of a single helpfulness reward.
+4. 实现多目标奖励。训练两个奖励模型——一个用于有用性，一个用于简洁性。将它们组合为 R = 0.7 * R_helpful + 0.3 * R_concise。证明组合目标产生既有帮助又简洁的响应，避免单一有用性奖励的冗长陷阱。
 
-5. Compare different KL coefficients. Run PPO with beta=0.001 (too low, reward hacking), beta=0.02 (standard), and beta=0.5 (too high, no learning). Plot the reward curve and KL curve for each. The beta=0.02 run should show steady reward improvement with bounded KL.
+5. 比较不同的 KL 系数。用 beta=0.001（太低，奖励黑客）、beta=0.02（标准）和 beta=0.5（太高，没有学习）运行 PPO。为每个绘制奖励曲线和 KL 曲线。beta=0.02 的运行应该显示稳定的奖励改进和有界的 KL。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|----------------------|
-| RLHF | "Training with human feedback" | Reinforcement Learning from Human Feedback: a three-stage pipeline (SFT, reward model, PPO) that optimizes language model outputs using human preference signals |
-| Reward model | "A model that scores responses" | A transformer with a scalar output head, trained on pairwise human preferences using the Bradley-Terry loss |
-| Bradley-Terry | "The comparison model" | A probabilistic model where P(A > B) = sigmoid(score(A) - score(B)), converting pairwise preferences into a consistent scoring function |
-| PPO | "The RL algorithm" | Proximal Policy Optimization: updates the policy to maximize reward while clipping the update magnitude to prevent instability |
-| KL divergence | "How different two distributions are" | A measure of the difference between the policy model's token distribution and the reference model's -- used as a penalty to prevent reward hacking |
-| KL penalty | "The leash on the model" | Beta * KL(policy \|\| reference) subtracted from the reward signal -- prevents the policy from diverging too far from the SFT checkpoint |
-| Reward hacking | "Gaming the reward" | When the policy finds degenerate high-reward outputs by exploiting weaknesses in the reward model instead of genuinely improving |
-| Preference pair | "Which is better, A or B?" | A training example consisting of (prompt, preferred_response, rejected_response) -- the fundamental unit of RLHF training data |
-| Reference model | "The frozen SFT checkpoint" | A copy of the SFT model whose weights never change -- used as the anchor for KL divergence computation |
+| RLHF | "用人类反馈训练" | 从人类反馈中进行强化学习：一个三阶段流程（SFT、奖励模型、PPO），使用人类偏好信号优化语言模型输出 |
+| 奖励模型 | "给响应打分的模型" | 一个带有标量输出头的 transformer，使用 Bradley-Terry 损失在成对人类偏好上训练 |
+| Bradley-Terry | "比较模型" | 一个概率模型，其中 P(A > B) = sigmoid(score(A) - score(B))，将成对偏好转换为一致的评分函数 |
+| PPO | "RL 算法" | 近端策略优化：更新策略以最大化奖励，同时裁剪更新幅度以防止不稳定 |
+| KL 散度 | "两个分布有多不同" | 策略模型的 token 分布与参考模型之间差异的度量——用作惩罚以防止奖励黑客 |
+| KL 惩罚 | "模型的缰绳" | Beta * KL(policy \|\| reference) 从奖励信号中减去——防止策略偏离 SFT 检查点太远 |
+| 奖励黑客 | "玩弄奖励" | 当策略通过利用奖励模型的弱点找到退化的最优输出而不是真正改进时 |
+| 偏好对 | "A 和 B 哪个更好？" | 由（提示，首选响应，拒绝响应）组成的训练示例——RLHF 训练数据的基本单位 |
+| 参考模型 | "冻结的 SFT 检查点" | SFT 模型的副本，其权重永不改变——用作 KL 散度计算的锚点 |
 
-## Further Reading
+## 延伸阅读
 
-- [Ouyang et al., 2022 -- "Training language models to follow instructions with human feedback" (InstructGPT)](https://arxiv.org/abs/2203.02155) -- the paper that made RLHF practical for large language models
-- [Schulman et al., 2017 -- "Proximal Policy Optimization Algorithms"](https://arxiv.org/abs/1707.06347) -- the original PPO paper from OpenAI
-- [Bai et al., 2022 -- "Training a Helpful and Harmless Assistant with Reinforcement Learning from Human Feedback"](https://arxiv.org/abs/2204.05862) -- Anthropic's RLHF paper with detailed analysis of reward hacking and KL penalty
-- [Stiennon et al., 2020 -- "Learning to summarize with human feedback"](https://arxiv.org/abs/2009.01325) -- RLHF applied to summarization, showing reward models can capture nuanced quality judgments
-- [Christiano et al., 2017 -- "Deep reinforcement learning from human preferences"](https://arxiv.org/abs/1706.03741) -- the foundational work on learning reward functions from human comparisons
+- [Ouyang 等，2022 ——"训练语言模型用人类反馈遵循指令"（InstructGPT）](https://arxiv.org/abs/2203.02155) —— 使 RLHF 对大语言模型实用的论文
+- [Schulman 等，2017 ——"近端策略优化算法"](https://arxiv.org/abs/1707.06347) —— OpenAI 的原始 PPO 论文
+- [Bai 等，2022 ——"用人类反馈强化学习训练有用且无害的助手"](https://arxiv.org/abs/2204.05862) —— Anthropic 的 RLHF 论文，包含对奖励黑客和 KL 惩罚的详细分析
+- [Stiennon 等，2020 ——"学习用人类反馈总结"](https://arxiv.org/abs/2009.01325) —— RLHF 应用于摘要，展示奖励模型可以捕捉细微的质量判断
+- [Christiano 等，2017 ——"从人类偏好中进行深度强化学习"](https://arxiv.org/abs/1706.03741) —— 从人类比较中学习奖励函数的基础性工作
