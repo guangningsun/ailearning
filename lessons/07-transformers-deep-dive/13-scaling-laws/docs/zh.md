@@ -1,46 +1,46 @@
-# Scaling Laws
+# 缩放定律
 
-> The 2020 Kaplan paper said: bigger model, lower loss. The 2022 Hoffmann paper said: you were under-training. Compute goes into two buckets — parameters and tokens — and the split is not obvious.
+> 2020 年的 Kaplan 论文说：模型越大，损失越低。2022 年的 Hoffmann 论文说：你训练得还不够。计算量分为两个桶——参数和 token——但两者之间的分配并不直观。
 
-**Type:** Learn
-**Languages:** Python
-**Prerequisites:** Phase 7 · 05 (Full Transformer), Phase 7 · 07 (GPT)
-**Time:** ~45 minutes
+**类型：** 学习型
+**语言：** Python
+**前置条件：** 第 7 阶段 · 05（全量 Transformer）、第 7 阶段 · 07（GPT）
+**时间：** 约 45 分钟
 
-## The Problem
+## 问题
 
-When you have C FLOPs of training compute and want the best model, you face two knobs:
+当你有 C FLOPs 的训练计算量，想要训练出最好的模型时，你面对两个旋钮：
 
-1. **How many parameters (N)?** Bigger model, higher capacity.
-2. **How many training tokens (D)?** More data, better use of capacity.
+1. **参数数量 (N) 有多少？** 模型越大，容量越高。
+2. **训练 token 数 (D) 有多少？** 数据越多，对容量的利用越充分。
 
-FLOPs scale approximately as `6 × N × D`. You can push N up and D down, or D up and N down. Which is better?
+FLOPs 大致按 `6 × N × D` 缩放。你可以推高 N 压低 D，或者推高 D 压低 N。哪个更好？
 
-Before 2022, the answer was "push N hard." GPT-3 (2020) was 175B parameters trained on ~300B tokens. A ratio of about 1.7 tokens per parameter. The Kaplan scaling laws backed this up.
+在 2022 年之前，答案是"猛推 N"。GPT-3（2020）有 175B 参数，训练在约 300B token 上。比例约为 1.7 token 每参数。Kaplan 的缩放定律支持这一结论。
 
-Hoffmann et al. (2022), training a small family of models called Chinchilla, found something different: optimal ratio is closer to **20 tokens per parameter**. GPT-3 was 10× undertrained. Chinchilla (70B params, 1.4T tokens) beat GPT-3 (175B, 300B tokens) on every benchmark at 2.5× less inference cost.
+Hoffmann 等人（2022）在训练一个叫 Chinchilla 的小模型族时发现了不同的结论：最优比例接近 **20 token 每参数**。GPT-3 训练不足 10 倍。Chinchilla（70B 参数，1.4T token）在每个基准上击败了 GPT-3（175B，300B token），推理成本却只有后者的 1/2.5。
 
-2026 is Chinchilla's world — with one important twist. Llama 3 8B was trained on 15 trillion tokens, a ratio of 1,875 tokens per parameter. Ninety-four times past Chinchilla-optimal. Inference cost matters more than training cost for models that will be used at scale, so over-training (past Chinchilla) for a smaller deployable footprint is the 2026 default.
+2026 年是 Chinchilla 的世界——但有一个重要的转折。Llama 3 8B 训练在 15 万亿 token 上，比例达 1,875 token 每参数。是 Chinchilla 最优值的 94 倍。对于大规模使用的模型来说，推理成本比训练成本更重要，所以在 2026 年，过度训练（超过 Chinchilla 最优）以获得更小的可部署模型是默认选择。
 
-## The Concept
+## 概念
 
-![Chinchilla curves: loss vs compute at various N/D ratios](../assets/scaling-laws.svg)
+![Chinchilla 曲线：不同 N/D 比例下损失 vs 计算量](../assets/scaling-laws.svg)
 
-### The Hoffmann law
+### Hoffmann 定律
 
-From the Chinchilla paper, loss follows:
+根据 Chinchilla 论文，损失遵循：
 
 ```
 L(N, D) = A / N^α + B / D^β + E
 ```
 
-- `N` = parameters (non-embedding).
-- `D` = training tokens.
-- `α ≈ 0.34`, `β ≈ 0.28` (roughly symmetric).
-- `E ≈ 1.69`, the irreducible loss ceiling.
-- `A ≈ 406`, `B ≈ 411`.
+- `N` = 参数（非 embedding 部分）。
+- `D` = 训练 token 数。
+- `α ≈ 0.34`，`β ≈ 0.28`（大致对称）。
+- `E ≈ 1.69`，不可约损失上限。
+- `A ≈ 406`，`B ≈ 411`。
 
-Two terms trade against each other as you scale. Take the derivative w.r.t. `N` at fixed compute (C = 6ND) and solve:
+当你缩放时，两项相互竞争。在固定计算量 C = 6ND 下对 `N` 求导并求解：
 
 ```
 N_opt ≈ 0.6 × (C/6)^0.5
@@ -48,108 +48,108 @@ D_opt ≈ 0.6 × (C/6)^0.5
 D_opt / N_opt ≈ 20
 ```
 
-Compute-optimal: 20 tokens per parameter.
+计算最优：每参数 20 token。
 
-### Why over-training anyway
+### 为什么要过度训练
 
-Chinchilla-optimal minimizes training loss per training FLOP. But you pay training cost once; inference cost forever.
+Chinchilla 最优最小化的是每 FLOP 训练计算量的损失。但训练成本只付一次；推理成本永远在付。
 
-For a chatbot that serves a trillion tokens per month, inference dominates total cost. Llama's approach: train smaller, longer. 8B at 15T tokens is deeply inference-optimized:
+对于每月服务一万亿 token 的聊天机器人，推理主导总成本。Llama 的做法：训练更小的模型、更久。8B 在 15T token 上是深度推理优化的：
 
-- Fits on consumer GPUs.
-- Latency is a fraction of 70B Chinchilla-optimal.
-- Quality is close enough for most tasks.
+- 能装进消费级 GPU。
+- 延迟是 70B Chinchilla 最优模型的几分之一。
+- 对大多数任务来说，质量足够接近。
 
-DeepMind's 2024 paper ("Over-training is the new optimal") formalized this. For inference-dominated workloads, the right ratio is closer to 100–500 tokens per parameter depending on serving volume.
+DeepMind 2024 年的论文（"过度训练是新的最优"）将这一点形式化了。对于推理主导的工作负载，正确的比例接近每参数 100–500 token，取决于服务量。
 
-### Emergence vs smoothness
+### 涌现 vs 平滑
 
-Claim: certain abilities (arithmetic, multi-step reasoning, chain-of-thought following) "emerge" suddenly at some scale.
+一种说法：某些能力（算术、多步推理、思维链跟随）在某个规模下"涌现"出来。
 
-Schaeffer et al. (2023) argued this is a measurement artifact: emergent metrics use discontinuous scoring (exact match, accuracy at threshold) that hide smooth improvement in the underlying logits. Continuous metrics (cross-entropy) show smooth curves.
+Schaeffer 等人（2023）认为这是测量伪影：涌现指标使用不连续评分（精确匹配、阈值准确率）隐藏了底层 logit 的平滑改进。连续指标（交叉熵）显示的是平滑曲线。
 
-In 2026 the consensus is: predictions via continuous loss are reliable. Benchmark jumps are often scorer artifacts. Plan budgets against continuous metrics.
+2026 年的共识是：通过连续损失进行预测是可靠的。基准测试的跳跃往往是评分器的伪影。用连续指标来规划预算。
 
-### The 2026 picture
+### 2026 年的图景
 
-Scaling laws still work, but:
+缩放定律仍然有效，但：
 
-| Factor | Changed how |
+| 因素 | 变化方式 |
 |--------|-------------|
-| Data quality | Curating "good" tokens (Phi-style) shifts curves by >2× effective compute |
-| MoE | Total params decouple from active FLOPs; scaling laws per-active-FLOP |
-| Post-training | Some capabilities (instruction following, code) shift with SFT+RLHF more than pretraining |
-| Multimodality | Image + text tokens scale together; separate curves per modality |
-| Synthetic data | Models generate training data; effective compute can compound |
+| 数据质量 | 策划"好"token（Phi 风格）可以使曲线偏移 >2× 有效计算量 |
+| MoE | 总参数量与活跃 FLOPs 解耦；按活跃 FLOPs 缩放的定律 |
+| 后训练 | 某些能力（指令跟随、代码）通过 SFT+RLHF 的转移比预训练更大 |
+| 多模态 | 图像 + 文本 token 一起缩放；每个模态有独立曲线 |
+| 合成数据 | 模型生成训练数据；有效计算量可以复合 |
 
-The Muon optimizer (Kimi Moonlight, 2024) showed a ~2× effective-compute gain over AdamW at matched data. Some 2026 training runs use Muon by default. Changes the absolute constant in the scaling law, not its shape.
+Muon 优化器（Kimi Moonlight，2024）在匹配数据上展示了比 AdamW 高约 2× 的有效计算量增益。一些 2026 年的训练运行默认使用 Muon。这改变了缩放定律中的绝对常数，而非其形状。
 
-## Build It
+## 从零实现
 
-See `code/main.py`. We implement the Chinchilla loss equation and solve for compute-optimal `(N, D)` at each of several compute budgets.
+见 `code/main.py`。我们实现 Chinchilla 损失方程，并在每个计算量预算下求解计算最优的 `(N, D)`。
 
-### Step 1: Chinchilla loss
+### 第 1 步：Chinchilla 损失
 
 ```python
 def chinchilla_loss(N, D, A=406.4, B=410.7, alpha=0.34, beta=0.28, E=1.69):
     return A / N ** alpha + B / D ** beta + E
 ```
 
-Plot `L` as a contour over `(N, D)` at fixed `C = 6ND`. Find the minimum.
+在固定 C = 6ND 下将 `L` 绘制为 `(N, D)` 的等高线。找到最小值。
 
-### Step 2: compute-optimal frontier
+### 第 2 步：计算最优前沿
 
-For compute budgets from `1e17` to `1e25` FLOPs, find `(N, D)` that minimize loss subject to `6ND = C`. Verify the ratio `D/N ≈ 20`.
+对于从 `1e17` 到 `1e25` FLOPs 的计算量预算，找到在 `6ND = C` 约束下使损失最小化的 `(N, D)`。验证比例 `D/N ≈ 20`。
 
-### Step 3: over-training cost
+### 第 3 步：过度训练的成本
 
-Compute the extra loss you pay to train a 10× smaller model (1/10 of optimal N, 10× the optimal D). Reports the inference FLOP savings (proportional to N) in exchange.
+计算训练一个 10× 更小模型（最优 N 的 1/10，最优 D 的 10×）所额外支付的损失。报告换取的推理 FLOPs 节省（与 N 成正比）。
 
-### Step 4: compare to real models
+### 第 4 步：与真实模型比较
 
-Drop in known `(N, D)` pairs for GPT-3, Chinchilla, Llama 3 8B, DeepSeek-V3 (active params), and compare predicted vs reported loss.
+代入 GPT-3、Chinchilla、Llama 3 8B、DeepSeek-V3（活跃参数）的已知 `(N, D)` 对，比较预测损失与报告损失。
 
-## Use It
+## 实际使用
 
-You're unlikely to train a frontier model yourself. But scaling laws tell you:
+你自己训练前沿模型的可能性不大。但缩放定律告诉你：
 
-1. **Whether your fine-tune has enough data.** If your task-specific data is below 20 tokens per param of the base model, expect saturation at some loss floor.
-2. **Whether to pick a bigger base model.** If you're spending all your budget on inference, prefer a smaller, longer-trained model.
-3. **Where the returns diminish.** Beyond 1000× Chinchilla-optimal, log-loss changes become noise.
+1. **你的微调是否有足够的数据。** 如果你的任务特定数据低于基础模型每参数 20 token，预期会在某个损失下限饱和。
+2. **是否应该选择更大的基础模型。** 如果你在推理上花光了预算，更偏好更小、更长时间训练的模型。
+3. **收益在哪里递减。** 超过 Chinchilla 最优 1000× 后，log 损失的变化变成噪声。
 
-**The research trajectory in 2026:**
+**2026 年的研究轨迹：**
 
-- **Data-constrained regime.** The web has a finite number of high-quality tokens (~5–10 trillion English after filtering). Frontier pretraining is approaching this ceiling. Synthetic data, multilingual, multimodal, and RLHF-scaled fine-tuning are the next levers.
-- **Compute-multiplier tricks.** Muon optimizer, MoE, better data curation — each shifts the absolute constants, not the asymptote.
-- **Scaling laws for RL.** Open question. Early evidence suggests power-law in RL samples but with very different exponents than pretraining.
+- **数据受限 regime。** 互联网上高质量英语 token 的数量有限（约过滤后 5–10 万亿）。前沿预训练正接近这个天花板。合成数据、多语言、多模态和 RLHF 规模微调是下一个杠杆。
+- **计算量倍增器技巧。** Muon 优化器、MoE、更好的数据策划——每一个都改变绝对常数，而非渐近线。
+- **RL 的缩放定律。** 开放问题。早期证据表明 RL 样本中存在幂律，但指数与预训练截然不同。
 
-## Ship It
+## 交付物
 
-See `outputs/skill-training-budget-estimator.md`. The skill picks `(N, D, hours, GPU)` for a new training run given compute budget, deployment constraints, and target loss.
+见 `outputs/skill-training-budget-estimator.md`。给定计算量预算、部署约束和目标损失，该技能为一个新的训练运行选择 `(N, D, hours, GPU)`。
 
-## Exercises
+## 练习
 
-1. **Easy.** Run `code/main.py`. Print Chinchilla-optimal `(N, D)` for compute budgets `1e20`, `1e22`, `1e24`. Compare to the real model table.
-2. **Medium.** Implement the Hoffmann loss-as-function-of-compute curve. Plot loss vs `log10(C)` for the compute-optimal frontier. Identify when the law predicts we'd need `>10^28` FLOPs for the next 0.1 reduction in cross-entropy.
-3. **Hard.** Fit your own scaling law on 5 tiny models (100K to 10M params) trained on the same dataset. Estimate `α` and `E`. How well do your exponents match published ones?
+1. **简单。** 运行 `code/main.py`。打印计算量预算 `1e20`、`1e22`、`1e24` 下的 Chinchilla 最优 `(N, D)`。与真实模型表比较。
+2. **中等。** 实现 Hoffmann 损失-计算量曲线。在计算最优前沿上绘制损失 vs `log10(C)`。找出当定律预测需要 `>10^28` FLOPs 才能让交叉熵再降低 0.1 时的点。
+3. **困难。** 在同一个数据集上拟合你自己的 5 个小模型（100K 到 10M 参数）的缩放定律。估计 `α` 和 `E`。你的指数与已发布的指数匹配得有多好？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|-----------------------|
-| Parameters (N) | "Model size" | Non-embedding weight count; determines capacity. |
-| Tokens (D) | "Training data" | Number of training tokens seen; determines how well the parameters get used. |
-| Compute (C) | "FLOPs spent" | Approximately `6 × N × D` for a standard transformer. |
-| Chinchilla-optimal | "D/N ≈ 20" | Ratio that minimizes loss per FLOP of pretraining. |
-| Over-training | "Past Chinchilla" | Spend extra training FLOPs to save inference FLOPs; D/N >> 20. |
-| Irreducible loss | "The floor" | The `E` term in the scaling law; the entropy of the data itself. |
-| Emergent capability | "Sudden jumps at scale" | Often a scorer artifact; continuous loss is smooth. |
-| Effective compute | "Training-efficiency multiplier" | Better data / optimizer / architecture multiplies how far a FLOP goes. |
+| 参数 (N) | "模型大小" | 非 embedding 权重数量；决定容量。 |
+| Token (D) | "训练数据" | 看到的训练 token 数量；决定参数被利用得有多好。 |
+| 计算量 (C) | "花费的 FLOPs" | 对于标准 transformer 约等于 `6 × N × D`。 |
+| Chinchilla 最优 | "D/N ≈ 20" | 每预训练 FLOP 最小化损失的比例。 |
+| 过度训练 | "超过 Chinchilla" | 花额外训练 FLOPs 来节省推理 FLOPs；D/N >> 20。 |
+| 不可约损失 | "下限" | 缩放定律中的 `E` 项；数据本身的熵。 |
+| 涌现能力 | "规模上的突然跳跃" | 往往是评分器伪影；连续损失是平滑的。 |
+| 有效计算量 | "训练效率倍增器" | 更好的数据/优化器/架构乘以每个 FLOP 能走多远。 |
 
-## Further Reading
+## 延伸阅读
 
-- [Kaplan et al. (2020). Scaling Laws for Neural Language Models](https://arxiv.org/abs/2001.08361) — the first scaling law paper; undertrained.
-- [Hoffmann et al. (2022). Training Compute-Optimal Large Language Models](https://arxiv.org/abs/2203.15556) — Chinchilla.
-- [Schaeffer et al. (2023). Are Emergent Abilities of Large Language Models a Mirage?](https://arxiv.org/abs/2304.15004) — emergence as measurement artifact.
-- [Sardana, Frankle (2024). Beyond Chinchilla-Optimal: Accounting for Inference in Language Model Scaling Laws](https://arxiv.org/abs/2401.00448) — why Llama's over-training is right for its workload.
-- [Jordan et al. (2024). Muon: An optimizer for hidden layers in neural networks](https://kellerjordan.github.io/posts/muon/) — 2× compute multiplier.
+- [Kaplan 等人 (2020). 神经语言模型的缩放定律](https://arxiv.org/abs/2001.08361) — 首个缩放定律论文；训练不足。
+- [Hoffmann 等人 (2022). 训练计算最优的大型语言模型](https://arxiv.org/abs/2203.15556) — Chinchilla。
+- [Schaeffer 等人 (2023). 大型语言模型的涌现能力是海市蜃楼吗？](https://arxiv.org/abs/2304.15004) — 涌现作为测量伪影。
+- [Sardana, Frankle (2024). 超越 Chinchilla 最优：语言模型缩放定律中推理的计算](https://arxiv.org/abs/2401.00448) — 为什么 Llama 的过度训练对其工作负载是正确的。
+- [Jordan 等人 (2024). Muon：神经网络隐藏层的优化器](https://kellerjordan.github.io/posts/muon/) — 2× 计算量倍增器。
