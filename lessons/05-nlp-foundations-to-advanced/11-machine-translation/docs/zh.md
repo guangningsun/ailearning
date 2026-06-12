@@ -1,35 +1,35 @@
-# Machine Translation
+# 机器翻译
 
-> Translation is the task that paid for NLP research for thirty years and keeps paying now.
+> 翻译是 NLP 研究三十年来的主要资金来源，至今仍是。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 5 · 10 (Attention Mechanism), Phase 5 · 04 (GloVe, FastText, Subword)
-**Time:** ~75 minutes
+**类型：** 构建
+**语言：** Python
+**前置条件：** 阶段 5 · 10（注意力机制）、阶段 5 · 04（GloVe、FastText、子词）
+**时间：** 约 75 分钟
 
-## The Problem
+## 问题
 
-A model reads a sentence in one language and produces a sentence in another. Length varies. Word order varies. Some source words map to multiple target words and vice versa. Idioms refuse one-to-one mapping. "I miss you" in French is "tu me manques" — literally "you are lacking to me." No word-level alignment survives that.
+一个模型读取一种语言的句子，输出另一种语言的句子。长度不一致。词序不一致。源语言中的一些词可能对应目标语言中的多个词，反之亦然。惯用语拒绝一对一映射。"I miss you" 在法语中是 "tu me manques"——字面意思是 "you are lacking to me"。没有词级对齐能承受这样的挑战。
 
-Machine translation is the task that forced NLP to invent encoder-decoders, attention, transformers, and eventually the whole LLM paradigm. Every step forward arrived because translation quality was measurable and the gap between human and machine was stubborn.
+机器翻译是迫使 NLP 发明编码器-解码器、注意力机制、Transformer，最终催生整个 LLM 范式的任务。每一次进步都源于翻译质量可衡量，而人机之间的差距始终顽固存在。
 
-This lesson skips the history lesson and teaches the working pipeline of 2026: pretrained multilingual encoder-decoder (NLLB-200 or mBART), subword tokenization, beam search, BLEU and chrF evaluation, and the handful of failure modes that still ship to production uncaught.
+本课跳过历史回顾，直接教授 2026 年的工作流程：预训练多语言编码器-解码器（NLLB-200 或 mBART）、子词分词、束搜索、BLEU 和 chrF 评估，以及少数至今仍在生产环境中未被捕获的失败模式。
 
-## The Concept
+## 概念
 
-![MT pipeline: tokenize → encode → decode with attention → detokenize](../assets/mt-pipeline.svg)
+![MT 流程：分词 → 编码 → 带注意力的解码 → 去除分词](../assets/mt-pipeline.svg)
 
-Modern MT is a transformer encoder-decoder trained on parallel text. The encoder reads the source in its language's tokenization. The decoder generates the target, one subword at a time, using the encoder's output via cross-attention (lesson 10). Decoding uses beam search to avoid the greedy-decoding trap. The output is detokenized, detruecased, and scored against a reference.
+现代 MT 是一个基于 Transformer 编码器-解码器的模型，在平行文本上训练。编码器以源语言的分词方式读取源文本。解码器通过交叉注意力（第十课）使用编码器的输出，逐个子词生成目标文本。解码使用束搜索以避免贪婪解码的陷阱。输出经过去除分词、还原大小写，然后与参考译文进行评分。
 
-Three operational choices drive real-world MT quality.
+三个操作选择决定了实际 MT 质量。
 
-- **Tokenizer.** SentencePiece BPE trained on a mixed-language corpus. Shared vocabulary across languages is what enables zero-shot pairs in NLLB.
-- **Model size.** NLLB-200 distilled 600M fits on a laptop. NLLB-200 3.3B is the published production default. 54.5B is the research ceiling.
-- **Decoding.** Beam width 4-5 for general content. Length penalty to avoid too-short output. Constrained decoding when you need terminology consistency.
+- **分词器。** 在混合语言语料库上训练的 SentencePiece BPE。跨语言共享词汇表是 NLLB 实现零样本语言对的原因。
+- **模型大小。** NLLB-200 蒸馏版 600M 可在笔记本电脑上运行。NLLB-200 3.3B 是发布的生产默认值。54.5B 是研究天花板。
+- **解码。** 通用内容的束宽为 4-5。长度惩罚以避免输出过短。当需要术语一致性时使用约束解码。
 
-## Build It
+## 构建
 
-### Step 1: a pretrained MT call
+### 第 1 步：预训练 MT 调用
 
 ```python
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -55,13 +55,13 @@ print(tok.batch_decode(out, skip_special_tokens=True)[0])
 Les chats courent.
 ```
 
-Three things matter here. `src_lang` tells the tokenizer which script and segmentation to apply. `forced_bos_token_id` tells the decoder which language to generate. Both are NLLB-specific tricks; mBART and M2M-100 use their own conventions and they are not interchangeable.
+这里有三个关键点。`src_lang` 告诉分词器使用哪种文字体系和分词规则。`forced_bos_token_id` 告诉解码器生成哪种语言。两者都是 NLLB 特有的技巧；mBART 和 M2M-100 使用各自的约定，不能互换。
 
-### Step 2: BLEU and chrF
+### 第 2 步：BLEU 和 chrF
 
-BLEU measures n-gram overlap between output and reference. Four reference n-gram sizes (1-4), geometric mean of precisions, brevity penalty for too-short output. The score is in [0, 100]. Commonly used. Frustrating to interpret: 30 BLEU is "usable"; 40 is "good"; 50 is "exceptional"; differences under 1 BLEU are noise.
+BLEU 衡量输出与参考之间的 n-gram 重叠。四个参考 n-gram 大小（1-4），精度的几何均值，对过短输出的简短惩罚。分数范围为 [0, 100]。常用。但解释起来令人沮丧：30 BLEU 是 "可用"；40 是 "良好"；50 是 "卓越"；差异小于 1 BLEU 就是噪声。
 
-chrF measures character-level F-score. More sensitive to morphologically rich languages where BLEU undercounts matches. Often reported alongside BLEU.
+chrF 衡量字符级 F-score。对形态丰富的语言更敏感，因为 BLEU 会低估匹配数。常与 BLEU 一起报告。
 
 ```python
 import sacrebleu
@@ -74,33 +74,33 @@ chrf = sacrebleu.corpus_chrf(hypotheses, references)
 print(f"BLEU: {bleu.score:.1f}  chrF: {chrf.score:.1f}")
 ```
 
-Always use `sacrebleu`. It normalizes tokenization so scores are comparable across papers. Rolling your own BLEU computation is how misleading benchmarks happen.
+始终使用 `sacrebleu`。它标准化了分词方式，使分数在不同论文之间具有可比性。自己计算 BLEU 是导致误导性基准测试的常见原因。
 
-### The three-tier evaluation hierarchy (2026)
+### 三层评估体系（2026 年）
 
-Modern MT evaluation uses three complementary metric families. Ship with at least two.
+现代 MT 评估使用三种互补的指标家族。至少使用两种再发布。
 
-- **Heuristic** (BLEU, chrF). Fast, reference-based, interpretable, insensitive to paraphrase. Use for legacy comparison and regression detection.
-- **Learned** (COMET, BLEURT, BERTScore). Neural models trained on human judgment; compare semantic similarity of translation to source and reference. COMET has the highest association with MT research since 2023 and is the 2026 production default where quality matters.
-- **LLM-as-judge** (reference-free). Prompt a large model to score translations on fluency, adequacy, tone, cultural appropriateness. GPT-4-as-judge matches human agreement ~80% of the time when the rubric is well designed. Use for open-ended content where no reference exists.
+- **启发式**（BLEU、chrF）。快速、基于参考、可解释、对释义不敏感。用于遗留比较和回归检测。
+- **学习型**（COMET、BLEURT、BERTScore）。在人类判断上训练的神经模型；比较翻译与源文本和参考的语义相似度。COMET 自 2023 年以来与 MT 研究的关联度最高，在 2026 年是质量优先场景的生产默认值。
+- **LLM 即评判**（无参考）。提示大型模型在流畅性、充分性、语气、文化适宜性方面对翻译进行评分。当评分标准设计良好时，GPT-4 即评判与人类一致率约 80%。用于没有参考的开放式内容。
 
-Practical 2026 stack: `sacrebleu` for BLEU and chrF, `unbabel-comet` for COMET, and a prompted LLM for the final human-facing signal. Calibrate every metric against 50-100 human-labeled examples before trusting it on production data.
+实用的 2026 技术栈：`sacrebleu` 用于 BLEU 和 chrF，`unbabel-comet` 用于 COMET，以及提示 LLM 用于最终面向人类的信号。在将每个指标用于生产数据之前，用 50-100 个人工标注的示例进行校准。
 
-Reference-free metrics (COMET-QE, BLEURT-QE, LLM-as-judge) let you evaluate translations without a reference, which matters for long-tail language pairs where reference translations do not exist.
+无参考指标（COMET-QE、BLEURT-QE、LLM 即评判）允许你在没有参考的情况下评估翻译，这对于不存在参考翻译的长尾语言对非常重要。
 
-### Step 3: what breaks in production
+### 第 3 步：生产中会出什么错
 
-The working pipeline above will translate fluently 80% of the time and silently fail the remaining 20%. Named failure modes:
+上述工作流程 80% 的时间能流利翻译，其余 20% 会静默失败。已命名的失败模式：
 
-- **Hallucination.** Model invents content that was not in the source. Common in unfamiliar domain vocabulary. Symptom: output is fluent but claims facts the source did not state. Mitigation: constrained decoding on domain terms, human review on regulated content, monitoring for output much longer than input.
-- **Off-target generation.** Model translates into the wrong language. NLLB is surprisingly prone to this on rare language pairs. Mitigation: verify `forced_bos_token_id` and always decode with a language-ID model check on output.
-- **Terminology drift.** "Sign up" becomes "s'inscrire" in doc 1 and "créer un compte" in doc 2. For UI text and user-facing strings, consistency matters more than raw quality. Mitigation: glossary-constrained decoding or post-edit dictionary.
-- **Formality mismatch.** French "tu" vs "vous", Japanese politeness levels. The model picks whichever form was more common in training. For customer-facing content this is usually wrong. Mitigation: prompt prefix with a formality token if the model supports it, or fine-tune a small model on formal-only corpora.
-- **Length explosion on short input.** Very short input sentences often produce overlong translations because the length penalty falls off a cliff below ~5 source tokens. Mitigation: hard max-length cap proportional to source length.
+- **幻觉。** 模型发明了源文本中没有的内容。在不熟悉的领域词汇中常见。症状：输出流畅，但声称了源文本未陈述的事实。缓解措施：对领域术语使用约束解码，对受监管内容进行人工审查，监控输出是否比输入长得多。
+- **目标语言错误生成。** 模型翻译成错误的语言。NLLB 在稀有语言对上出奇地容易出现这个问题。缓解措施：验证 `forced_bos_token_id`，始终在输出上运行语言 ID 模型检查。
+- **术语漂移。** "Sign up" 在文档 1 中变成 "s'inscrire"，在文档 2 中变成 "créer un compte"。对于 UI 文本和面向用户的字符串，一致性比原始质量更重要。缓解措施：词汇表约束解码或后编辑字典。
+- **正式程度不匹配。** 法语的 "tu" vs "vous"，日语的礼貌级别。模型选择训练中最常见的形式。对于面向客户的内容，这通常是错误的。缓解措施：如果模型支持，用正式程度 token 作为提示前缀，或在正式语料库上微调小型模型。
+- **短输入的长度爆炸。** 很短的输入句子往往产生过长的翻译，因为长度惩罚在 ~5 个源 token 以下急剧下降。缓解措施：硬性最大长度上限，与源长度成正比。
 
-### Step 4: fine-tuning for a domain
+### 第 4 步：领域微调
 
-Pretrained models are generalists. Legal, medical, or game-dialog translation benefits measurably from fine-tuning on domain parallel data. The recipe is not exotic:
+预训练模型是通才。在领域平行数据上微调对法律、医学或游戏对话翻译有明显帮助。方法不难：
 
 ```python
 from transformers import Trainer, TrainingArguments
@@ -129,66 +129,66 @@ args = TrainingArguments(output_dir="out", per_device_train_batch_size=4, num_tr
 Trainer(model=model, args=args, train_dataset=ds).train()
 ```
 
-A few thousand high-quality parallel examples beats a few hundred thousand noisy web-scraped ones. Quality of training data is the single largest production lever.
+几千个高质量的平行示例胜过几十万个嘈杂的网络抓取示例。训练数据质量是最大的生产杠杆。
 
-## Use It
+## 使用
 
-The 2026 production stack for MT:
+2026 年 MT 的生产技术栈：
 
-| Use case | Recommended starting point |
+| 使用场景 | 推荐起点 |
 |---------|---------------------------|
-| Any-to-any, 200 languages | `facebook/nllb-200-distilled-600M` (laptop) or `nllb-200-3.3B` (production) |
-| English-centric, high quality, 50 languages | `facebook/mbart-large-50-many-to-many-mmt` |
-| Short runs, cheap inference, English-French/German/Spanish | Helsinki-NLP / Marian models |
-| Latency-critical browser-side | ONNX-quantized Marian (~50 MB) |
-| Maximum quality, willing to pay | GPT-4 / Claude / Gemini with translation prompts |
+| 任意语言对、200 种语言 | `facebook/nllb-200-distilled-600M`（笔记本电脑）或 `nllb-200-3.3B`（生产） |
+| 以英语为中心、高质量、50 种语言 | `facebook/mbart-large-50-many-to-many-mmt` |
+| 短时运行、廉价推理、英语-法语/德语/西班牙语 | Helsinki-NLP / Marian 模型 |
+| 延迟敏感的浏览器端 | ONNX 量化的 Marian（~50 MB） |
+| 最高质量、愿意付费 | GPT-4 / Claude / Gemini + 翻译提示 |
 
-LLMs now outperform specialized MT models on several language pairs as of 2026, particularly on idiomatic content and long context. The tradeoff is per-token cost and latency. Pick an LLM when context length, stylistic consistency, or domain adaptation via prompting matters more than throughput.
+截至 2026 年，LLM 在多个语言对上已超越专业 MT 模型，特别是在惯用语内容和长上下文方面。权衡是每 token 成本和延迟。当上下文长度、风格一致性或通过提示的领域适应性比吞吐量更重要时，选择 LLM。
 
-## Ship It
+## 发布
 
-Save as `outputs/skill-mt-evaluator.md`:
+保存为 `outputs/skill-mt-evaluator.md`：
 
 ```markdown
 ---
 name: mt-evaluator
-description: Evaluate a machine translation output for shipping.
+description: 评估机器翻译输出是否可以发布。
 version: 1.0.0
 phase: 5
 lesson: 11
 tags: [nlp, translation, evaluation]
 ---
 
-Given a source text and a candidate translation, output:
+给定源文本和候选翻译，输出：
 
-1. Automatic score estimate. BLEU and chrF ranges you would expect. State whether a reference is available.
-2. Five-point human-verifiable check list: (a) content preservation (no hallucinations), (b) correct language, (c) register / formality match, (d) terminology consistency with glossary if provided, (e) no truncation or length explosion.
-3. One domain-specific issue to probe. E.g., for legal: named entities and statute citations. For medical: drug names and dosages. For UI: placeholder variables `{name}`.
-4. Confidence flag. "Ship" / "Ship with review" / "Do not ship". Tie to the severity of issues found in step 2.
+1. 自动评分估计。你期望的 BLEU 和 chrF 范围。说明是否有参考译文可用。
+2. 五点人工核查清单：(a) 内容保留（无幻觉），(b) 语言正确，(c) 语域/正式程度匹配，(d) 术语与提供的词汇表一致，(e) 无截断或长度爆炸。
+3. 一个需要探究的领域特定问题。例如：法律方面——命名实体和法规引用；医学方面——药物名称和剂量；UI 方面——占位符变量 `{name}`。
+4. 置信度标志。"发布" / "带审查发布" / "不可发布"。与第 2 步中发现的问题严重程度挂钩。
 
-Refuse to ship a translation without a language-ID check on output. Refuse to evaluate without a reference unless the user explicitly opts in to reference-free scoring (COMET-QE, BLEURT-QE). Flag any content over 1000 tokens as likely needing chunked translation.
+未经输出上的语言 ID 检查，拒绝发布翻译。未经参考译文，拒绝评估，除非用户明确选择无参考评分（COMET-QE、BLEURT-QE）。标记超过 1000 token 的内容为可能需要分块翻译。
 ```
 
-## Exercises
+## 练习
 
-1. **Easy.** Translate a 5-sentence English paragraph to French and back to English using `nllb-200-distilled-600M`. Measure how close the round-trip is to the original. You should see semantic preservation with word-choice drift.
-2. **Medium.** Implement a language-ID check on translation outputs using `fasttext lid.176` or `langdetect`. Integrate into the MT call so off-target generations are caught before returning.
-3. **Hard.** Fine-tune `nllb-200-distilled-600M` on a 5,000-pair domain corpus of your choice. Measure BLEU on a held-out set before and after fine-tuning. Report which kinds of sentences improved and which regressed.
+1. **简单。** 使用 `nllb-200-distilled-600M` 将一个 5 句英文段落翻译成法语，再译回英语。测量往返翻译与原文的接近程度。你应该看到语义保留但用词会有漂移。
+2. **中等。** 使用 `fasttext lid.176` 或 `langdetect` 对翻译输出实现语言 ID 检查。集成到 MT 调用中，以便在返回之前捕获目标语言错误生成。
+3. **困难。** 在你选择的 5,000 对领域语料库上微调 `nllb-200-distilled-600M`。在微调前后在保留集上测量 BLEU。报告哪些类型的句子有所改进，哪些退化了。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|-----------------|-----------------------|
-| BLEU | Translation score | N-gram precision with brevity penalty. [0, 100]. |
-| chrF | Character F-score | Character-level F-score. More sensitive for morphologically rich languages. |
-| NMT | Neural MT | Transformer encoder-decoder trained on parallel text. The 2017+ default. |
-| NLLB | No Language Left Behind | Meta's 200-language MT model family. |
-| Constrained decoding | Controlled output | Force specific tokens or n-grams to appear / not appear in the output. |
-| Hallucination | Invented content | Model output that is not supported by the source. |
+| BLEU | 翻译分数 | 带简短惩罚的 n-gram 精度。[0, 100]。 |
+| chrF | 字符 F-score | 字符级 F-score。对形态丰富的语言更敏感。 |
+| NMT | 神经机器翻译 | 基于平行文本训练的 Transformer 编码器-解码器。2017 年以来的默认值。 |
+| NLLB | 不让任何语言掉队 | Meta 的 200 种语言 MT 模型系列。 |
+| 约束解码 | 受控输出 | 强制特定 token 或 n-gram 出现在输出中或不出现。 |
+| 幻觉 | 虚构内容 | 源文本不支持的模型输出。 |
 
-## Further Reading
+## 延伸阅读
 
-- [Costa-jussà et al. (2022). No Language Left Behind: Scaling Human-Centered Machine Translation](https://arxiv.org/abs/2207.04672) — the NLLB paper.
-- [Post (2018). A Call for Clarity in Reporting BLEU Scores](https://aclanthology.org/W18-6319/) — why `sacrebleu` is the only correct way to report BLEU.
-- [Popović (2015). chrF: character n-gram F-score for automatic MT evaluation](https://aclanthology.org/W15-3049/) — the chrF paper.
-- [Hugging Face MT guide](https://huggingface.co/docs/transformers/tasks/translation) — practical fine-tuning walkthrough.
+- [Costa-jussà 等 (2022). No Language Left Behind: Scaling Human-Centered Machine Translation](https://arxiv.org/abs/2207.04672) — NLLB 论文。
+- [Post (2018). A Call for Clarity in Reporting BLEU Scores](https://aclanthology.org/W18-6319/) — 为什么 `sacrebleu` 是报告 BLEU 的唯一正确方式。
+- [Popović (2015). chrF: character n-gram F-score for automatic MT evaluation](https://aclanthology.org/W15-3049/) — chrF 论文。
+- [Hugging Face MT 指南](https://huggingface.co/docs/transformers/tasks/translation) — 实用的微调演练。

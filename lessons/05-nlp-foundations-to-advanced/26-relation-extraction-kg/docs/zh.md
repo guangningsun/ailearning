@@ -1,56 +1,56 @@
-# Relation Extraction & Knowledge Graph Construction
+# 关系抽取与知识图谱构建
 
-> NER found the entities. Entity linking anchored them. Relation extraction finds the edges between them. A knowledge graph is the sum of nodes, edges, and their provenance.
+> NER 找到了实体。实体链接将其锚定。关系抽取找到它们之间的边。知识图谱是节点、边及其来源的总和。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 5 · 06 (NER), Phase 5 · 25 (Entity Linking)
-**Time:** ~60 minutes
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 5 · 06（命名实体识别）、阶段 5 · 25（实体链接）
+**时间：** 约 60 分钟
 
-## The Problem
+## 问题
 
-An analyst reads: "Tim Cook became CEO of Apple in 2011." Four facts:
+一位分析师读到："Tim Cook became CEO of Apple in 2011." 四个事实：
 
 - `(Tim Cook, role, CEO)`
 - `(Tim Cook, employer, Apple)`
 - `(Tim Cook, start_date, 2011)`
 - `(Apple, type, Organization)`
 
-Relation Extraction (RE) turns free text into structured triples `(subject, relation, object)`. Aggregate across a corpus and you have a knowledge graph. Aggregate and query and you have a reasoning substrate for RAG, analytics, or compliance audits.
+关系抽取（RE）将自由文本转换为结构化三元组 `(subject, relation, object)`。跨语料库聚合就得到知识图谱。聚合后再查询，你就有了 RAG、分析或合规审计的推理基座。
 
-The 2026 problem: LLMs extract relations enthusiastically. Too enthusiastically. They hallucinate triples that the source text does not support. Without provenance, you cannot tell real triples from plausible fiction. The 2026 answer is AEVS-style anchor-and-verify pipelines.
+2026 年的问题：LLM 热情地抽取关系。太热情了。它们会产生源文本不支持的三元组。没有来源，你就无法区分真实三元组和看似合理的虚构。2026 年的答案是 AEVS 风格的锚定-验证管道。
 
-## The Concept
+## 概念
 
-![Text → triples → knowledge graph](../assets/relation-extraction.svg)
+![文本 → 三元组 → 知识图谱](../assets/relation-extraction.svg)
 
-**Triple form.** `(subject_entity, relation_type, object_entity)`. Relations come from a closed ontology (Wikidata properties, FIBO, UMLS) or an open set (OpenIE-style, anything goes).
+**三元组形式。** `(subject_entity, relation_type, object_entity)`。关系来自封闭本体论（Wikidata 属性、FIBO、UMLS）或开放集（OpenIE 风格，任何关系皆可）。
 
-**Three extraction approaches.**
+**三种抽取方法。**
 
-1. **Rule / pattern-based.** Hearst patterns: "X such as Y" → `(Y, isA, X)`. Plus hand-crafted regex. Brittle, precise, explainable.
-2. **Supervised classifier.** Given two entity mentions in a sentence, predict the relation from a fixed set. Trained on TACRED, ACE, KBP. Standard 2015–2022.
-3. **Generative LLM.** Prompt the model to emit triples. Works out of the box. Needs provenance, or hallucinates plausible-looking junk.
+1. **规则 / 模式驱动。** Hearst 模式："X such as Y" → `(Y, isA, X)`。加上手工正则。脆弱但精确、可解释。
+2. **监督分类器。** 给定句子中两个实体提及，从固定集合中预测关系。在 TACRED、ACE、KBP 上训练。2015–2022 年的标准方法。
+3. **生成式 LLM。** 提示模型发出三元组。开箱即用。需要来源，否则会生成看似合理实则无效的垃圾。
 
-**AEVS (Anchor-Extraction-Verification-Supplement, 2026).** The current hallucination-mitigation framework:
+**AEVS（锚定-抽取-验证-补充，2026）。** 当前的幻觉缓解框架：
 
-- **Anchor.** Identify every entity span and relation-phrase span with exact positions.
-- **Extract.** Generate triples linked to anchor spans.
-- **Verify.** Match each triple element back to the source text; reject anything unsupported.
-- **Supplement.** A coverage pass ensures no anchored span is dropped.
+- **锚定。** 用精确位置识别每个实体跨度 和关系短语跨度。
+- **抽取。** 生成链接到锚定inter的inter。
+- **验证。** 将每个三元组元素匹配回源文本；拒绝任何不支持的内容。
+- **补充。** 覆盖率pass确保没有锚定的跨度被丢弃。
 
-Hallucinations drop sharply. Requires more compute but is auditable.
+幻觉显著下降。需要更多计算但可审计。
 
-**The open-vs-closed tradeoff.**
+**开放 vs 封闭的权衡。**
 
-- **Closed ontology.** Fixed property list (e.g., Wikidata's 11,000+ properties). Predictable. Queryable. Hard to invent.
-- **Open IE.** Any verbal phrase becomes a relation. High recall. Low precision. Messy to query.
+- **封闭本体论。** 固定属性列表（如 Wikidata 的 11000+ 属性）。可预测。可查询。难以凭空捏造。
+- **开放 IE。** 任何口头短语都成为关系。高召回率。低精确率。查询麻烦。
 
-Production KGs usually mix: open IE for discovery, then canonicalize relations onto a closed ontology before merging into the main graph.
+生产 K 通常混合使用：开放 IE 用于发现，然后在合并到主图之前将关系规范化为封闭本体论。
 
-## Build It
+## 构建它
 
-### Step 1: pattern-based extraction
+### 第 1 步：基于模式的抽取
 
 ```python
 PATTERNS = [
@@ -61,9 +61,9 @@ PATTERNS = [
 ]
 ```
 
-See `code/main.py` for the full toy extractor. Hearst patterns still ship in domain-specific pipelines because they are debuggable.
+参见 `code/main.py` 获取完整的玩具抽取器。Hearst 模式仍然在领域特定管道中使用，因为它们可调试。
 
-### Step 2: supervised relation classification
+### 第 2 步：监督关系分类
 
 ```python
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -77,13 +77,13 @@ output = model.generate(**encoded, max_length=200)
 triples = tok.batch_decode(output, skip_special_tokens=False)
 ```
 
-REBEL is a seq2seq relation extractor: text in, triples out, already in Wikidata property ids. Fine-tuned on distant-supervision data. Standard open-weights baseline.
+REBEL 是一个 seq2seq 关系抽取器：文本输入，三元组输出，已经是 Wikidata 属性 id。在远监督数据上微调。标准的开源基线。
 
-### Step 3: LLM-prompted extraction with anchoring
+### 第 3 步：带锚定的 LLM 提示抽取
 
 ```python
-prompt = f"""Extract (subject, relation, object) triples from the text.
-For each triple, include the exact character span in the source text.
+prompt = f"""从文本中抽取 (subject, relation, object) 三元组。
+对于每个三元组，包含源文本中的精确字符跨度。
 
 Text: {text}
 
@@ -92,19 +92,19 @@ Output JSON:
    "relation": "...",
    "object": {{"text": "...", "span": [start, end]}}}}, ...]
 
-Only include triples fully supported by the text. No inference beyond what is stated.
+只包含完全由文本支持的三元组。不要超出文本所述内容进行推断。
 """
 ```
 
-Verify every returned span against the source. Reject anything where `text[start:end] != triple_entity`. This is the AEVS "verify" step in its minimal form.
+验证每个返回的跨度与源文本的匹配。拒绝任何 `text[start:end] != triple_entity` 的内容。这是 AEVS"验证"步骤的最简形式。
 
-### Step 4: canonicalize onto a closed ontology
+### 第 4 步：规范化为封闭本体论
 
 ```python
 RELATION_MAP = {
     "is the CEO of": "P169",       # "chief executive officer"
     "was born in":   "P19",         # "place of birth"
-    "founded":        "P112",       # "founded by" (inverted subject/object)
+    "founded":        "P112",       # "founded by" (subject/object inverted)
     "works at":       "P108",       # "employer"
 }
 
@@ -116,9 +116,9 @@ def canonicalize(relation):
     return None   # drop unmapped open relations or route to manual review
 ```
 
-Canonicalization is often 60-80% of the engineering work. Budget for it.
+规范化通常是 60-80% 的工程工作。把它算进去。
 
-### Step 5: build a small graph and query
+### 第 5 步：构建小图并查询
 
 ```python
 triples = extract(text)
@@ -134,79 +134,79 @@ def neighbors(node, relation=None):
 print(neighbors("Tim Cook", relation="P108"))    # -> [(P108, Apple)]
 ```
 
-This is the atom of every RAG-over-KG system. Scale it with RDF triple stores (Blazegraph, Virtuoso), property graphs (Neo4j), or vector-augmented graph stores.
+这是每个 RAG-over-KG 系统的原子。用 RDF 三元组存储（Blazegraph、Virtuoso）、属性图（Neo4j）或向量增强图存储来扩展它。
 
-## Pitfalls
+## 陷阱
 
-- **Coreference before RE.** "He founded Apple" — RE needs to know who "he" is. Run coref first (lesson 24).
-- **Entity canonicalization.** "Apple Inc" and "Apple" must resolve to the same node. Entity linking first (lesson 25).
-- **Hallucinated triples.** LLMs emit triples the text does not support. Enforce span verification.
-- **Relation canonicalization drift.** Open IE relations are inconsistent ("was born in," "came from," "is a native of"). Collapse to canonical ids or the graph is unqueryable.
-- **Temporal errors.** "Tim Cook is CEO of Apple" — true now, false in 2005. Many relations are time-bounded. Use qualifiers (`P580` start time, `P582` end time in Wikidata).
-- **Domain mismatch.** REBEL trained on Wikipedia. Legal, medical, and scientific text often need domain-fine-tuned RE models.
+- **RE 前做共指。** "He founded Apple"——RE 需要知道"he"是谁。先跑共指（第 24 课）。
+- **实体规范化。** "Apple Inc" 和 "Apple" 必须解析到同一节点。先做实体链接（第 25 课）。
+- **三元组幻觉。** LLM 发出文本不支持的三元组。强制执行跨度验证。
+- **关系规范化漂移。** 开放 IE 关系不一致（"was born in"、"came from"、"is a native of"）。折叠到规范 id，否则图无法查询。
+- **时间错误。** "Tim Cook is CEO of Apple"——现在是真的，2005 年是假的。许多关系是有时间范围的。使用限定符（Wikidata 中的 P580 开始时间、P582 结束时间）。
+- **领域不匹配。** REBEL 在 Wikipedia 上训练。法律、医疗和科学文本通常需要领域微调的 RE 模型。
 
-## Use It
+## 使用它
 
-The 2026 stack:
+2026 年技术栈：
 
-| Situation | Pick |
+| 场景 | 选择 |
 |-----------|------|
-| Fast production, general domain | REBEL or LlamaPred with Wikidata canonicalization |
-| Domain-specific (biomed, legal) | SciREX-style domain fine-tune + custom ontology |
-| LLM-prompted, audited output | AEVS pipeline: anchor → extract → verify → supplement |
-| High-volume news IE | Pattern-based + supervised hybrid |
-| Building a KG from scratch | Open IE + manual canonicalization pass |
-| Temporal KG | Extract with qualifiers (start/end time, point in time) |
+| 快速生产、通用领域 | REBEL 或 LlamaPred + Wikidata 规范化 |
+| 领域特定（生物医学、法律） | SciREX 风格领域微调 + 定制本体论 |
+| LLM 提示、审计输出 | AEVS 管道：锚定 → 抽取 → 验证 → 补充 |
+| 大容量新闻 IE | 基于模式 + 监督混合 |
+| 从零构建 KG | 开放 IE + 手动规范化 pass |
+| 时序 KG | 带限定符抽取（开始/结束时间、时间点） |
 
-The integration pattern: NER → coref → entity linking → relation extraction → ontology mapping → graph load. Every stage is a potential quality gate.
+集成模式：NER → 共指 → 实体链接 → 关系抽取 → 本体映射 → 图加载。每个阶段都是潜在的质量关卡。
 
-## Ship It
+## 交付它
 
-Save as `outputs/skill-re-designer.md`:
+保存为 `outputs/skill-re-designer.md`：
 
 ```markdown
 ---
 name: re-designer
-description: Design a relation extraction pipeline with provenance and canonicalization.
+description: 设计一个带来源和规范化的关系抽取管道。
 version: 1.0.0
 phase: 5
 lesson: 26
 tags: [nlp, relation-extraction, knowledge-graph]
 ---
 
-Given a corpus (domain, language, volume) and downstream use (KG-RAG, analytics, compliance), output:
+给定一个语料库（领域、语言、体量）和下游用途（KG-RAG、分析、合规），输出：
 
-1. Extractor. Pattern-based / supervised / LLM / AEVS hybrid. Reason tied to precision vs recall target.
-2. Ontology. Closed property list (Wikidata / domain) or open IE with canonicalization pass.
-3. Provenance. Every triple carries source char-span + doc id. Non-negotiable for audit.
-4. Merge strategy. Canonical entity id + relation id + temporal qualifiers; dedup policy.
-5. Evaluation. Precision / recall on 200 hand-labelled triples + hallucination-rate on LLM-extracted sample.
+1. 抽取器。基于模式 / 监督 / LLM / AEVS 混合。理由与精确率 vs 召回率目标相关。
+2. 本体论。封闭属性列表（Wikidata / 领域）或带规范化 pass 的开放 IE。
+3. 来源。每个三元组带源字符跨度 + 文档 id。审计的必选项。
+4. 合并策略。规范实体 id + 关系 id + 时序限定符；去重策略。
+5. 评估。200 个手工标注三元组上的精确率 / 召回率 + LLM 抽取样本上的幻觉率。
 
-Refuse any LLM-based RE pipeline without span verification (source provenance). Refuse open-IE output flowing into a production graph without canonicalization. Flag pipelines with no temporal qualifier on time-bounded relations (employer, spouse, position).
+在没有跨度验证（源来源）的情况下拒绝任何基于 LLM 的 RE 管道。在没有规范化的 flowing 到生产图的情况下拒绝开放 IE 输出。标记那些在时间范围关系（雇主、配偶、职位）上没有时序限定符的管道。
 ```
 
-## Exercises
+## 练习
 
-1. **Easy.** Run the pattern extractor in `code/main.py` on 5 news-article sentences. Hand-check precision.
-2. **Medium.** Use REBEL (or a small LLM) on the same sentences. Compare triples. Which extractor has higher precision? Higher recall?
-3. **Hard.** Build the AEVS pipeline: extract with LLM + verify spans against source. Measure hallucination rate before vs after the verify step on 50 Wikipedia-style sentences.
+1. **简单。** 在 5 篇新闻文章句子上运行 `code/main.py` 中的模式抽取器。手工检查精确率。
+2. **中等。** 在同一组句子上使用 REBEL（或小 LLM）。比较三元组。哪个抽取器精确率更高？召回率更高？
+3. **困难。** 构建 AEVS 管道：LLM 抽取 + 验证源文本跨度。在 50 个 Wikipedia 风格句子上测量验证步骤前后幻觉率。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|-----------------------|
-| Triple | Subject-relation-object | `(s, r, o)` tuple that is the atomic unit of a KG. |
-| Open IE | Extract anything | Open-vocabulary relation phrases; high recall, low precision. |
-| Closed ontology | Fixed schema | Bounded set of relation types (Wikidata, UMLS, FIBO). |
-| Canonicalization | Normalize everything | Map surface names / relations to canonical ids. |
-| AEVS | Grounded extraction | Anchor-Extraction-Verification-Supplement pipeline (2026). |
-| Provenance | Source-of-truth link | Every triple carries a doc id + char-span to its source. |
-| Distant supervision | Cheap labels | Align text with an existing KG to create training data. |
+| 三元组 | 主语-关系-宾语 | `(s, r, o)` 元组，是 KG 的原子单位。 |
+| 开放 IE | 抽取任何关系 | 开放词汇关系短语；高召回率，低精确率。 |
+| 封闭本体论 | 固定模式 | 有界的relation类型集合（Wikidata、UMLS、FIBO）。 |
+| 规范化 | 标准化一切 | 将表面名称 / 关系映射到规范 id。 |
+| AEVS | 接地抽取 | 锚定-抽取-验证-补充管道（2026）。 |
+| 来源 | 真实来源链接 | 每个三元组带文档 id + 字符跨度指向其源。 |
+| 远监督 | 廉价标签 | 将文本与现有 KG 对齐以创建训练数据。 |
 
-## Further Reading
+## 延伸阅读
 
-- [Mintz et al. (2009). Distant supervision for relation extraction without labeled data](https://www.aclweb.org/anthology/P09-1113.pdf) — the distant-supervision paper.
-- [Huguet Cabot, Navigli (2021). REBEL: Relation Extraction By End-to-end Language generation](https://aclanthology.org/2021.findings-emnlp.204.pdf) — seq2seq RE workhorse.
-- [Wadden et al. (2019). Entity, Relation, and Event Extraction with Contextualized Span Representations (DyGIE++)](https://arxiv.org/abs/1909.03546) — joint IE.
-- [AEVS — Anchor-Extraction-Verification-Supplement framework](https://www.mdpi.com/2073-431X/15/3/178) — 2026 hallucination-mitigation design.
-- [Wikidata SPARQL tutorial](https://www.wikidata.org/wiki/Wikidata:SPARQL_tutorial) — canonical graph queries.
+- [Mintz et al. (2009). Distant supervision for relation extraction without labeled data](https://www.aclweb.org/anthology/P09-1113.pdf) — 远监督论文。
+- [Huguet Cabot, Navigli (2021). REBEL: Relation Extraction By End-to-end Language generation](https://aclanthology.org/2021.findings-emnlp.204.pdf) — seq2seq RE 主力。
+- [Wadden et al. (2019). Entity, Relation, and Event Extraction with Contextualized Span Representations (DyGIE++)](https://arxiv.org/abs/1909.03546) — 联合 IE。
+- [AEVS — Anchor-Extraction-Verification-Supplement framework](https://www.mdpi.com/2073-431X/15/3/178) — 2026 幻觉缓解设计。
+- [Wikidata SPARQL tutorial](https://www.wikidata.org/wiki/Wikidata:SPARQL_tutorial) — 规范图查询。

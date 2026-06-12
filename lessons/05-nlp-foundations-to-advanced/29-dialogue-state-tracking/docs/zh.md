@@ -1,60 +1,60 @@
-# Dialogue State Tracking
+# 对话状态追踪
 
-> "I want a cheap restaurant in the north... actually make it moderate... and add Italian." Three turns, three state updates. DST keeps the slot-value dict in sync so the booking works.
+> "我要北部便宜餐厅...其实改成中档...再加个意大利菜。"三个轮次，三次状态更新。DST 保持槽值字典同步以确保预订成功。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 5 · 17 (Chatbots), Phase 5 · 20 (Structured Outputs)
-**Time:** ~75 minutes
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 5 · 17（聊天机器人）、阶段 5 · 20（结构化输出）
+**时间：** 约 75 分钟
 
-## The Problem
+## 问题
 
-In a task-oriented dialogue system, the user's goal is encoded as a set of slot-value pairs: `{cuisine: italian, area: north, price: moderate}`. Every user turn can add, change, or remove a slot. The system must read the whole conversation and output the current state correctly.
+在任务导向对话系统中，用户的目标被编码为一组槽值对：`{cuisine: italian, area: north, price: moderate}`。每个用户轮次都可能添加、更改或删除一个槽。系统必须读取整个对话并正确输出当前状态。
 
-Get a single slot wrong and the system books the wrong restaurant, schedules the wrong flight, or charges the wrong card. DST is the hinge between what the user said and what the backend executes.
+一个槽值出错，系统就会预订错误的餐厅、安排错误的航班或扣错款项。DST 是用户所说的和后端执行之间的关键环节。
 
-Why it still matters in 2026 despite LLMs:
+为什么在 2026 年仍然重要，尽管有了 LLMs：
 
-- Compliance-sensitive domains (banking, healthcare, airline booking) require deterministic slot values, not free-form generation.
-- Tool-use agents still need slot resolution before calling APIs.
-- Multi-turn correction is harder than it looks: "actually no, make it Thursday."
+- 合规敏感领域（银行、医疗、航空预订）需要确定性的槽值，而非自由形式生成。
+- 工具使用代理在调用 API 之前仍然需要槽解析。
+- 多轮纠正确实比看起来难："其实不，改成周四。"
 
-The modern pipeline: classical DST concepts + LLM extractors + structured-output guardrails.
+现代管道：经典 DST 概念 + LLM 提取器 + 结构化输出 guardrails。
 
-## The Concept
+## 概念
 
-![DST: dialog history → slot-value state](../assets/dst.svg)
+![DST：对话历史 → 槽值状态](../assets/dst.svg)
 
-**Task structure.** A schema defines domains (restaurant, hotel, taxi) and their slots (cuisine, area, price, people). Each slot can be empty, filled with a value from a closed set (price: {cheap, moderate, expensive}), or a free-form value (name: "The Copper Kettle").
+**任务结构。** 模式定义域（餐厅、酒店、出租车）及其槽（cuisine、area、price、people）。每个槽可以为空、用封闭集合中的值填充（price: {cheap, moderate, expensive}），或自由形式值（name: "The Copper Kettle"）。
 
-**Two DST formulations.**
+**两种 DST 形式。**
 
-- **Classification.** For each (slot, candidate_value) pair, predict yes/no. Works for closed-vocab slots. Standard pre-2020.
-- **Generation.** Given the dialogue, generate slot values as free text. Works for open-vocab slots. The modern default.
+- **分类。** 对于每个（槽，候选值）对，预测是/否。适用于封闭词汇槽。2020 年前的标准。
+- **生成。** 给定对话，自由文本生成槽值。适用于开放词汇槽。现代默认。
 
-**Metric.** Joint Goal Accuracy (JGA) — the fraction of turns where *every* slot is correct. All-or-nothing. MultiWOZ 2.4 leaderboard tops around 83% in 2026.
+**指标。** 联合目标准确率（JGA）—— 每个槽都正确的轮次比例。全有或全无。MultiWOZ 2.4 排行榜在 2026 年最高约为 83%。
 
-**Architectures.**
+**架构。**
 
-1. **Rule-based (slot regex + keyword).** Strong baseline for narrow domains. Debuggable.
-2. **TripPy / BERT-DST.** Copy-based generation with BERT encoding. Pre-LLM standard.
-3. **LDST (LLaMA + LoRA).** Instruction-tuned LLM with domain-slot prompting. Reaches ChatGPT-level quality on MultiWOZ 2.4.
-4. **Ontology-free (2024–26).** Skip the schema; generate slot names and values directly. Handles open domains.
-5. **Prompt + structured output (2024–26).** LLM with Pydantic schema + constrained decoding. 5 lines of code, production-ready.
+1. **基于规则（槽正则 + 关键词）。** 窄领域的强基线。可调试。
+2. **TripPy / BERT-DST。** 基于 BERT 编码的复制式生成。预 LLM 标准。
+3. **LDST（LLaMA + LoRA）。** 指令微调的 LLM，带领域-槽提示。在 MultiWOZ 2.4 上达到 ChatGPT 级质量。
+4. **无本体论（2024–26）。** 跳过模式；直接生成槽名和值。处理开放领域。
+5. **提示 + 结构化输出（2024–26）。** 带 Pydantic 模式 + 约束解码的 LLM。5 行代码，生产就绪。
 
-### The classic failure modes
+### 经典失败模式
 
-- **Co-reference across turns.** "Let's stay with the first option." Needs to resolve which option.
-- **Over-write vs append.** User says "add Italian." Do you replace cuisine or append?
-- **Implicit confirmations.** "OK cool" — did that accept the offered booking?
-- **Correction.** "Actually make it 7 pm." Must update time without clearing other slots.
-- **Coreference to previous system utterance.** "Yes, that one." Which "that"?
+- **跨轮次的共指。** "继续用第一个选项。"需要解析是哪个选项。
+- **覆盖 vs 追加。** 用户说"加个意大利菜"。是替换 cuisine 还是追加？
+- **隐式确认。** "好的 cool" —— 那是否接受了提供的预订？
+- **纠正。** "其实改成 7 点。"必须更新 time 而不清除其他槽。
+- **对先前系统话语的共指。** "是的，那个。"哪个"那个"？
 
-## Build It
+## 构建
 
-### Step 1: rule-based slot extractor
+### 第 1 步：基于规则的槽提取器
 
-See `code/main.py`. Regex + synonym dictionaries cover 70% of canonical utterances in narrow domains:
+参见 `code/main.py`。正则 + 同义词词典覆盖窄领域 70% 的规范表述：
 
 ```python
 CUISINE_SYNONYMS = {
@@ -70,9 +70,9 @@ def extract_cuisine(utterance):
     return None
 ```
 
-Brittle outside the canonical vocabulary. Works for deterministic slot confirmations.
+在规范词汇之外脆弱。适用于确定性槽确认。
 
-### Step 2: state update loop
+### 第 2 步：状态更新循环
 
 ```python
 def update_state(state, utterance):
@@ -87,13 +87,13 @@ def update_state(state, utterance):
     return new_state
 ```
 
-Three invariants:
+三个不变量：
 
-- Never reset a slot the user did not touch.
-- Explicit negation ("never mind the cuisine") must clear.
-- User correction ("actually...") must overwrite, not append.
+- 永远不要重置用户未触及的槽。
+- 显式否定（"不要 cuisine 了"）必须清除。
+- 用户纠正（"其实..."）必须覆盖，而非追加。
 
-### Step 3: LLM-driven DST with structured output
+### 第 3 步：LLM 驱动的 DST 与结构化输出
 
 ```python
 from pydantic import BaseModel
@@ -117,9 +117,9 @@ Update the state based on the latest user turn. Output only the JSON state."""
     return llm(prompt, response_model=RestaurantState)
 ```
 
-Instructor + Pydantic guarantees a valid state object. No regex, no schema mismatches, no hallucinated slots.
+Instructor + Pydantic 保证一个有效的状态对象。没有正则，没有模式不匹配，没有幻觉的槽。
 
-### Step 4: JGA evaluation
+### 第 4 步：JGA 评估
 
 ```python
 def joint_goal_accuracy(predicted_states, gold_states):
@@ -127,9 +127,9 @@ def joint_goal_accuracy(predicted_states, gold_states):
     return correct / len(predicted_states)
 ```
 
-Calibrate: what fraction of turns does the system get ALL slots right? For MultiWOZ 2.4, top 2026 systems: 80-83%. Your in-domain system should exceed that on your narrow vocabulary or the LLM baseline beats you.
+校准：系统把所有槽都做对的轮次比例是多少？对于 MultiWOZ 2.4，2026 年顶级系统：80-83%。你的领域内系统在窄词汇上应该超过该水平，否则 LLM 基线就赢了你。
 
-### Step 5: handling correction
+### 第 5 步：处理纠正
 
 ```python
 CORRECTION_CUES = {"actually", "no wait", "on second thought", "change that to"}
@@ -139,32 +139,32 @@ def is_correction(utterance):
     return any(cue in utterance.lower() for cue in CORRECTION_CUES)
 ```
 
-On a detected correction, overwrite the last-updated slot rather than appending. Hard to get right without LLM help. The modern pattern: always let the LLM regenerate the whole state from history rather than incrementally updating — this naturally handles corrections.
+在检测到纠正时，覆盖最后更新的槽而非追加。没有 LLM 帮助很难做对。现代模式：始终让 LLM 从历史中重新生成整个状态，而非增量更新 —— 这自然处理纠正。
 
-## Pitfalls
+## 陷阱
 
-- **Full-history regeneration cost.** Letting the LLM regenerate state each turn costs O(n²) total tokens. Cap history or summarize older turns.
-- **Schema drift.** Adding new slots post-hoc breaks old training data. Version your schema.
-- **Case sensitivity.** "Italian" vs "italian" vs "ITALIAN" — normalize everywhere.
-- **Implicit inheritance.** If the user has previously specified "for 4 people," a new request for a different time should not clear people. Always pass the full history.
-- **Free-form vs closed-set.** Names, times, and addresses need free-form slots; cuisines and areas are closed. Mix both in the schema.
+- **全历史重新生成成本。** 让 LLM 每轮重新生成状态需要 O(n²) 总 token。限制历史或汇总旧轮次。
+- **模式漂移。** 事后添加新槽会破坏旧训练数据。对模式进行版本控制。
+- **大小写敏感。** "Italian" vs "italian" vs "ITALIAN" —— 处处规范化。
+- **隐式继承。** 如果用户之前指定了"4 人"，新的不同时间请求不应清除 people。始终传递完整历史。
+- **自由形式 vs 封闭集。** 名称、时间和地址需要自由形式槽； cuisine 和 area 是封闭的。在模式中混合两者。
 
-## Use It
+## 使用
 
-The 2026 stack:
+2026 技术栈：
 
-| Situation | Approach |
+| 场景 | 方法 |
 |-----------|----------|
-| Narrow domain (one or two intents) | Rule-based + regex |
-| Broad domain, labeled data available | LDST (LLaMA + LoRA on MultiWOZ-style data) |
-| Broad domain, no labels, prod-ready | LLM + Instructor + Pydantic schema |
-| Spoken / voice | ASR + normalizer + LLM-DST |
-| Multi-domain booking flow | Schema-guided LLM with per-domain Pydantic models |
-| Compliance-sensitive | Rule-based primary, LLM fallback with confirmation flow |
+| 窄领域（一个或两个意图） | 基于规则 + 正则 |
+| 宽领域，有标注数据 | LDST（LLaMA + LoRA 在 MultiWOZ 风格数据上） |
+| 宽领域，无标注，生产就绪 | LLM + Instructor + Pydantic 模式 |
+| 口语 / 语音 | ASR + 规范化器 + LLM-DST |
+| 多领域预订流程 | 模式引导的 LLM，每个领域有独立的 Pydantic 模型 |
+| 合规敏感 | 基于规则为主，LLM 备选带确认流程 |
 
-## Ship It
+## 交付
 
-Save as `outputs/skill-dst-designer.md`:
+保存为 `outputs/skill-dst-designer.md`：
 
 ```markdown
 ---
@@ -187,28 +187,28 @@ Given a use case (domain, languages, vocab openness, compliance needs), output:
 Refuse LLM-only DST for compliance-sensitive slots without a rule-based secondary check. Refuse any DST that cannot roll back a slot on user correction. Flag schemas without version tags.
 ```
 
-## Exercises
+## 练习
 
-1. **Easy.** Build the rule-based state tracker in `code/main.py` for 3 slots (cuisine, area, price). Test on 10 hand-crafted dialogues. Measure JGA.
-2. **Medium.** Same dataset with Instructor + Pydantic + a small LLM. Compare JGA. Inspect the hardest turns.
-3. **Hard.** Implement both and route: rule-based primary, LLM fallback when rule-based emits <2 slots with confidence. Measure the combined JGA and inference cost per turn.
+1. **简单。** 在 `code/main.py` 中为 3 个槽（cuisine、area、price）构建基于规则的状态追踪器。在 10 个手工制作的对话上测试。测量 JGA。
+2. **中等。** 用 Instructor + Pydantic + 小型 LLM 处理相同数据集。比较 JGA。检查最难的轮次。
+3. **困难。** 实现两者并路由：基于规则为主，当基于规则发出 <2 个高置信度槽时 LLM 备选。测量组合 JGA 和每轮推理成本。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|-----------------|-----------------------|
-| DST | Dialogue state tracking | Maintain the slot-value dict across dialogue turns. |
-| Slot | Unit of user intent | Named parameter the backend needs (cuisine, date). |
-| Domain | The task area | Restaurant, hotel, taxi — sets of slots. |
-| JGA | Joint Goal Accuracy | Fraction of turns where every slot is correct. All-or-nothing. |
-| MultiWOZ | The benchmark | Multi-domain WOZ dataset; standard DST evaluation. |
-| Ontology-free DST | No schema | Generate slot names and values directly, no fixed list. |
-| Correction | "Actually..." | Turn that overwrites a previously-filled slot. |
+| DST | 对话状态追踪 | 在对话轮次间维护槽值字典。 |
+| 槽 | 用户意图的单位 | 后端需要的有名参数（cuisine、date）。 |
+| 领域 | 任务区域 | 餐厅、酒店、出租车 —— 槽的集合。 |
+| JGA | 联合目标准确率 | 每个槽都正确的轮次比例。全有或全无。 |
+| MultiWOZ | 基准 | 多领域 WOZ 数据集；标准 DST 评估。 |
+| 无本体论 DST | 无模式 | 直接生成槽名和值，没有固定列表。 |
+| 纠正 | "其实..." | 覆盖先前填充的槽的轮次。 |
 
-## Further Reading
+## 延伸阅读
 
-- [Budzianowski et al. (2018). MultiWOZ — A Large-Scale Multi-Domain Wizard-of-Oz](https://arxiv.org/abs/1810.00278) — the canonical benchmark.
-- [Feng et al. (2023). Towards LLM-driven Dialogue State Tracking (LDST)](https://arxiv.org/abs/2310.14970) — LLaMA + LoRA instruction tuning for DST.
-- [Heck et al. (2020). TripPy — A Triple Copy Strategy for Value Independent Neural Dialog State Tracking](https://arxiv.org/abs/2005.02877) — the copy-based DST workhorse.
-- [King, Flanigan (2024). Unsupervised End-to-End Task-Oriented Dialogue with LLMs](https://arxiv.org/abs/2404.10753) — EM-based unsupervised TOD.
-- [MultiWOZ leaderboard](https://github.com/budzianowski/multiwoz) — canonical DST results.
+- [Budzianowski 等 (2018). MultiWOZ — A Large-Scale Multi-Domain Wizard-of-Oz](https://arxiv.org/abs/1810.00278) — 规范基准。
+- [Feng 等 (2023). Towards LLM-driven Dialogue State Tracking (LDST)](https://arxiv.org/abs/2310.14970) — LLaMA + LoRA DST 指令微调。
+- [Heck 等 (2020). TripPy — A Triple Copy Strategy for Value Independent Neural Dialog State Tracking](https://arxiv.org/abs/2005.02877) — 复制式 DST 主力。
+- [King, Flanigan (2024). Unsupervised End-to-End Task-Oriented Dialogue with LLMs](https://arxiv.org/abs/2404.10753) — 基于 EM 的无监督 TOD。
+- [MultiWOZ 排行榜](https://github.com/budzianowski/multiwoz) — 规范 DST 结果。

@@ -1,37 +1,37 @@
-# Question Answering Systems
+# 问答系统
 
-> Three systems shaped modern QA. Extractive found spans. Retrieval-augmented grounded them in documents. Generative produced answers. Every modern AI assistant is a mix of the three.
+> 三个架构塑造了现代问答。抽取式找到答案片段。检索增强式将答案锚定在文档上。生成式产出答案。每一种现代 AI 助手都是这三者的组合。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 5 · 11 (Machine Translation), Phase 5 · 10 (Attention Mechanism)
-**Time:** ~75 minutes
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 5 · 11（机器翻译），阶段 5 · 10（注意力机制）
+**时间：** 约 75 分钟
 
-## The Problem
+## 问题
 
-A user types "When did the first iPhone launch?" and expects "June 29, 2007." Not "Apple's history is long and varied." Not "2007" sitting in isolation with no sentence. A direct, grounded, correct answer.
+用户输入"第一代 iPhone 什么时候发布？"期望得到"2007 年 6 月 29 日。"而不是"苹果公司的历史悠久而多样。"也不是孤零零的"2007"没有任何上下文。一个直接、有据可查、正确的答案。
 
-Three architectures have dominated QA over the last decade.
+过去十年间，三种架构主导了问答领域。
 
-- **Extractive QA.** Given a question and a passage that is known to contain the answer, find the start and end indices of the answer span in the passage. SQuAD is the canonical benchmark.
-- **Open-domain QA.** The passage is not given. Retrieve the relevant passage first, then extract or generate an answer. This is the bedrock of every RAG pipeline today.
-- **Generative / Closed-book QA.** A large language model answers from its parametric memory. No retrieval. Fastest at inference, least reliable on facts.
+- **抽取式问答。** 给定一个问题和一个已知包含答案的段落，找出答案片段在段落中的起始和结束索引。SQuAD 是标准基准。
+- **开放域问答。** 段落未给定。需要先检索相关段落，再抽取或生成答案。这是今天每一个 RAG 流水线的基石。
+- **生成式 / 闭卷问答。** 一个大型语言模型依靠其参数化记忆来回答。无检索步骤。推理速度最快，但对事实的可靠性最低。
 
-The trend in 2026 is hybrid: retrieve the best few passages, then prompt a generative model to answer grounded in those passages. That is RAG, and lesson 14 covers the retrieval half in depth. This lesson builds the QA half.
+2026 年的趋势是混合架构：检索最好的几个段落，然后提示生成模型在这些段落的基础上回答。这就是 RAG，第 14 课深入讲解检索部分。本课构建问答部分。
 
-## The Concept
+## 概念
 
-![QA architectures: extractive, retrieval-augmented, generative](../assets/qa.svg)
+![问答架构：抽取式、检索增强式、生成式](../assets/qa.svg)
 
-**Extractive.** Encode question and passage together with a transformer (BERT family). Train two heads that predict start and end token indices of the answer. Loss is cross-entropy over valid positions. Output is a span from the passage. Never hallucinates (by construction), never handles questions the passage cannot answer (by construction).
+**抽取式。** 用 transformer（BERT 系列）将问题与段落一起编码。训练两个头部，预测答案的起始和结束 token 索引。损失函数是有效位置上的交叉熵。输出是段落中的一个片段。从结构上不会产生幻觉（由构造决定），也不会处理段落无法回答的问题（由构造决定）。
 
-**Retrieval-augmented (RAG).** Two stages. First, a retriever finds the top-`k` passages from a corpus. Second, a reader (extractive or generative) produces the answer using those passages. The retriever-reader split lets each be trained and evaluated independently. Modern RAG often adds a reranker between them.
+**检索增强式（RAG）。** 两个阶段。第一阶段，检索器从语料库中找到 top-`k` 个段落。第二阶段，读者（抽取式或生成式）利用这些段落产出答案。检索器-读者分离使得两者可以独立训练和评估。现代 RAG 通常在两者之间加入一个重排器。
 
-**Generative.** A decoder-only LLM (GPT, Claude, Llama) answers from learned weights. No retrieval step. Excellent on common knowledge, catastrophic on rare or recent facts. The hallucination rate is inversely correlated with fact frequency in the pretraining data.
+**生成式。** 一个仅解码器的 LLM（GPT、Claude、Llama）依靠学习到的权重来回答。无检索步骤。在常见知识上表现出色，在罕见或最新事实上一塌糊涂。幻觉率与预训练数据中事实出现的频率成反比。
 
-## Build It
+## 动手构建
 
-### Step 1: extractive QA with a pretrained model
+### 第 1 步：使用预训练模型进行抽取式问答
 
 ```python
 from transformers import pipeline
@@ -52,9 +52,9 @@ print(answer)
 {'score': 0.98, 'start': 57, 'end': 70, 'answer': 'June 29, 2007'}
 ```
 
-`deepset/roberta-base-squad2` is trained on SQuAD 2.0, which includes unanswerable questions. By default, the `question-answering` pipeline returns the highest-scoring span even when the model's null score wins — it does *not* automatically return an empty answer. To get explicit "no answer" behavior, pass `handle_impossible_answer=True` to the pipeline call: the pipeline then returns an empty answer only when the null score exceeds every span score. Always check the `score` field either way.
+`deepset/roberta-base-squad2` 在 SQuAD 2.0 上训练，其中包含了不可回答的问题。默认情况下，`question-answering` 流水线即使在模型的空答案分数获胜时也会返回得分最高的片段——它**不会**自动返回空答案。要获得明确的"无答案"行为，在流水线调用时传入 `handle_impossible_answer=True`：只有当空答案分数超过所有片段分数时，流水线才会返回空答案。无论哪种情况，都要检查 `score` 字段。
 
-### Step 2: a retrieval-augmented pipeline (sketch)
+### 第 2 步：检索增强流水线（草图）
 
 ```python
 from sentence_transformers import SentenceTransformer
@@ -87,9 +87,9 @@ def answer(question):
 print(answer("When was the first iPhone released?"))
 ```
 
-Two-stage pipeline. Dense retriever (Sentence-BERT) finds relevant passages by semantic similarity. Extractive reader (RoBERTa-SQuAD) pulls the answer span from the combined top passages. Works on small corpora. For a million-document corpus, use FAISS or a vector database.
+两阶段流水线。稠密检索器（Sentence-BERT）通过语义相似性找到相关段落。抽取式读者（RoBERTa-SQuAD）从组合的 top 段落中抽取答案片段。适用于小规模语料库。对于百万级文档的语料库，使用 FAISS 或向量数据库。
 
-### Step 3: generative with RAG
+### 第 3 步：RAG 生成式
 
 ```python
 def rag_generate(question, llm):
@@ -104,49 +104,49 @@ Answer using only the context above. If the context does not contain the answer,
     return llm(prompt)
 ```
 
-The prompt pattern matters. Explicitly telling the model to ground in the context and return "I don't know" when the context is insufficient cuts hallucination rates by 40-60% compared to naive prompting. More elaborate patterns add citations, confidence scores, and structured extraction.
+提示词模式很重要。明确告诉模型在上下文中寻找答案，并在上下文不足以回答时返回"我不知道"，与简单提示相比可将幻觉率降低 40-60%。更复杂的模式可以添加引用、可信度分数和结构化抽取。
 
-### Step 4: evaluation that reflects the real world
+### 第 4 步：反映真实世界的评估
 
-SQuAD uses **Exact Match (EM)** and **token-level F1**. EM is a strict match after normalization (lowercase, strip punctuation, remove articles) — either the prediction matches exactly or it scores 0. F1 is computed over token overlap between prediction and reference and gives partial credit. Both under-credit paraphrases: "June 29, 2007" vs "June 29th, 2007" typically gets 0 EM (the ordinal breaks normalization) but still earns substantial F1 from overlapping tokens.
+SQuAD 使用**精确匹配（EM）**和**token 级 F1**。EM 在规范化后（转小写、去标点、去冠词）是严格匹配——要么预测完全一致，要么得 0 分。F1 在预测和参考之间的 token 重叠上计算，给出部分分数。两者都对释义支持不足："June 29, 2007" vs "June 29th, 2007" 通常 EM 得 0（序数词破坏了规范化），但从重叠的 token 中仍能获得可观的 F1。
 
-For production QA:
+对于生产级问答：
 
-- **Answer accuracy** (LLM-judged or human-judged, since metrics do not capture semantic equivalence).
-- **Citation accuracy.** Does the cited passage actually support the answer? Trivial to check automatically with string match between generated citations and retrieved passages.
-- **Refusal calibration.** When the answer is not in the retrieved passages, does the system correctly say "I don't know"? Measure false confidence rate.
-- **Retrieval recall.** Before evaluating the reader, measure whether the retriever gets the right passage into the top-`k`. A reader cannot fix a missing passage.
+- **答案准确率**（LLM 评判或人工评判，因为指标无法捕捉语义等价性）。
+- **引用准确率。** 引用的段落是否实际支持答案？用生成引用与检索段落之间的字符串匹配可以轻松自动检查。
+- **拒绝校准。** 当答案不在检索到的段落中时，系统是否正确地说"我不知道"？测量虚假置信率。
+- **检索召回率。** 在评估读者之前，测量检索器是否将正确段落放入 top-`k`。读者无法弥补缺失的段落。
 
-### RAGAS: the 2026 production eval framework
+### RAGAS：2026 年生产评估框架
 
-`RAGAS` is purpose-built for RAG systems and is the shipping default in 2026. It scores four dimensions without requiring gold references:
+`RAGAS` 专为 RAG 系统构建，是 2026 年的出货默认选择。它从四个维度评分，无需黄金参考：
 
-- **Faithfulness.** Does each claim in the answer come from the retrieved context? Measured by NLI-based entailment. Your primary hallucination metric.
-- **Answer relevance.** Does the answer address the question? Measured by generating hypothetical questions from the answer and comparing to the real question.
-- **Context precision.** Of the retrieved chunks, what fraction were actually relevant? Low precision = noise in prompt.
-- **Context recall.** Did the retrieved set contain all needed information? Low recall = reader cannot succeed.
+- **忠实度。** 答案中的每个声明是否来自检索到的上下文？通过基于 NLI 的蕴含来测量。你主要的幻觉指标。
+- **答案相关性。** 答案是否回答了问题？通过从答案生成假设性问题并与真实问题比较来测量。
+- **上下文精确度。** 检索到的块中，实际相关的比例是多少？低精确度 = 提示中的噪声。
+- **上下文召回率。** 检索到的集合是否包含所有需要的信息？低召回率 = 读者无法成功。
 
-Reference-free scoring lets you evaluate on live production traffic without curated gold answers. Layer LLM-as-judge on top for open-ended questions where exact-match metrics are useless.
+无参考评分让你可以在实时生产流量上评估，无需精心的黄金答案。在开放式问题之上叠加 LLM-as-judge，因为精确匹配指标在这些情况下毫无用处。
 
-`pip install ragas`. Plug your retriever + reader. Get four scalars per query. Alert on regressions.
+`pip install ragas`。插入你的检索器 + 读者。每个查询得到四个标量。警惕回归。
 
-## Use It
+## 使用它
 
-The 2026 stack.
+2026 年的技术栈。
 
-| Use case | Recommended |
+| 使用场景 | 推荐方案 |
 |---------|-------------|
-| Given passage, find answer span | `deepset/roberta-base-squad2` |
-| Over a fixed corpus, closed-book not acceptable | RAG: dense retriever + LLM reader |
-| Real-time over a document store | RAG with hybrid (BM25 + dense) retriever + reranker (lesson 14) |
-| Conversational QA (follow-up questions) | LLM with conversation history + RAG on each turn |
-| Highly factual, regulated domains | Extractive over an authoritative corpus; never generative alone |
+| 给定段落，找出答案片段 | `deepset/roberta-base-squad2` |
+| 在固定语料库上，闭卷不可接受 | RAG：稠密检索器 + LLM 读者 |
+| 文档库的实时搜索 | RAG + 混合（BM25 + 稠密）检索器 + 重排器（第 14 课） |
+| 对话式问答（后续问题） | 带会话历史的 LLM + 每轮 RAG |
+| 高事实性、受监管领域 | 在权威语料库上做抽取式；绝不单独使用生成式 |
 
-Extractive QA is unfashionable in 2026 because RAG with LLMs handles more cases. It still ships in contexts where literal quotation is required: legal research, regulatory compliance, audit tools.
+抽取式问答在 2026 年已经过时，因为带 LLM 的 RAG 能处理更多情况。它仍在需要逐字引用的情况下使用：法律研究、监管合规、审计工具。
 
-## Ship It
+## 交付它
 
-Save as `outputs/skill-qa-architect.md`:
+保存为 `outputs/skill-qa-architect.md`：
 
 ```markdown
 ---
@@ -168,26 +168,26 @@ Given requirements (corpus size, question type, factuality constraint, latency b
 Refuse closed-book LLM answers for regulatory or compliance-sensitive questions. Refuse any QA system without a retrieval-recall baseline (you cannot evaluate the reader without knowing the retriever surfaced the right passage). Flag questions that require multi-hop reasoning as needing specialized multi-hop retrievers like HotpotQA-trained systems.
 ```
 
-## Exercises
+## 练习
 
-1. **Easy.** Set up the SQuAD extractive pipeline above on 10 Wikipedia passages. Hand-craft 10 questions. Measure how often the answer is correct. You should see 7-9 correct if passages and questions are clean.
-2. **Medium.** Add a refusal classifier. When the top retrieval score is below a threshold (say 0.3 cosine), return "I don't know" instead of calling the reader. Tune the threshold on a held-out set.
-3. **Hard.** Build a RAG pipeline over a 10,000-document corpus of your choice. Implement hybrid retrieval (BM25 + dense) with RRF fusion (see lesson 14). Measure answer accuracy with and without the hybrid step. Document which question types benefit most.
+1. **简单。** 在 10 个维基百科段落上运行上面的 SQuAD 抽取式流水线。手工制作 10 个问题。测量答案正确的频率。如果段落和问题都很干净，你应该能看到 7-9 个正确。
+2. **中等。** 添加一个拒绝分类器。当最高检索分数低于某个阈值（比如 0.3 余弦相似度）时，返回"我不知道"而不是调用读者。在留出集上调整阈值。
+3. **困难。** 在你选择的 10,000 份文档语料库上构建 RAG 流水线。实现混合检索（BM25 + 稠密）+ RRF 融合（见第 14 课）。测量有无混合步骤时的答案准确率。记录哪些问题类型受益最多。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|-----------------------|
-| Extractive QA | Find the answer span | Predict start and end indices of the answer within a given passage. |
-| Open-domain QA | QA over a corpus | No given passage; must retrieve then answer. |
-| RAG | Retrieve then generate | Retrieval-augmented generation. Retriever + reader pipeline. |
-| SQuAD | Canonical benchmark | Stanford Question Answering Dataset. EM + F1 metrics. |
-| Hallucination | Made-up answer | Reader output not supported by retrieved context. |
-| Refusal calibration | Know when to shut up | System correctly says "I don't know" when unable to answer. |
+| 抽取式问答 | 找到答案片段 | 在给定段落中预测答案的起始和结束索引。 |
+| 开放域问答 | 在语料库上做问答 | 无给定段落；必须先检索再回答。 |
+| RAG | 先检索再生成 | 检索增强生成。检索器 + 读者流水线。 |
+| SQuAD | 标准基准 | 斯坦福问答数据集。EM + F1 指标。 |
+| 幻觉 | 编造的答案 | 读者输出不被检索到的上下文所支持。 |
+| 拒绝校准 | 知道何时闭嘴 | 当无法回答时，系统正确地说"我不知道"。 |
 
-## Further Reading
+## 延伸阅读
 
-- [Rajpurkar et al. (2016). SQuAD: 100,000+ Questions for Machine Comprehension of Text](https://arxiv.org/abs/1606.05250) — the benchmark paper.
-- [Karpukhin et al. (2020). Dense Passage Retrieval for Open-Domain QA](https://arxiv.org/abs/2004.04906) — DPR, the canonical dense retriever for QA.
-- [Lewis et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401) — the paper that named RAG.
-- [Gao et al. (2023). Retrieval-Augmented Generation for Large Language Models: A Survey](https://arxiv.org/abs/2312.10997) — comprehensive RAG survey.
+- [Rajpurkar et al. (2016). SQuAD: 100,000+ Questions for Machine Comprehension of Text](https://arxiv.org/abs/1606.05250) — 基准论文。
+- [Karpukhin et al. (2020). Dense Passage Retrieval for Open-Domain QA](https://arxiv.org/abs/2004.04906) — DPR，QA 的标准稠密检索器。
+- [Lewis et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401) — 命名 RAG 的论文。
+- [Gao et al. (2023). Retrieval-Augmented Generation for Large Language Models: A Survey](https://arxiv.org/abs/2312.10997) — 全面的 RAG 综述。
