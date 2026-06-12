@@ -1,112 +1,112 @@
-# Long-Running Background Agents: Durable Execution
+# 长时运行后台代理：持久执行
 
-> Production long-horizon agents do not run in `while True`. Every LLM call becomes an activity with checkpoint, retry, and replay. Temporal's OpenAI Agents SDK integration went GA March 2026. Claude Code Routines (Anthropic) runs scheduled Claude Code invocations without a persistent local process. Sessions pause on human-input, survive deploys, and resume from the latest checkpoint keyed by `thread_id`. Behind the new ergonomics sits an old pattern — workflow orchestration — with one new input: LLM calls as non-deterministic activities that must be deterministically replayed on recovery.
+> 生产长程代理不是运行在 `while True` 中。每个 LLM 调用都成为一个带有检查点、重试和回放的活动。Temporal 的 OpenAI Agents SDK 集成于 2026 年 3 月全面上市。Claude Code Routines（Anthropic）无需持久本地进程即可运行调度的 Claude Code 调用。会话在人机输入时暂停，存活部署，并从由 `thread_id` 键控的最新检查点恢复。在新的 ergonomics 背后是一个旧模式——工作流编排——只有一个新输入：LLM 调用作为非确定性活动，必须在恢复时确定性回放。
 
-**Type:** Learn
-**Languages:** Python (stdlib, minimal durable-execution state machine)
-**Prerequisites:** Phase 15 · 10 (Permission modes), Phase 15 · 01 (Long-horizon agents)
-**Time:** ~60 minutes
+**类型：** 学习型
+**语言：** Python（标准库，最小持久执行状态机）
+**前置条件：** 阶段 15 · 10（权限模式）、阶段 15 · 01（长程代理）
+**时间：** 约 60 分钟
 
-## The Problem
+## 问题
 
-Consider an agent that runs for four hours. It calls three tools, prompts the user twice, and makes forty LLM calls. Halfway through, the host it is running on reboots. What happens?
+考虑一个运行四小时的代理。它调用三个工具，两次提示用户，并进行四十次 LLM 调用。运行到一半，托管它的主机重启了。会发生什么？
 
-- In a naive `while True` loop: everything is lost. The run restarts from scratch. The three tool calls (with real side effects) execute again. The user is prompted again for things they already approved. Forty LLM calls are re-billed.
-- With durable execution: the run resumes from the most recent checkpoint. Already-completed activities are not re-executed; their results are replayed from the durable log. The user does not re-approve things they already approved. The LLM calls already made are not re-billed.
+- 在天真的 `while True` 循环中：一切都会丢失。运行从头重启。三个工具调用（带有真实副作用）会再次执行。用户再次被提示他们已经批准的事情。40 次 LLM 调用会被重新计费。
+- 使用持久执行：运行从最近的检查点恢复。已经完成的活动不会重新执行；它们的结果从持久日志中回放。用户不会重新批准他们已经批准的事情。已经完成的 LLM 调用不会被重新计费。
 
-This is the same pattern workflow engines have shipped for a decade (Temporal, Cadence, Uber's Cherami). What's new is that LLM calls are now a kind of activity — non-deterministic, expensive, with side effects — and they fit this pattern cleanly.
+这与工作流引擎已经交付十年的模式相同（Temporal、Cadence、Uber 的 Cherami）。新的是 LLM 调用现在是一种活动——非确定性、昂贵、有副作用——它们很好地符合这个模式。
 
-The running theme of the lesson: long-horizon reliability decays (METR observes a "35-minute degradation" — success rate drops roughly quadratically with horizon). Durable execution enables runs that are longer than the reliability profile supports, which is a new way to fail safely if the design is right and unsafely if the design is wrong.
+课程的主线是：长程可靠性会衰减（METR 观察到"35 分钟退化"——成功率随时间跨度大致呈二次下降）。持久执行使运行时间可以超过可靠性配置支持的时间，如果设计正确则是安全地失败，如果设计错误则是不安全地失败。
 
-## The Concept
+## 概念
 
-### Activities, workflows, and replay
+### 活动、工作流和回放
 
-- **Workflow**: deterministic orchestration code. Defines the sequence of activities, the branches, the waits. Must be deterministic so it can be replayed from the event log without surprising divergence.
-- **Activity**: a non-deterministic, potentially failing unit of work. LLM call, tool call, file write, HTTP request. Each activity is logged with its inputs and (once complete) its outputs.
-- **Event log**: the durable backing store. Every activity start, complete, fail, retry, and every workflow decision is recorded.
-- **Replay**: on recovery, the workflow code re-runs from the start; every activity that already completed returns its logged result without re-executing. Only activities that had not completed are actually run.
+- **工作流**：确定性编排代码。定义活动序列、分支、等待。必须是确定性的，以便从事件日志回放而不会产生令人惊讶的分歧。
+- **活动**：非确定性、可能失败的工作单元。LLM 调用、工具调用、文件写入、HTTP 请求。每个活动都记录其输入和（一旦完成）其输出。
+- **事件日志**：持久备份存储。每个活动开始、完成、失败、重试，以及每个工作流决策都被记录。
+- **回放**：在恢复时，工作流代码从头重新运行；每个已经完成的活动返回其记录的结果而不重新执行。只有尚未完成的活动才会实际运行。
 
-This is the same shape as React re-rendering against a virtual DOM, or Git rebuilding a working tree from commits. Determinism in the orchestrator is what makes durability cheap.
+这与 React 针对虚拟 DOM 重新渲染，或 Git 从提交重建工作树是相同的形状。编排器中的确定性是持久化便宜的原因。
 
-### Why LLM calls fit the pattern
+### 为什么 LLM 调用符合这个模式
 
-LLM calls are:
-- Non-deterministic (temperature > 0; even temperature 0 drifts across model versions).
-- Expensive (money and latency).
-- Potentially failing (rate limits, timeouts).
-- Side-effectful (if they invoke tools).
+LLM 调用具有以下特点：
+- 非确定性（temperature > 0；即使 temperature 0 也会因模型版本不同而漂移）。
+- 昂贵（金钱和延迟）。
+- 可能失败（速率限制、超时）。
+- 有副作用（如果它们调用工具）。
 
-This is exactly the activity profile. Wrapping every LLM call as an activity gives you retry with exponential backoff, checkpointing across restarts, and a replayable trace for debugging.
+这正是活动配置文件。将每个 LLM 调用包装为活动可以为你提供指数退避重试、跨重启的检查点，以及用于调试的可回放轨迹。
 
-### Checkpoints keyed by `thread_id`
+### 由 `thread_id` 键控的检查点
 
-LangGraph, Microsoft Agent Framework, Cloudflare Durable Objects, and Claude Code Routines all converged on the same API shape: a `thread_id` (or equivalent) identifies the session; each state transition persists to a backend (PostgreSQL default, SQLite for dev, Redis for cache); resume reads the latest checkpoint.
+LangGraph、Microsoft Agent Framework、Cloudflare Durable Objects 和 Claude Code Routines 都收敛到相同的 API 形态：`thread_id`（或等效物）标识会话；每个状态转换持久化到后端（PostgreSQL 默认，SQLite 用于开发，Redis 用于缓存）；恢复从最新检查点读取。
 
-The backend choice matters:
+后端选择很重要：
 
-- **PostgreSQL**: durable, queryable, survives deploys. Default for LangGraph.
-- **SQLite**: local-dev only; loses data across hosts.
-- **Redis**: fast but ephemeral unless AOF/snapshot configured.
-- **Cloudflare Durable Objects**: transparently distributed; scoped by a unique key; survives for hours to weeks.
+- **PostgreSQL**：持久化、可查询、存活部署。LangGraph 的默认选项。
+- **SQLite**：仅适用于本地开发；跨主机丢失数据。
+- **Redis**：快速但短暂，除非配置了 AOF/快照。
+- **Cloudflare Durable Objects**：透明分布式；由唯一键限定；存活数小时到数周。
 
-### Human-input as a first-class state
+### 人机输入作为一等公民状态
 
-Propose-then-commit (Lesson 15) requires a durable "waiting on human" state. The workflow pauses, the external queue holds the pending request, and an approval resumes from exactly that point. Without durability this is best-effort; with it, an overnight approval arrives and the workflow picks up in the morning.
+提出然后提交（第 15 课）需要持久的"等待人工"状态。工作流暂停，外部队列持有待处理请求，批准从该点恢复。没有持久化，这是尽力而为；有它，隔夜批准到达，工作流在早上恢复。
 
-### The 35-minute degradation
+### 35 分钟退化
 
-METR observed that every agent class measured shows reliability decay beyond ~35 minutes of continuous operation. Doubling the task duration roughly quadruples the failure rate. Durable execution does not fix this; it lets you run longer than the reliability profile supports. The safe pattern is to combine durability with checkpoints that require fresh HITL on re-entry, and with budget kill switches (Lesson 13) that cap total compute regardless of wall-clock time.
+METR 观察到每个测量的代理类别在连续运行约 35 分钟后都表现出可靠性下降。将任务持续时间加倍会使失败率大致增加四倍。持久执行不能修复这个；它让你运行的时间超过可靠性配置支持的时间。安全模式是将持久化与需要在重新进入时进行新鲜 HITL 的检查点结合，并与预算 kill switches（第 13 课）结合，无论墙上时间如何都限制总计算量。
 
-### When durable execution is the wrong answer
+### 什么时候持久执行是错误的答案
 
-- Runs shorter than a few minutes with no human input. Overhead > benefit.
-- Strictly read-only information retrieval.
-- Tasks where correctness requires end-to-end within one context window (some reasoning tasks; some one-shot generation).
+- 短于几分钟且无人机输入的运行。开销 > 收益。
+- 严格只读的信息检索。
+- 正确性需要在单个上下文窗口内端到端完成的任务（一些推理任务；一些一次性生成）。
 
-## Use It
+## 使用它
 
-`code/main.py` implements a minimal durable-execution engine in stdlib Python. It supports:
+`code/main.py` 在标准库 Python 中实现了一个最小持久执行引擎。它支持：
 
-- `@activity` decorator that logs inputs and outputs to a JSON event log.
-- A workflow function that sequences activities.
-- A `run_or_replay(workflow, event_log)` function that replays completed activities without re-executing them.
+- `@activity` 装饰器，将输入和输出记录到 JSON 事件日志。
+- 一个对活动进行排序的工作流函数。
+- 一个 `run_or_replay(workflow, event_log)` 函数，回放已完成的活动而不重新执行它们。
 
-The driver simulates a three-activity workflow, crashes halfway through, and shows (a) a naive retry re-executing everything versus (b) a replay running only the missing activity.
+驱动程序模拟一个三活动工作流，在中途崩溃，并显示（a）天真重试重新执行一切 vs（b）仅运行缺失活动的回放。
 
-## Ship It
+## 交付它
 
-`outputs/skill-durable-execution-review.md` reviews a proposed long-running agent deployment for correct durable-execution shape: activities, determinism, checkpoint backend, human-input state, and HITL-on-resume policy.
+`outputs/skill-durable-execution-review.md` 审查提议的长时运行代理部署是否具有正确的持久执行形态：活动、确定性、检查点后端、人机输入状态和恢复时 HITL 策略。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Observe the difference in activity-execution count between naive retry and replay. Change the crash point and show the replay count changes accordingly.
+1. 运行 `code/main.py`。观察天真重试和回放之间的活动执行计数差异。更改崩溃点并显示回放计数相应变化。
 
-2. Convert the toy engine to use `thread_id` explicitly. Simulate two concurrent sessions sharing the engine and confirm their event logs do not collide.
+2. 将玩具引擎转换为显式使用 `thread_id`。模拟两个共享引擎的并发会话并确认它们的事件日志不会冲突。
 
-3. Take one activity in the toy engine. Introduce a non-determinism (a wall-clock timestamp inside a workflow decision). Demonstrate the divergence on replay. Explain how real engines handle this (side-effect registration, `Workflow.now()` APIs).
+3. 在玩具引擎中引入一个非确定性（工作流决策中的墙上时钟时间戳）。演示回放时的分歧。解释真实引擎如何处理这个（副作用注册、`Workflow.now()` API）。
 
-4. Read the LangChain "Runtime behind production deep agents" post. List every state that the runtime persists and name which failure mode each covers.
+4. 阅读 LangChain"生产深度代理背后的运行时"帖子。列出运行时持久化的每个状态并命名每个覆盖的故障模式。
 
-5. Design a checkpoint policy for a 6-hour autonomous coding task. Where do you checkpoint? What does resume-on-crash look like? What requires fresh HITL?
+5. 为 6 小时自主编码任务设计检查点策略。你在哪里设置检查点？崩溃恢复后恢复是什么样子？什么需要新鲜的 HITL？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |---|---|---|
-| Workflow | "Agent's script" | Deterministic orchestration code; replayable from event log |
-| Activity | "A step" | Non-deterministic unit (LLM call, tool call); logged before and after |
-| Event log | "The backing store" | Durable record of every state transition |
-| Replay | "Resume" | Re-run workflow; completed activities return logged results without re-execution |
-| Checkpoint | "Save point" | Persisted state keyed by thread_id; latest-wins on resume |
-| thread_id | "Session key" | Identifier that scopes durable state |
-| 35-minute degradation | "Reliability decay" | METR: success rate drops ~quadratically with horizon |
-| Non-determinism | "Drift on replay" | Wall clock, random, LLM output; must be registered as side effect |
+| 工作流 | "代理的脚本" | 确定性编排代码；从事件日志可回放 |
+| 活动 | "一步" | 非确定性单元（LLM 调用、工具调用）；在之前和之后记录 |
+| 事件日志 | "备份存储" | 每个状态转换的持久记录 |
+| 回放 | "恢复" | 重新运行工作流；已完成的活动返回记录的结果而不重新执行 |
+| 检查点 | "保存点" | 由 thread_id 键控的持久化状态；恢复时最新获胜 |
+| thread_id | "会话键" | 限定持久化状态的标识符 |
+| 35 分钟退化 | "可靠性衰减" | METR：成功率随时间跨度大致呈二次下降 |
+| 非确定性 | "回放时漂移" | 墙上时钟、随机、LLM 输出；必须注册为副作用 |
 
-## Further Reading
+## 延伸阅读
 
-- [Anthropic — Claude Code Agent SDK: agent loop](https://code.claude.com/docs/en/agent-sdk/agent-loop) — budget, turns, and resume semantics.
-- [Microsoft — Agent Framework: human-in-the-loop and checkpointing](https://learn.microsoft.com/en-us/agent-framework/workflows/human-in-the-loop) — RequestInfoEvent shape.
-- [LangChain — The Runtime Behind Production Deep Agents](https://www.langchain.com/conceptual-guides/runtime-behind-production-deep-agents) — concrete runtime requirements.
-- [OpenAI Agents SDK + Temporal integration (Trigger.dev announcement)](https://trigger.dev) — activity shape for LLM calls.
-- [Anthropic — Measuring agent autonomy in practice](https://www.anthropic.com/research/measuring-agent-autonomy) — the 35-minute degradation reference.
+- [Anthropic——Claude Code Agent SDK：代理循环](https://code.claude.com/docs/en/agent-sdk/agent-loop) — 预算、轮次和恢复语义。
+- [Microsoft——Agent Framework：人机循环和检查点](https://learn.microsoft.com/en-us/agent-framework/workflows/human-in-the-loop) — RequestInfoEvent 形态。
+- [LangChain——生产深度代理背后的运行时](https://www.langchain.com/conceptual-guides/runtime-behind-production-deep-agents) — 具体运行时要求。
+- [OpenAI Agents SDK + Temporal 集成（Trigger.dev 公告）](https://trigger.dev) — LLM 调用的活动形态。
+- [Anthropic——在实践中衡量代理自主性](https://www.anthropic.com/research/measuring-agent-autonomy) — 35 分钟退化参考。

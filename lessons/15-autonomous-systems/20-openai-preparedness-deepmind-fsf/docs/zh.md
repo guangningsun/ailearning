@@ -1,104 +1,104 @@
-# OpenAI Preparedness Framework and DeepMind Frontier Safety Framework
+# OpenAI 准备框架与 DeepMind 前沿安全框架
 
-> OpenAI Preparedness Framework v2 (April 2025) introduces Research Categories — Long-range Autonomy, Sandbagging, Autonomous Replication and Adaptation, Undermining Safeguards — distinct from Tracked Categories. Tracked Categories trigger Capabilities Reports plus Safeguards Reports reviewed by the Safety Advisory Group. DeepMind's FSF v3 (September 2025, with Tracked Capability Levels added April 17, 2026) folds autonomy into ML R&D and Cyber domains (ML R&D autonomy level 1 = fully automate the AI R&D pipeline at competitive cost vs human + AI tools). FSF v3 explicitly addresses deceptive alignment via automated monitoring for instrumental-reasoning misuse. The honest note: Research Categories in PF v2 (including Long-range Autonomy) do not automatically trigger mitigations; the policy language is "potential." DeepMind itself says automated monitoring "will not remain sufficient long-term" if instrumental reasoning strengthens.
+> OpenAI 准备框架 v2（2025 年 4 月）引入研究类别——长期自主性、沙袋行为、自主复制与适应、破坏安全保障——与追踪类别不同。追踪类别触发能力报告及安全报告，由安全顾问团审查。DeepMind 的 FSF v3（2025 年 9 月，2026 年 4 月 17 日新增追踪能力等级）将自主性纳入 ML 研发和网络领域（ML 研发自主性等级 1 = 以有竞争力的成本完全自动化 AI 研发管线 vs 人类 + AI 工具）。FSF v3 明确通过自动化监控解决欺骗性对齐问题，以应对工具性推理滥用。诚实说明：PF v2 中的研究类别（包括长期自主性）不会自动触发缓解措施；政策语言是"潜在"。DeepMind 本身表示，如果工具性推理加强，自动化监控"不会长期保持足够"。
 
-**Type:** Learn
-**Languages:** Python (stdlib, three-framework decision-table diff tool)
-**Prerequisites:** Phase 15 · 19 (Anthropic RSP)
-**Time:** ~45 minutes
+**类型：** 学习型
+**语言：** Python（标准库、三框架决策表差异工具）
+**前置条件：** 阶段 15 · 19（Anthropic RSP）
+**时间：** 约 45 分钟
 
-## The Problem
+## 问题
 
-Lesson 19 read Anthropic's scaling policy closely. This lesson completes the picture by reading OpenAI's and DeepMind's. The three documents are cousin artifacts addressing the same question — when should a frontier lab pause or gate a model — and they converge on a small set of categories and diverge in specific places that matter.
+第 19 课仔细阅读了 Anthropic 的扩展政策。本课通过阅读 OpenAI 和 DeepMind 的文档来完成这一图景。这三份文档是 addressing 同一问题的同类制品——前沿实验室何时应该暂停或限制模型——它们在小部分类别上趋同，在具体细节上存在差异，这些差异很重要。
 
-The convergence: all three label long-range autonomy as a capability class worth tracking. All three acknowledge deceptive behavior (alignment faking, sandbagging) as a specific class of risk. All three have an internal review body. The divergence: OpenAI splits categories into "Tracked" (mandatory mitigation) and "Research" (no automatic trigger). DeepMind folds autonomy into two domains rather than naming it separately. The lab names Tracked vs Research, or Critical vs Moderate, or Tier-1 vs Tier-2; the operational consequence of which bucket a capability lives in is different across labs.
+趋同点：三者都将长期自主性标记为值得追踪的能力类别。都明确承认欺骗性行为（对齐伪装、沙袋行为）作为特定风险类别。都有内部审查机构。差异点：OpenAI 将类别分为"追踪"（强制缓解）和"研究"（无自动触发）。DeepMind 将自主性纳入两个领域，而非单独命名。实验室名称追踪 vs 研究，或关键 vs 中等，或层级 1 vs 层级 2；但一个能力落在哪个桶中，在不同实验室之间的操作后果是不同的。
 
-Reading them together is the useful exercise. The same capability can be "mandatory mitigation" at Anthropic, "monitored but not triggering" at OpenAI, and "tracked in a specific domain" at DeepMind. The policy posture matters.
+将它们放在一起阅读是有用的练习。同样的能力可能在 Anthropic 是"强制缓解"，在 OpenAI 是"监控但不触发"，在 DeepMind 是"在特定领域追踪"。政策姿态很重要。
 
-## The Concept
+## 概念
 
-### OpenAI Preparedness Framework v2 (April 2025)
+### OpenAI 准备框架 v2（2025 年 4 月）
 
-Structure:
+结构：
 
-- **Tracked Categories**: trigger Capabilities Reports (what the model can do) plus Safeguards Reports (what mitigations are in place). Reviewed by the Safety Advisory Group before deployment.
-- **Research Categories**: model capabilities the lab is tracking but not yet committing to specific mitigations. Includes Long-range Autonomy, Sandbagging, Autonomous Replication and Adaptation, Undermining Safeguards.
+- **追踪类别**：触发能力报告（模型能做什么）和安全报告（已有哪些缓解措施）。在部署前由安全顾问团审查。
+- **研究类别**：实验室正在追踪但尚未承诺特定缓解措施的模型能力。包括长期自主性、沙袋行为、自主复制与适应、破坏安全保障。
 
-Key framing in v2: Research Categories do not automatically trigger mitigations. The policy language is "potential" mitigations. This is the specific delta to watch: a category's location in Tracked vs Research is the hinge between "gated" and "observed."
+v2 中的关键框架：研究类别不会自动触发缓解措施。政策语言是"潜在"缓解措施。这是需要关注的具体差异：类别在追踪 vs 研究中的位置是"限制"与"观察"之间的枢纽。
 
-### DeepMind Frontier Safety Framework v3 (September 2025; Tracked Capability Levels added April 17, 2026)
+### DeepMind 前沿安全框架 v3（2025 年 9 月；2026 年 4 月 17 日新增追踪能力等级）
 
-Structure:
+结构：
 
-- **Critical Capability Levels (CCLs)**: capability thresholds across five domains: Cyber, Bio, ML R&D, CBRN, Autonomy (folded into ML R&D and Cyber).
-- **Tracked Capability Levels**: additional granularity added in April 2026. Concrete example: ML R&D autonomy level 1 = fully automate the AI R&D pipeline at competitive cost vs human + AI tools.
-- **Deceptive alignment monitoring**: explicit commitment to automated monitoring for instrumental-reasoning misuse.
+- **关键能力等级（CCL）**：跨五个领域的能力阈值：网络、生物、ML 研发、CBRN、自主性（纳入 ML 研发和网络）。
+- **追踪能力等级**：2026 年 4 月新增的额外粒度。具体例子：ML 研发自主性等级 1 = 以有竞争力的成本完全自动化 AI 研发管线 vs 人类 + AI 工具。
+- **欺骗性对齐监控**：明确承诺自动化监控工具性推理滥用。
 
-The autonomy framing differs from OpenAI's. DeepMind does not keep "Autonomy" as a top-level domain; it is folded into the domains where autonomy would cause harm (ML R&D and Cyber). The argument is that autonomy without a domain is capability without risk; the counter-argument is that autonomy across domains is a meta-risk the framework should name.
+自主性框架与 OpenAI 不同。DeepMind 不将"自主性"作为顶级领域；而是将其纳入自主性会造成损害的领域（ML 研发和网络）。论点是：没有领域的自主性是没有风险的能力；反论点是：跨领域的自主性是框架应该命名的元风险。
 
-### What all three converge on
+### 三者趋同之处
 
-- Internal Safety Advisory Group (named Anthropic SAG, OpenAI SAG, DeepMind internal committee). Review before deployment for high-capability models.
-- Explicit mention of deceptive alignment / alignment faking as a risk class.
-- Standing artifacts on a declared cadence (Anthropic: Frontier Safety Roadmap, Risk Report; OpenAI: Capabilities and Safeguards Reports; DeepMind: FSF update cycle).
-- Acknowledgement that monitoring-only defenses have a ceiling. DeepMind is explicit: "automated monitoring will not remain sufficient long-term."
+- 内部安全顾问团（Anthropic SAG、OpenAI SAG、DeepMind 内部委员会）。高能力模型部署前的审查。
+- 明确提及欺骗性对齐 / 对齐伪装作为风险类别。
+- 按声明节奏更新的常设制品（Anthropic：前沿安全路线图、风险报告；OpenAI：能力和安全报告；DeepMind：FSF 更新周期）。
+- 承认仅靠监控的防御有上限。DeepMind 明确表示："自动化监控不会长期保持足够。"
 
-### Where they diverge
+### 差异之处
 
-- **Anthropic**: pause commitment removed in v3.0; AI R&D-4 threshold is the named next gate.
-- **OpenAI**: Tracked vs Research split; Research Categories (including Long-range Autonomy) do not automatically gate.
-- **DeepMind**: autonomy folded into other domains; Tracked Capability Levels add granularity in April 2026.
+- **Anthropic**：在 v3.0 中移除暂停承诺；AI 研发-4 阈值是命名的下一个门槛。
+- **OpenAI**：追踪 vs 研究分离；研究类别（包括长期自主性）不会自动限制。
+- **DeepMind**：自主性纳入其他领域；2026 年 4 月追踪能力等级增加粒度。
 
-### Sandbagging: a specific capability that complicates all three
+### 沙袋行为：一个使三者都复杂的特定能力
 
-Sandbagging (a model strategically underperforming on evaluations) is in OpenAI's Research Categories. Anthropic's RSP v3.0 addresses it via the evaluation-context gap (Lesson 1). DeepMind addresses it via deceptive alignment monitoring in FSF v3.
+沙袋行为（模型战略性表现不佳）是 OpenAI 研究类别中的能力。Anthropic 的 RSP v3.0 通过评估上下文差距解决它（第 1 课）。DeepMind 通过 FSF v3 中的欺骗性对齐监控解决它。
 
-If a model sandbags on evaluations, every framework's capability thresholds are underestimated. The framework works only if the measurement works. This is why external measurement (Lesson 21, METR) and adversarial evaluation are necessary in addition to lab self-assessment.
+如果模型在评估中沙袋，所有框架的能力阈值都会被低估。框架只有在测量有效时才有效。这就是为什么外部测量（第 21 课，METR）和对抗性评估对于实验室自我评估是必要的。
 
-### The policy-reading skill
+### 政策阅读技能
 
-- Locate: every capability you care about should be findable in the policy. If not findable, the policy does not cover it.
-- Classify: is it Tracked (triggers mitigation) or Research (tracked but not triggering)? OpenAI names this; Anthropic and DeepMind have their own equivalents.
-- Cadence: is the policy updated on a declared schedule, or only after specific events? Declared cadence is stronger.
-- Independence: is external review mandatory or optional? Anthropic partners with Apollo and US AI Safety Institute; OpenAI with METR; DeepMind with internal SAG primarily.
+- 定位：你关心的每个能力都应该在政策中可找到。如果找不到，政策就没有覆盖它。
+- 分类：它是追踪（触发缓解）还是研究（追踪但不触发）？OpenAI 为此命名；Anthropic 和 DeepMind 有各自的等价物。
+- 节奏：政策是按声明的时间表更新，还是只在特定事件后更新？声明的节奏更强。
+- 独立性：外部审查是强制性的还是可选的？Anthropic 与 Apollo 和美国 AI 安全研究所合作；OpenAI 与 METR；DeepMind 主要与内部 SAG 合作。
 
-## Use It
+## 使用方法
 
-`code/main.py` implements a small decision-table diff tool. Given a capability (autonomy, deceptive alignment, R&D automation, cyber uplift, etc.), it outputs how each of the three policies classifies the capability, and what mitigations trigger. It's a reading aid, not a policy tool.
+`code/main.py` 实现了一个小型决策表差异工具。给定一个能力（自主性、欺骗性对齐、研发自动化、网络提升等），它输出每个政策如何对该能力进行分类，以及会触发哪些缓解措施。这是一个阅读辅助工具，不是政策工具。
 
-## Ship It
+## 交付物
 
-`outputs/skill-cross-policy-diff.md` produces a cross-policy comparison for a specific capability, using the three frameworks as reference.
+`outputs/skill-cross-policy-diff.md` 为特定能力生成跨政策比较，以三个框架作为参考。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Confirm the diff tool's output matches the policies for at least two capabilities you can verify against the source documents.
+1. 运行 `code/main.py`。确认差异工具的输出与源文档中至少两个能力的策略相匹配。
 
-2. Read OpenAI Preparedness Framework v2 in full. Identify each Research Category. For each, write one sentence on why it is in Research rather than Tracked.
+2. 完整阅读 OpenAI 准备框架 v2。识别每个研究类别。对于每个，写一句话说明为什么它在研究而非追踪中。
 
-3. Read DeepMind FSF v3 in full, plus the April 2026 Tracked Capability Levels update. Identify ML R&D autonomy level 1's specific evaluation criteria. How would you measure it externally?
+3. 完整阅读 DeepMind FSF v3，加上 2026 年 4 月追踪能力等级更新。识别 ML 研发自主性等级 1 的具体评估标准。你将如何外部测量它？
 
-4. Sandbagging is in OpenAI's Research Categories. Design an evaluation that would force a sandbagging model to reveal its actual capability. Reference the Lesson 1 eval-context-gaming discussion.
+4. 沙袋行为在 OpenAI 研究类别中。设计一个评估，迫使沙袋模型暴露其实际能力。参考第 1 课评估上下文游戏讨论。
 
-5. Compare the three policies on a specific capability (your choice). Name which policy's classification you find most rigorous and which least. Justify with source text.
+5. 在特定能力（你选择）上比较三个策略。命名你认为最严谨和最不严谨的策略。用源文本证明。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |---|---|---|
-| Preparedness Framework | "OpenAI's scaling policy" | PF v2 (April 2025); Tracked vs Research categories |
-| Tracked Category | "Mandatory mitigation" | Triggers Capabilities + Safeguards Reports; SAG review |
-| Research Category | "Monitored only" | Tracked but no automatic mitigation; includes Long-range Autonomy |
-| Frontier Safety Framework | "DeepMind's scaling policy" | FSF v3 (Sept 2025) + Tracked Capability Levels (Apr 2026) |
-| CCL | "Critical Capability Level" | DeepMind threshold per domain (Cyber, Bio, ML R&D, CBRN) |
-| ML R&D autonomy level 1 | "R&D automation" | Fully automate AI R&D pipeline at competitive cost |
-| Sandbagging | "Strategic underperformance" | Model underperforms on evals; in OpenAI Research Categories |
-| Instrumental reasoning | "Means-ends reasoning" | Reasoning about how to achieve goals; target of DeepMind monitoring |
+| 准备框架 | "OpenAI 的扩展政策" | PF v2（2025 年 4 月）；追踪 vs 研究类别 |
+| 追踪类别 | "强制缓解" | 触发能力 + 安全报告；SAG 审查 |
+| 研究类别 | "仅监控" | 追踪但无自动缓解；包括长期自主性 |
+| 前沿安全框架 | "DeepMind 的扩展政策" | FSF v3（2025 年 9 月）+ 追踪能力等级（2026 年 4 月） |
+| CCL | "关键能力等级" | DeepMind 按领域（网络、生物、ML 研发、CBRN）的阈值 |
+| ML 研发自主性等级 1 | "研发自动化" | 以有竞争力的成本完全自动化 AI 研发管线 |
+| 沙袋行为 | "战略性表现不佳" | 模型在评估中表现不佳；在 OpenAI 研究类别中 |
+| 工具性推理 | "手段-目的推理" | 关于如何实现目标的推理；DeepMind 监控的目标 |
 
-## Further Reading
+## 延伸阅读
 
-- [OpenAI — Updating our Preparedness Framework](https://openai.com/index/updating-our-preparedness-framework/) — v2 announcement.
-- [OpenAI — Preparedness Framework v2 PDF](https://cdn.openai.com/pdf/18a02b5d-6b67-4cec-ab64-68cdfbddebcd/preparedness-framework-v2.pdf) — full document.
-- [DeepMind — Strengthening our Frontier Safety Framework](https://deepmind.google/blog/strengthening-our-frontier-safety-framework/) — FSF v3 announcement.
-- [DeepMind — Updating the Frontier Safety Framework (April 2026)](https://deepmind.google/blog/updating-the-frontier-safety-framework/) — Tracked Capability Levels addition.
-- [Gemini 3 Pro FSF Report](https://storage.googleapis.com/deepmind-media/gemini/gemini_3_pro_fsf_report.pdf) — example of an FSF-format Risk Report.
+- [OpenAI — 更新我们的准备框架](https://openai.com/index/updating-our-preparedness-framework/) — v2 公告。
+- [OpenAI — 准备框架 v2 PDF](https://cdn.openai.com/pdf/18a02b5d-6b67-4cec-ab64-68cdfbddebcd/preparedness-framework-v2.pdf) — 完整文档。
+- [DeepMind — 加强我们的前沿安全框架](https://deepmind.google/blog/strengthening-our-frontier-safety-framework/) — FSF v3 公告。
+- [DeepMind — 更新前沿安全框架（2026 年 4 月）](https://deepmind.google/blog/updating-the-frontier-safety-framework/) — 追踪能力等级新增。
+- [Gemini 3 Pro FSF 报告](https://storage.googleapis.com/deepmind-media/gemini/gemini_3_pro_fsf_report.pdf) — FSF 格式风险报告示例。

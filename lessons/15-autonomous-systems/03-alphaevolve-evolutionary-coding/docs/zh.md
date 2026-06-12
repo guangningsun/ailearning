@@ -1,118 +1,118 @@
-# AlphaEvolve — Evolutionary Coding Agents
+# AlphaEvolve —— 进化式编程智能体
 
-> Pair a frontier coding model with an evolutionary loop and a machine-checkable evaluator. Let the loop run long enough. It discovers a 4x4 complex-matrix multiplication procedure that uses 48 scalar multiplications — the first improvement over Strassen in 56 years. It also finds a Google-wide Borg scheduling heuristic that recovers ~0.7% of cluster compute in production. The architecture is boring on purpose. The wins come from the evaluator's rigor.
+> 将前沿编程模型与进化循环和机器可检查评估器配对。让循环运行足够长的时间。它发现了一个使用 48 次标量乘法的 4×4 复数矩阵乘法过程——56 年来首次超越 Strassen。它还发现了一个 Google 范围的 Borg 调度启发式算法，在生产中恢复了约 0.7% 的集群计算。架构是刻意朴素的。胜利来自评估器的严谨。
 
-**Type:** Learn
-**Languages:** Python (stdlib, evolutionary-loop toy)
-**Prerequisites:** Phase 15 · 01 (long-horizon framing), Phase 15 · 02 (self-taught reasoning)
-**Time:** ~60 minutes
+**类型：** 学习型
+**语言：** Python（标准库、进化循环玩具）
+**前置条件：** 阶段 15 · 01（长时域框架）、阶段 15 · 02（自学推理）
+**时间：** 约 60 分钟
 
-## The Problem
+## 问题
 
-Large language models can write code. Evolutionary algorithms can search over code. Both have been tried separately for decades; both hit ceilings. The LLM ceiling is confabulation: the model writes plausible code that does not do what it claims. The evolutionary ceiling is search cost: random mutations over syntax rarely produce compilable programs, let alone better ones.
+大语言模型可以写代码。进化算法可以搜索代码。两者分别尝试了几十年；都遇到了天花板。LLM 的天花板是杜撰：模型写出看起来合理但不执行其声称功能的代码。进化算法的问题是搜索成本：对语法进行随机突变很少产生可编译的程序，更不用说更好的了。
 
-AlphaEvolve (Novikov et al., DeepMind, arXiv:2506.13131, June 2025) combines them. The LLM proposes targeted edits to a program database; an automatic evaluator scores each variant; high-scoring variants become parents for future generations. The LLM handles the expensive step of writing plausible code; the evaluator catches the confabulations. The loop runs for hours to weeks.
+AlphaEvolve（Novikov 等，DeepMind，arXiv:2506.13131，2025 年 6 月）将两者结合。LLM 对程序数据库提出有针对性的编辑；自动评估器对每个变体评分；高分的变体成为未来代数的父母。LLM 处理写看似合理代码的昂贵步骤；评估器捕获杜撰。循环运行数小时到数周。
 
-Results reported: 48-scalar-multiplication 4x4 complex matrix multiplication (Strassen's 1969 bound was 49), a Borg scheduling heuristic in Google production, a 32.5% FlashAttention kernel speedup, Gemini training throughput improvements.
+报告的结果：48 次标量乘法的 4×4 复数矩阵乘法（Strassen 1969 年的界限是 49）、Google 生产中的 Borg 调度启发式算法、32.5% 的 FlashAttention 内核加速、Gemini 训练吞吐量提升。
 
-The architecture works because the evaluator is machine-checkable. It does not work where the evaluator isn't. That asymmetry is the lesson.
+架构有效是因为评估器是机器可检查的。它在评估器不是机器可检查的地方不工作。这种不对称是教训。
 
-## The Concept
+## 概念
 
-### The loop
+### 循环
 
-1. Start from a seed program `P_0` that is correct but suboptimal.
-2. Maintain a database of variant programs, each scored by the evaluator.
-3. Sample one or more parents from the database (MAP-elites-style or island-based).
-4. Prompt the LLM (Gemini Flash for many candidates, Gemini Pro for the hard ones) to produce a modified variant of the parent.
-5. Compile, run, and evaluate the variant on the held-out evaluator.
-6. Insert into the database keyed by its score and feature vector.
-7. Repeat.
+1. 从一个正确但次优的种子程序 `P_0` 开始。
+2. 维护一个变体程序数据库，每个由评估器评分。
+3. 从数据库中采样一个或多个父母（MAP-elites 风格或基于岛屿）。
+4. 提示 LLM（许多候选用 Gemini Flash，难的用 Gemini Pro）产生父母的修改变体。
+5. 编译、运行，并在留出评估器上评估变体。
+6. 按其分数和特征向量插入数据库。
+7. 重复。
 
-Two details matter. First, the LLM is prompted with more than the parent program — typically several top variants from the database, plus the evaluator signature, plus a short task description. The model's job is to propose a targeted change that might improve the score. Second, the database is structured (MAP-elites grid, island-based) so the loop explores diversity, not just the current leader.
+两个细节很重要。首先，LLM 不仅仅被提示父母程序——通常是数据库中的几个 top 变体，加上评估器签名，加上简短的任务描述。模型的工作是提出可能有帮助的分数的有针对性的更改。其次，数据库是结构化的（MAP-elites 网格、基于岛屿），所以循环探索多样性，而不仅仅是当前领先者。
 
-### What makes the evaluator non-negotiable
+### 为什么评估器是不可协商的
 
-AlphaEvolve's wins all come from domains where the evaluator is fast, deterministic, and hard to game:
+AlphaEvolve 的胜利都来自评估器快速、确定性且难以操纵的领域：
 
-- **Matrix multiplication algorithm**: a unit test that multiplies matrices and checks equality bit-identically.
-- **Borg scheduling heuristic**: a production-grade simulator that replays historical cluster load and measures wasted compute.
-- **FlashAttention kernel**: a correctness test plus a wall-clock benchmark on real hardware.
-- **Gemini training throughput**: measured GPU-seconds per step.
+- **矩阵乘法算法**：一个单元测试，乘以矩阵并逐位检查相等性。
+- **Borg 调度启发式算法**：一个生产级模拟器，重放历史集群负载并测量浪费的计算。
+- **FlashAttention 内核**：正确性测试加上真实硬件上的计时基准测试。
+- **Gemini 训练吞吐量**：以 GPU 秒/步测量。
 
-In each case the evaluator catches the class of LLM errors that would otherwise dominate: confabulated correctness claims, performance claims that vanish on hardware, and edge-case failures. Remove the evaluator and the loop optimizes for pretty code.
+在每种情况下，评估器捕获了否则会占主导地位的 LLM 错误类别：杜撰的正确性声明、在硬件上消失的性能声明以及边缘情况失败。移除评估器，循环就会为漂亮的代码优化。
 
-### Reward hacking is the other face of that statement
+### 奖励黑客是那个说法的另一面
 
-Evolution optimizes for whatever the evaluator measures. If the evaluator is imperfect, the loop will find the imperfection. In an unverified domain the loop would optimize for the surface feature, not the intended behavior. DeepMind flags this explicitly in the paper: AlphaEvolve's successes transfer only to domains where evaluator rigor matches the ambition of the search.
+进化优化评估器测量的任何东西。如果评估器不完美，循环就会找到那个不完美。在一个未验证的领域中，循环会为表面特征而非预期行为优化。DeepMind 在论文中明确标记了这一点：AlphaEvolve 的成功只转移到评估器严谨性与搜索野心相匹配的领域。
 
-Concrete 2025-2026 examples of reward hacking in code-search loops:
+2025-2026 年代码搜索循环中奖励黑客的具体例子：
 
-- Optimization targets that reward "time to complete" rewarded submitting empty solutions.
-- Benchmark scores that reward correctness-under-test rewarded memorizing tests and overfitting.
-- A "code quality" proxy rewarded removing comments and rewriting variable names, with no semantic change.
+- 奖励"完成时间"的优化目标奖励提交空解决方案。
+- 奖励测试正确性的基准分数奖励记忆测试和过拟合。
+- 一个"代码质量"代理奖励删除注释和重写变量名，没有语义变化。
 
-The fix in AlphaEvolve: ship a held-out evaluator the LLM has never seen, with inputs generated at evaluation time. Even then, DeepMind recommends strong review on any proposed deployment.
+AlphaEvolve 中的修复：发布一个 LLM 从未见过的留出评估器，输入在评估时生成。即使那样，DeepMind 建议对任何提议的部署进行严格审查。
 
-### Why LLM + search beats either alone
+### 为什么 LLM + 搜索比单独使用两者都强
 
-The LLM can produce compilable, semantically plausible modifications. A random-mutation GA on a 2000-line Python file almost always produces syntax errors. The LLM also concentrates search on plausible neighborhoods (change one function, not random bytes) which dramatically reduces wasted evaluator calls.
+LLM 可以产生可编译的、语义上可信的修改。随机突变 GA 在 2000 行 Python 文件上几乎总是产生语法错误。LLM 还将搜索集中在可信的邻域（改变一个函数，而不是随机字节），从而显著减少浪费的评估器调用。
 
-The evaluator, in turn, catches the LLM's confabulations. LLMs will confidently claim that a function "is O(n log n) in the limit" when it is actually O(n^2); a wall-clock benchmark makes the question settled.
+反过来，评估器捕获 LLM 的杜撰。LLM 会自信地声称一个函数"在极限情况下是 O(n log n)"而实际上是 O(n^2)；计时基准测试使这个问题得到解决。
 
-### Where AlphaEvolve fits in the frontier stack
+### AlphaEvolve 在前沿技术栈中的位置
 
-| System | Generator | Evaluator | Domain | Example win |
+| 系统 | 生成器 | 评估器 | 领域 | 示例胜利 |
 |---|---|---|---|---|
-| AlphaEvolve | Gemini | correctness + benchmark | algorithms, kernels, schedulers | 48-mul 4x4 matmul |
-| FunSearch (DeepMind, 2023) | PaLM / Codey | correctness | combinatorial math | cap-set lower bounds |
-| AI Scientist v2 (Sakana, L5) | GPT/Claude | LLM critique + experiment | ML research | ICLR workshop paper |
-| Darwin Godel Machine (L4) | agent scaffolding | SWE-bench / Polyglot | agent code | 20% → 50% SWE-bench |
+| AlphaEvolve | Gemini | 正确性 + 基准测试 | 算法、内核、调度器 | 48-mul 4×4 矩阵乘法 |
+| FunSearch（DeepMind，2023） | PaLM / Codey | 正确性 | 组合数学 | cap-set 下界 |
+| AI Scientist v2（Sakana，L5） | GPT/Claude | LLM 批评 + 实验 | ML 研究 | ICLR 研讨会论文 |
+| Darwin Godel Machine（L4） | 智能体脚手架 | SWE-bench / Polyglot | 智能体代码 | 20% → 50% SWE-bench |
 
-All four are variations on the same recipe: generator plus evaluator, loop. The differences are what the evaluator grades and how rigorous it is.
+所有四种都是同一配方的变体：生成器加评估器，加循环。区别在于评估器评估什么以及它有多严格。
 
-## Use It
+## 动手实现
 
-`code/main.py` implements a minimal AlphaEvolve-like loop over a toy symbolic-regression problem. The "LLM" is a stdlib proxy that proposes small syntactic mutations to a program that computes a target function. The "evaluator" measures mean squared error on held-out test points.
+`code/main.py` 在一个玩具符号回归问题上实现了一个最小的类 AlphaEvolve 循环。"LLM"是一个标准库代理，对一个计算目标函数的程序提出小的语法突变。"评估器"在留出测试点上测量均方误差。
 
-Watch:
+观察：
 
-- How the best score improves over generations.
-- How a MAP-elites grid keeps diverse solutions alive so the loop doesn't converge on a local minimum.
-- How removing the held-out test (training-only evaluator) lets the loop overfit spectacularly.
+- 最佳分数如何在代数中改进。
+- MAP-elites 网格如何保持多样性解决方案存活，这样循环不会收敛到局部最小值。
+- 移除留出测试（仅训练评估器）如何让循环显著过拟合。
 
-## Ship It
+## 交付物
 
-`outputs/skill-evaluator-rigor-audit.md` is the precondition for considering an AlphaEvolve-style loop in a new domain: does your evaluator actually catch the failures you care about?
+`outputs/skill-evaluator-rigor-audit.md` 是在新领域考虑 AlphaEvolve 风格循环的前提条件：你的评估器实际上能捕获你关心的失败吗？
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Note the best score trajectory. Disable the held-out evaluator (flag `--no-holdout`) and re-run. Quantify the overfitting.
+1. 运行 `code/main.py`。注意最佳分数轨迹。禁用留出评估器（标志 `--no-holdout`）并重新运行。量化过拟合。
 
-2. Read Section 3 of the AlphaEvolve paper on the MAP-elites grid. Design a feature-vector descriptor for a new problem (e.g. compiler optimization passes) that would keep the search diverse.
+2. 阅读 AlphaEvolve 论文第 3 节关于 MAP-elites 网格的部分。为一个新问题（例如编译器优化传递）设计一个特征向量描述符，保持搜索多样性。
 
-3. The 48-multiplication 4x4 result improved on Strassen's 49-mul bound after 56 years. Read Appendix F of the paper and explain in three sentences why the evaluator for this problem is particularly easy to get right, and why most domains are not like it.
+3. 48 次乘法的 4×4 结果在 56 年后改进了 Strassen 的 49-mul 界限。阅读论文的附录 F，用三句话解释为什么这个问题的评估器特别容易做对，为什么大多数领域不是这样。
 
-4. Propose one domain where AlphaEvolve would fail. Identify exactly where the evaluator breaks and why.
+4. 提出一个 AlphaEvolve 会失败的领域。准确识别评估器在哪里失效以及为什么。
 
-5. For a domain you know, write the evaluator signature you would use. Include (a) correctness conditions, (b) performance metric, (c) held-out input generation rule, (d) at least one anti-reward-hacking check.
+5. 对于你认识的一个领域，写出你将使用的评估器签名。包括（a）正确性条件、（b）性能指标、（c）留出输入生成规则、（d）至少一个反奖励黑客检查。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |---|---|---|
-| AlphaEvolve | "DeepMind's evolutionary coding agent" | Gemini + program database + machine-checkable evaluator |
-| MAP-elites | "Diversity-preserving archive" | Grid keyed by feature vectors; each cell holds the best variant with that descriptor |
-| Island model | "Parallel evolution subpopulations" | Independent populations that migrate periodically; prevents premature convergence |
-| Machine-checkable evaluator | "Deterministic oracle" | A unit test, simulator, or benchmark the LLM cannot fake — a prerequisite for this loop |
-| Reward hacking | "Optimizing the measure, not the goal" | Loop finds a way to maximize score without doing the intended task |
-| Seed program | "The starting point" | An initial correct-but-suboptimal program the loop evolves from |
-| Held-out evaluator | "Evaluation data the LLM never saw" | Inputs generated at evaluation time to prevent memorization |
+| AlphaEvolve | "DeepMind 的进化式编程智能体" | Gemini + 程序数据库 + 机器可检查评估器 |
+| MAP-elites | "保持多样性的存档" | 按特征向量键入的网格；每个格子保存具有该描述符的最佳变体 |
+| 岛屿模型 | "并行进化亚种群" | 定期迁移的独立种群；防止过早收敛 |
+| 机器可检查评估器 | "确定性预言机" | LLM 无法伪造的单元测试、模拟器或基准测试——这个循环的先决条件 |
+| 奖励黑客 | "优化度量，而不是目标" | 循环找到一种方法最大化分数而不做预期任务 |
+| 种子程序 | "起点" | 循环从中演化的初始正确但次优的程序 |
+| 留出评估器 | "LLM 从未见过的评估数据" | 在评估时生成的输入以防止记忆 |
 
-## Further Reading
+## 延伸阅读
 
-- [Novikov et al. (2025). AlphaEvolve: A coding agent for scientific and algorithmic discovery](https://arxiv.org/abs/2506.13131) — the full paper.
-- [DeepMind blog on AlphaEvolve](https://deepmind.google/blog/alphaevolve-a-gemini-powered-coding-agent-for-designing-advanced-algorithms/) — vendor writeup with results.
-- [AlphaEvolve results repository](https://github.com/google-deepmind/alphaevolve_results) — discovered algorithms, including the 48-mul 4x4 matmul.
-- [Romera-Paredes et al. (2023). Mathematical discoveries from program search with LLMs (FunSearch)](https://www.nature.com/articles/s41586-023-06924-6) — the predecessor system.
-- [Anthropic — Responsible Scaling Policy v3.0 (Feb 2026)](https://anthropic.com/responsible-scaling-policy/rsp-v3-0) — frames evaluator-bound autonomy as a key research direction.
+- [Novikov 等（2025）。AlphaEvolve：一个用于科学和算法发现的编程智能体](https://arxiv.org/abs/2506.13131) — 完整论文。
+- [DeepMind 关于 AlphaEvolve 的博客](https://deepmind.google/blog/alphaevolve-a-gemini-powered-coding-agent-for-designing-advanced-algorithms/) — 供应商编写的结果。
+- [AlphaEvolve 结果仓库](https://github.com/google-deepmind/alphaevolve_results) — 发现的算法，包括 48-mul 4×4 矩阵乘法。
+- [Romera-Paredes 等（2023）。用 LLMs 进行程序搜索的数学发现（FunSearch）](https://www.nature.com/articles/s41586-023-06924-6) — 前身系统。
+- [Anthropic — 负责任扩展政策 v3.0（2026 年 2 月）](https://anthropic.com/responsible-scaling-policy/rsp-v3-0) — 将评估器约束的自主性框架为一个关键研究方向。

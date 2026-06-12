@@ -1,124 +1,124 @@
-# Checkpoints and Rollback
+# 检查点与回滚
 
-> Every graph-state transition persists. When a worker crashes, its lease expires and another worker picks up at the latest checkpoint. Cloudflare Durable Objects hold state across hours or weeks. Propose-then-commit (Lesson 15) defines a rollback plan per action. Post-action verification closes the loop. EU AI Act Article 14 makes effective human oversight mandatory for high-risk systems — in practice this means checkpoints must be queryable, rollbacks must be rehearsed, and the audit trail must survive a deploy. The sharp failure mode: without idempotency keys and precondition checks, a retry after a transient failure can double-execute an already-approved action. Post-action verification is what catches it.
+> 每一次图状态转换都会持久化。当工作进程崩溃时，其租约过期，另一个工作进程从最新的检查点恢复。Cloudflare Durable Objects 跨越数小时乃至数周保持状态。提议-然后-提交（第十五课）为每个动作定义了回滚计划。后动作验证则闭合了这个循环。欧盟 AI 法案第 14 条要求高风险系统必须具备有效的人工监督——在实践中，这意味着检查点必须可查询、回滚必须经过演练、审计跟踪必须能在部署后存活。最尖锐的失败模式：没有幂等键和前置条件检查，瞬时失败后的重试会导致已批准的动作被双重执行。后动作验证正是捕获这类问题的机制。
 
-**Type:** Learn
-**Languages:** Python (stdlib, checkpoint and rollback state machine)
-**Prerequisites:** Phase 15 · 12 (Durable execution), Phase 15 · 15 (Propose-then-commit)
-**Time:** ~60 minutes
+**类型：** 学习型
+**语言：** Python（标准库，检查点和回滚状态机）
+**前置条件：** 第十五阶段 · 12（持久化执行），第十五阶段 · 15（提议-然后-提交）
+**时间：** 约 60 分钟
 
-## The Problem
+## 问题
 
-Durable execution (Lesson 12) makes a crashed agent resumable. Propose-then-commit (Lesson 15) makes an approved action auditable. This lesson joins them: what happens when an approved action executes partially, crashes, and resumes? When does the rollback run, and against what state?
+持久化执行（第十二课）使崩溃后的智能体可恢复。提议-然后-提交（第十五课）使已批准的动作可审计。这一课将两者结合：已批准的动作在部分执行后崩溃、然后恢复时会发生什么？回滚何时运行，以什么状态为基础？
 
-Real systems wire this up differently:
+真实系统接入方式各异：
 
-- **LangGraph** checkpoints every graph-state transition to PostgreSQL. On worker crash, the lease releases and another worker resumes at the latest checkpoint. Workflows pause on `interrupt()`, which itself persists.
-- **Cloudflare Durable Objects** hold per-key state across hours or weeks. Co-locate the computation with the storage for the approved action.
-- **Microsoft Agent Framework** exposes `Checkpoint` primitives in the workflow API; replay plus idempotency covers retries.
+- **LangGraph** 将每个图状态转换检查点到 PostgreSQL。工作进程崩溃时租约释放，另一个工作进程从最新检查点恢复。workflows 在 `interrupt()` 处暂停，而 `interrupt()` 本身是持久化的。
+- **Cloudflare Durable Objects** 跨小时或周保持每个键的状态。将计算与已批准动作的存储共存。
+- **Microsoft Agent Framework** 在 workflow API 中暴露 `Checkpoint` 原语；重放加幂等覆盖重试。
 
-In every case, the combination that actually works is: idempotency key (prevents double-execute) + precondition check (state is still what we approved against) + post-action verify (the side effect actually happened) + rollback on verify-fail.
+每种情况下，真正有效的组合都是：幂等键（防止双重执行）+ 前置条件检查（状态仍与批准时一致）+ 后动作验证（副作用实际已发生）+ 验证失败时回滚。
 
-## The Concept
+## 概念
 
-### Every transition persists
+### 每个转换都会持久化
 
-A graph-state transition is any step that moves the workflow from one named state to another. Naive implementations persist only at specific commit points; production implementations persist every transition. The cost (a few extra writes) is small relative to the reliability gain (replay lands anywhere, lease recovery is precise).
+图状态转换是指将 workflow 从一个命名状态移动到另一个命名状态的任何步骤。 naive 实现仅在特定提交点持久化；生产实现则持久化每个转换。代价（几次额外的写操作）相对于可靠性收益（重放可到达任何位置，租约恢复精确）是很小的。
 
-### Lease recovery
+### 租约恢复
 
-When a worker crashes, the workflow is not lost; the lease (a short-lived claim that this worker is executing this run) simply expires. Another worker picks up the latest checkpoint and resumes. The lease mechanism is what lets production systems survive rolling deploys without losing in-flight work.
+当工作进程崩溃时，workflow 不会丢失；租约（该工作进程正在执行此运行的短期声明）只是过期。另一个工作进程获取最新检查点并恢复。租约机制使得生产系统能够在滚动部署中存活而不丢失进行中的工作。
 
-### Idempotency plus preconditions
+### 幂等加前置条件
 
-Idempotency alone is not enough. Consider: a workflow is approved to "transfer $100 from A to B when balance > $1000." The workflow is committed, crashes mid-execution, and resumes. If only the idempotency key is checked, and the execution resumes, the transfer runs once (correct). But consider that between crash and resume, A's balance drops to $500 via a different workflow. The idempotency check still passes; the precondition does not. Without a precondition check, we ship an overdraft.
+仅有幂等是不够的。考虑：一个 workflow 被批准"当余额 > $1000 时从 A 向 B 转账 $100"。workflow 已提交，在执行中途崩溃并恢复。如果只检查幂等键，执行恢复，转账运行一次（正确）。但考虑在崩溃和恢复之间，A 的余额通过另一个 workflow 降至 $500。幂等检查仍然通过；前置条件没有。缺少前置条件检查，我们会发出一笔透支。
 
-Every consequential action needs both:
+每个重大动作都需要两者：
 
-- **Idempotency key**: prevents double-execute.
-- **Precondition check**: confirms the state is still consistent with what was approved.
+- **幂等键**：防止双重执行。
+- **前置条件检查**：确认状态仍与批准的动作一致。
 
-### Post-action verification
+### 后动作验证
 
-"The tool returned 200" is not verification. Real verification re-reads the target state and confirms the side effect actually happened. Patterns:
+"工具返回 200"不是验证。真正的验证是重新读取目标状态并确认副作用实际已发生。模式：
 
-- Database update: `UPDATE ... RETURNING *` then assert the returned row matches intended state.
-- Email send: check sent-folder for the message ID after submission.
-- File write: read the file back and hash it.
-- API call: follow-up `GET` on the target resource.
+- 数据库更新：`UPDATE ... RETURNING *` 然后断言返回的行与预期状态匹配。
+- 邮件发送：提交后在已发文件夹中查找消息 ID。
+- 文件写入：读回文件并对其哈希。
+- API 调用：对目标资源进行后续 `GET`。
 
-If verify fails, the workflow is in a known-bad state. Rollback engages.
+如果验证失败，workflow 处于已知坏状态。回滚启动。
 
-### Rollback plans
+### 回滚计划
 
-Every consequential action in propose-then-commit (Lesson 15) carries a rollback plan. Types:
+提议-然后-提交（第十五课）中的每个重大动作都带有回滚计划。类型：
 
-- **In-band rollback**: reverse the side effect directly (`DELETE` after `INSERT`, `Send-correction-email` after send).
-- **Compensating transaction**: a new action that neutralizes the original (standard SAGA pattern).
-- **Out-of-band rollback**: alert a human, pause the workflow, leave the bad state for investigation.
+- **带内回滚**：直接反转副作用（`INSERT` 后 `DELETE`，发送后 `Send-correction-email`）。
+- **补偿事务**：一个新的动作，抵消原始动作（标准 SAGA 模式）。
+- **带外回滚**：警告人类，暂停 workflow，留着坏状态供调查。
 
-No-op rollback ("we cannot undo this") must be named in the proposal. Actions with no rollback require stronger HITL at commit time (Lesson 15 challenge-and-response).
+无操作回滚（"我们无法撤销"）必须在提议中命名。无回滚的动作在提交时需要更强的人工干预（第十五课 挑战-响应）。
 
-### EU AI Act Article 14 operational reading
+### 欧盟 AI 法案第 14 条操作解读
 
-Article 14 requires "effective human oversight" for high-risk systems. In operational terms, implementers read it as:
+第 14 条要求高风险系统必须具备"有效的人工监督"。在操作层面，实施者将其解读为：
 
-- Checkpoints are queryable by an auditor.
-- Rollbacks are rehearsed (tested end-to-end at least once).
-- The audit trail survives a deploy (checkpoint backend is not ephemeral).
-- Failed verifications are alerted on, not silently logged.
+- 检查点可被审计员查询。
+- 回滚经过演练（至少端到端测试一次）。
+- 审计跟踪能在部署后存活（检查点后端不是临时的）。
+- 验证失败会触发警报，而非静默记录。
 
-A workflow that crashes mid-commit, resumes, and completes the side effect without a verify + rollback pathway does not survive the Article 14 test.
+一个在提交中途崩溃、恢复并完成副作用而没有验证 + 回滚路径的 workflow，无法通过第 14 条测试。
 
-### The sharp failure mode: the double-execute
+### 尖锐的失败模式：双重执行
 
-The most common production incident in this space:
+这个领域最常见的生产事故：
 
-1. Action approved, idempotency key k.
-2. Commit starts, executes, returns 200.
-3. Workflow crashes before persisting the "committed" status.
-4. Workflow resumes; sees "approved but not committed"; re-executes.
-5. Side effect fires twice.
+1. 动作已批准，幂等键 k。
+2. 提交开始，执行，返回 200。
+3. Workflow 在持久化"已提交"状态前崩溃。
+4. Workflow 恢复；看到"已批准但未提交"；重新执行。
+5. 副作用触发两次。
 
-Mitigation: persist an "in-flight" intent before execution, execute with an idempotency key, then mark "committed" only after post-action verification succeeds. If the action fires and the status write fails, you know to verify and (if necessary) re-fire. If the status write succeeds and the action fails, you verify and fire exactly once via the recovery path.
+缓解：在执行前先持久化一个"飞行中"意图，用幂等键执行，然后仅在后动作验证成功后标记"已提交"。如果动作触发但状态写入失败，你已知需要验证并在必要时重新触发。如果状态写入成功而动作失败，你通过恢复路径精确触发一次。
 
-## Use It
+## 使用它
 
-`code/main.py` implements a checkpointed workflow with idempotency, preconditions, verify, and rollback. The driver simulates four scenarios: clean run, retry after crash (idempotency catches), precondition fail (workflow aborts without firing), verify fail (rollback fires).
+`code/main.py` 实现了一个带有幂等、前置条件、验证和回滚的检查点 workflow。驱动程序模拟四种场景：干净运行、崩溃后重试（幂等捕获）、前置条件失败（workflow 中止而不触发）、验证失败（回滚触发）。
 
-## Ship It
+## 交付它
 
-`outputs/skill-rollback-rehearsal.md` designs a rollback-rehearsal test for a proposed workflow and audits the checkpoint backend for audit-trail persistence.
+`outputs/skill-rollback-rehearsal.md` 为提议的 workflow 设计一个回滚演练测试，并审计检查点后端的审计跟踪持久性。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Verify the four scenarios. For the crash-during-commit case, confirm the action fires exactly once across retries.
+1. 运行 `code/main.py`。验证四种场景。对于提交中途崩溃的情况，确认动作在重试中恰好触发一次。
 
-2. Modify the "mark as done first, then do it" pattern so the status write fires after the action. Rerun the crash scenario. Measure how many duplicate actions fire.
+2. 修改"先标记完成，再执行"模式，使状态写入在动作之后触发。重新运行崩溃场景。测量有多少重复动作触发。
 
-3. Design a rollback plan for a specific production action (e.g., "post to a Slack channel"). Classify as in-band, compensating, or out-of-band. Justify the choice.
+3. 为一个特定的生产动作设计回滚计划（例如"发布到 Slack 频道"）。分类为带内、补偿或带外。并说明选择理由。
 
-4. Take one workflow you know. Identify every state transition. Mark each with a durability requirement (persist / do not persist). Count the ones you are currently not persisting.
+4. 拿一个你知道的 workflow。识别每个状态转换。用持久化要求标记每个（持久化 / 不持久化）。计算你当前没有持久化的数量。
 
-5. Rehearsed-rollback test: design an end-to-end test that runs a real workflow, crashes it, and confirms the rollback path fires. What does the test assert?
+5. 演练-回滚测试：设计一个端到端测试，运行一个真实的 workflow，崩溃它，并确认回滚路径触发。测试断言什么？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |---|---|---|
-| Checkpoint | "Save point" | Every graph-state transition persists to a durable store |
-| Lease | "Worker claim" | Short-lived claim that a worker is executing a run; expires on crash |
-| Precondition | "State gate" | Assertion that the state is still consistent with the approved action |
-| Post-action verify | "Re-read check" | Confirm the side effect actually happened in the target system |
-| In-band rollback | "Direct undo" | Reverse the side effect with the inverse operation |
-| Compensating transaction | "SAGA undo" | A new action that neutralizes the original |
-| Mark-as-done-first | "Status write order" | Persist the committed status before returning from commit |
-| Article 14 | "EU AI Act human oversight" | Operational: queryable checkpoints, rehearsed rollbacks, auditable trail |
+| 检查点 | "保存点" | 每个图状态转换都持久化到持久存储 |
+| 租约 | "工作进程声明" | 工作进程正在执行某运行的短期声明；崩溃时过期 |
+| 前置条件 | "状态门控" | 断言状态仍与批准的动作一致 |
+| 后动作验证 | "重读检查" | 确认副作用实际已在目标系统中发生 |
+| 带内回滚 | "直接撤销" | 用逆操作反转副作用 |
+| 补偿事务 | "SAGA 撤销" | 抵消原始动作的新动作 |
+| 先标记完成 | "状态写入顺序" | 在从提交返回前持久化已提交状态 |
+| 第 14 条 | "欧盟 AI 法案人工监督" | 操作层面：可查询的检查点、演练的回滚、可审计的跟踪 |
 
-## Further Reading
+## 延伸阅读
 
-- [Microsoft Agent Framework — Checkpointing and HITL](https://learn.microsoft.com/en-us/agent-framework/workflows/human-in-the-loop) — checkpoint primitives and lease recovery.
-- [Cloudflare Agents — Human in the loop](https://developers.cloudflare.com/agents/concepts/human-in-the-loop/) — Durable Objects as a state substrate.
-- [EU AI Act — Article 14: Human oversight](https://artificialintelligenceact.eu/article/14/) — regulatory baseline.
-- [Anthropic — Measuring agent autonomy in practice](https://www.anthropic.com/research/measuring-agent-autonomy) — reliability framing for long-horizon workflows.
-- [Anthropic — Claude Code Agent SDK: agent loop](https://code.claude.com/docs/en/agent-sdk/agent-loop) — workflow shape for Claude Code Routines.
+- [Microsoft Agent Framework — Checkpointing and HITL](https://learn.microsoft.com/en-us/agent-framework/workflows/human-in-the-loop) — 检查点原语和租约恢复。
+- [Cloudflare Agents — Human in the loop](https://developers.cloudflare.com/agents/concepts/human-in-the-loop/) — Durable Objects 作为状态底层。
+- [EU AI Act — Article 14: Human oversight](https://artificialintelligenceact.eu/article/14/) — 监管基线。
+- [Anthropic — Measuring agent autonomy in practice](https://www.anthropic.com/research/measuring-agent-autonomy) — 长周期 workflow 可靠性框架。
+- [Anthropic — Claude Code Agent SDK: agent loop](https://code.claude.com/docs/en/agent-sdk/agent-loop) — Claude Code Routines 的 workflow 形态。
