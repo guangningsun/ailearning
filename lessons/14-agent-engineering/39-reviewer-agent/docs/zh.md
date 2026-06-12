@@ -1,137 +1,137 @@
-# Reviewer Agent: Separate Builder from Marker
+# 审查 Agent：将构建者与评判者分离
 
-> The agent that wrote the code cannot grade it. A reviewer is a second loop with a different system prompt, a different goal, and read-only access to everything the builder produced. The gap between builder and reviewer is where most reliability lives.
+> 写代码的 Agent 不能给自己的作品评分。审查者是一个带不同系统提示、不同目标且对构建者所有产物只有只读访问权限的第二循环。构建者与审查者之间的 gap 是大多数可靠性所在。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 38 (Verification Gate)
-**Time:** ~55 minutes
+**类型：** 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 38（验证门控）
+**时间：** 约 55 分钟
 
-## Learning Objectives
+## 学习目标
 
-- State why the same agent cannot reliably review its own work.
-- Build a reviewer agent loop that consumes builder artifacts and emits a structured review report.
-- Author a reviewer rubric that grades specific dimensions, not vibes.
-- Wire the reviewer into the workbench so the human review step starts from a real artifact.
+- 阐述为什么同一 Agent 不能可靠地审查自己的工作。
+- 构建一个消费构建者产物并发出结构化审查报告的审查者 Agent 循环。
+- 编写一个对特定维度而非感觉评分的审查量规。
+- 将审查者接入工作台，使人工审查步骤从真实工件开始。
 
-## The Problem
+## 问题
 
-You ask the agent to fix a bug. It edits four files, runs the tests, and reports done. The verification gate (Phase 14 · 38) confirms acceptance ran and scope held. The gate says `passed: true`. You merge. Two days later you find that the fix solved the wrong half of the bug.
+你让 Agent 修一个 bug。它编辑了四个文件，运行了测试，报告完成。验证门控（阶段 14 · 38）确认验收运行了，范围守住了。门控说 `passed: true`。你合并了。两天后你发现修复解决了 bug 的错误一半。
 
-Acceptance is necessary, not sufficient. The reviewer asks the questions acceptance cannot ask: did this solve the right problem? Did it expand scope without flagging it? Did it document assumptions that should have been questioned? Did it leave the workbench in a state the next session can pick up?
+验收是必要条件，非充分条件。审查者问验收无法问的问题：这是解决了正确的问题吗？它是否在未标记的情况下扩大了范围？它是否记录了应该被质疑的假设？它是否将工作台留在了下一次会话可以接手的状态？
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart LR
-  Builder[Builder Agent] --> Artifacts[diff + state + feedback + verdict]
-  Artifacts --> Reviewer[Reviewer Agent]
+  Builder[构建 Agent] --> Artifacts[diff + 状态 + 反馈 + 裁决]
+  Artifacts --> Reviewer[审查 Agent]
   Reviewer --> Rubric[reviewer_checklist.md]
   Reviewer --> Report[review_report.json]
-  Report --> Human[Human Sign-Off]
+  Report --> Human[人类签字]
 ```
 
-### Reviewer rubric
+### 审查量规
 
-Five dimensions, each scored 0 to 2.
+五个维度，每个 0 到 2 分。
 
-| Dimension | Question |
+| 维度 | 问题 |
 |-----------|----------|
-| Problem fit | Did the change solve the task as stated, not a nearby task? |
-| Scope discipline | Were edits confined to the contract or was the contract grown deliberately? |
-| Assumptions | Are all hidden assumptions written down somewhere reviewable? |
-| Verification quality | Does the acceptance command actually prove the goal, or did it prove a weaker version? |
-| Handoff readiness | Could the next session pick up cleanly from the current state? |
+| 问题契合度 | 变更是否解决了任务本身，而非一个附近的任务？ |
+| 范围纪律 | 编辑是否限制在契约内，还是契约被故意扩大了？ |
+| 假设 | 所有隐藏的假设是否都写在了某个可审查的地方？ |
+| 验证质量 | 验收命令是否真正证明了目标，还是只证明了一个更弱的版本？ |
+| 交接就绪度 | 下一个会话能否从前一个状态干净地接手？ |
 
-Total out of 10. A run below 7 is a soft fail; a run below 5 is a hard fail.
+满分 10 分。低于 7 分是软失败；低于 5 分是硬失败。
 
-### The reviewer is a separate role, not a separate model
+### 审查者是独立角色，不是独立模型
 
-You can run the reviewer with the same model as the builder. The discipline is the role separation: different system prompt, different inputs, no write access to the diff. The change in posture is the change in signal.
+你可以用与构建者相同的模型运行审查者。纪律在于角色分离：不同的系统提示、不同的输入、不写入 diff 的权限。姿态的改变就是信号的改变。
 
-### The reviewer cannot edit the diff
+### 审查者不能编辑 diff
 
-The reviewer reads the diff, the state, the feedback, the verdict. It writes a report. It does not patch the diff. If the report says "fix this," the next builder turn does the fix; the reviewer goes back to reviewing. Mixing roles defeats the gap.
+审查者读取 diff、状态、反馈、裁决。它写报告。它不打补丁 diff。如果报告说"修复这个"，下一个构建者回合做修复；审查者回去做审查。混合角色会破坏 gap。
 
-### Reviewer rubric versus verification gate
+### 审查量规与验证门控
 
-The gate (Phase 14 · 38) checks deterministic facts: did acceptance run, did rules pass, did scope hold. The reviewer makes qualitative judgments: was this the right work, is it documented, is the handoff usable. Both are required.
+门控（阶段 14 · 38）检查确定性事实：验收是否运行了、规则是否通过了、范围是否守住了。审查者做定性判断：这是正确的工作吗，它有文档记录吗，交接可用吗。两者都需要。
 
-## Build It
+## 构建它
 
-`code/main.py` implements:
+`code/main.py` 实现：
 
-- A `ReviewerInputs` dataclass bundling the artifacts the reviewer reads.
-- A rubric scorer with one function per dimension. Each function is deterministic and stub-grade for the lesson; real implementations would call an LLM.
-- A `review_report.json` writer with the five scores, the total, and a verdict (`pass`, `soft_fail`, `hard_fail`).
-- Two demo cases: a clean change and a "right tests, wrong problem" change.
+- 一个 `ReviewerInputs` 数据类，捆绑审查者读取的产物。
+- 一个量规评分器，每个维度一个函数。每个函数是确定性的，在课程中是存根级别；真实实现会调用 LLM。
+- 一个 `review_report.json` 写入器，包含五个分数、总分和一个裁决（`pass`、`soft_fail`、`hard_fail`）。
+- 两个演示案例：一个干净的变更和一个"正确测试、错误问题"的变更。
 
-Run it:
+运行它：
 
 ```
 python3 code/main.py
 ```
 
-Output: two review reports written to disk and a console table of dimensional scores.
+输出：两个写入磁盘的审查报告，以及一个维度数分的控制台表格。
 
-## Production patterns in the wild
+## 实际使用中的生产模式
 
-The receipts: Cloudflare's April 2026 AI Code Review system ran 131,246 review runs across 48,095 merge requests in 5,169 repos in 30 days. Median review completed in 3 minutes 39 seconds. Up to seven specialist reviewers (security, performance, code quality, docs, release management, compliance, Engineering Codex) ran in parallel under a Review Coordinator that deduplicated findings and judged severity. Top-tier model reserved exclusively for the coordinator; specialists ran on cheaper tiers.
+实际数据：Cloudflare 的 2026 年 4 月 AI 代码审查系统在 30 天内跨 5,169 个仓库的 48,095 个合并请求运行了 131,246 次审查运行。中位审查在 3 分 39 秒完成。最多七个专业审查者（安全、性能、代码质量、文档、发布管理、合规、工程 Codex）在审查协调器下并行运行，该协调器对发现进行去重并判断严重级别。顶级模型仅保留给协调器；专业审查者在更便宜的层级运行。
 
-Four patterns make this work at scale.
+四种模式使这种规模的工作成为可能。
 
-**Specialist pool, not one big reviewer.** One reviewer with a 5-dimension rubric works for solo repos. Once the codebase has security-critical, performance-critical, and docs surfaces, split into specialists with smaller prompts. The coordinator does deduplication; the specialists never run the full rubric. Model-tier separation falls out: cheap specialists, expensive coordinator.
+**专业池，而非一个大审查者。** 一个带 5 维度量规的审查者适用于 solo 仓库。一旦代码库有了安全关键、性能关键和文档表面，就拆分为专业审查者，每个有更小的提示。协调器做去重；专业审查者永远不需要运行完整的量规。模型层级分离自然产生：便宜的专业审查者，昂贵的协调器。
 
-**Bias mitigation as design requirement, not optimization.** LLM judges show four reliable biases (Adnan Masood, April 2026): position bias (GPT-4 ~40% inconsistent on (A,B) vs (B,A) ordering), verbosity bias (~15% score inflation toward longer outputs), self-preference (judges prefer outputs from the same model family), authority (judges over-rate references to known authors). Mitigations: evaluate both orderings and only count consistent wins; use 1-4 scales that explicitly reward conciseness; rotate judges across model families; strip author names before scoring.
+**偏差缓解作为设计需求，而非优化。** LLM 评判者表现出四种可靠偏差（Adnan Masood，2026 年 4 月）：位置偏差（GPT-4 在 (A,B) vs (B,A) 顺序上约 40% 不一致）、冗长偏差（~15% 分数膨胀朝向更长输出）、自我偏好（评判者偏爱来自同一模型家族的输出）、权威（评判者对已知作者引用给分过高）。缓解措施：评估两种顺序且仅计算一致获胜；使用 1-4 量表明确奖励简洁；在模型家族间轮换评判者；在评分前剥离作者姓名。
 
-**Calibration set, not vibes.** A 10-20 task historical set with known correct verdicts. Run the reviewer over it on every prompt change. If agreement with the historical record falls below 80%, the rubric needs revision before the reviewer ships. This is what every team eventually rediscovers; better to start with it.
+**校准集，而非感觉。** 一个包含已知正确裁决的 10-20 个任务历史集。每次提示变更时对校准集运行审查者。如果与历史记录的一致性低于 80%，审查者发布前量规需要修订。这是每个团队最终都会重新发现的；最好从一开始就以此为基础。
 
-**Hybrid norm with the gate.** Verification gate (Phase 14 · 38) handles the deterministic checks (did acceptance run, did tests pass, did scope hold). Reviewer handles the semantic checks (was this the right work, are assumptions documented, is the handoff usable). Anthropic's 2026 guidance is explicit on this split: don't ask the reviewer to redo what the gate already proves.
+**与门控的混合规范。** 验证门控（阶段 14 · 38）处理确定性检查（验收是否运行了、测试是否通过了、范围是否守住了）。审查者处理语义检查（这是正确的工作吗，假设有文档记录吗，交接可用吗）。Anthropic 的 2026 年指导明确说明这种分离：不要让审查者重做门控已经证明的事情。
 
-## Use It
+## 使用它
 
-Production patterns:
+生产模式：
 
-- **Claude Code subagents.** A reviewer subagent runs after the builder closes a task. It posts a comment on the PR with the rubric scores.
-- **OpenAI Agents SDK handoffs.** Builder hands off to Reviewer on task completion. Reviewer can hand back with a list of findings or up to a human.
-- **Two-model pairing.** Builder runs on a faster cheaper model. Reviewer runs on a stronger model with smaller context, focused on judgment.
+- **Claude Code 子 Agent。** 构建者关闭任务后，审查子 Agent 运行。它用维量分数在 PR 上发布评论。
+- **OpenAI Agents SDK 交接。** 构建者在任务完成时交接给审查者。审查者可以交回发现列表，或上报给人类。
+- **双模型配对。** 构建者在更快更便宜的模型上运行。审查者在更强但上下文更小的模型上运行，专注于判断。
 
-The reviewer is the second pair of eyes the workbench grows when humans cannot do every review themselves.
+审查者是工作台在人类无法自行完成每项审查时生长的第二双眼睛。
 
-## Ship It
+## 交付它
 
-`outputs/skill-reviewer-agent.md` generates a project-specific reviewer rubric, a reviewer agent stub wired to the builder's artifacts, and an integration with the verification gate so human review starts from a written report instead of a blank page.
+`outputs/skill-reviewer-agent.md` 生成一个针对项目的审查量规、一个接入构建者产物的审查者 Agent 存根，以及与验证门控的集成，使人工审查从书面报告而非空白页面开始。
 
-## Exercises
+## 练习
 
-1. Add a sixth dimension specific to your product domain. Defend why it is not absorbed by the existing five.
-2. Run the reviewer with two different system prompts (terse, verbose). Which produces a report a human is more likely to read?
-3. Add a `confidence` field per dimension. Refuse to ship the report when confidence in the lowest dimension is below 0.6.
-4. Build a calibration set: 10 historical task close-outs with known correct verdicts. Run the reviewer over them. Where does it disagree with the historical record?
-5. Add a "request more evidence" affordance: the reviewer can ask the builder for a specific test run before scoring. What is the right back-off so this does not loop?
+1. 添加一个特定于你产品领域的第六维度。论证为什么它不能被现有五个维度吸收。
+2. 用两个不同的系统提示（简洁、冗长）运行审查者。哪个更可能产生人类愿意阅读的报告？
+3. 添加每个维度的 `confidence` 字段。当最低维度置信度低于 0.6 时拒绝发出报告。
+4. 构建校准集：10 个有已知正确裁决的历史任务收尾。在它们上面运行审查者。它在哪里与历史记录不一致？
+5. 添加"请求更多证据"功能：审查者可以在评分前请求构建者进行特定测试运行。什么是正确的回退以防止循环？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|----------------|------------------------|
-| Reviewer rubric | "Checklist" | Five-dimension 0-2 scoring with a written question per dimension |
-| Soft fail | "Needs revisions" | Total below 7; builder gets findings to address |
-| Hard fail | "Reject" | Total below 5 or any dimension at 0; halt and surface to human |
-| Role separation | "Different prompt" | Same model can be both roles; the discipline is inputs and posture |
-| Confidence floor | "Don't ship low-signal reports" | Refuse to emit a verdict when the rubric is uncertain |
+| 审查量规 | "检查清单" | 五维度 0-2 评分，每个维度带有书面问题 |
+| 软失败 | "需要修订" | 总分低于 7；构建者获得要处理的发现 |
+| 硬失败 | "拒绝" | 总分低于 5 或任何维度为 0；停止并上报给人类 |
+| 角色分离 | "不同提示" | 同一模型可以充当两个角色；纪律在于输入和姿态 |
+| 置信度下限 | "不发出低信号报告" | 当量规不确定时拒绝发出裁决 |
 
-## Further Reading
+## 延伸阅读
 
 - [OpenAI Agents SDK handoffs](https://platform.openai.com/docs/guides/agents-sdk/handoffs)
 - [Anthropic Claude Code subagents](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sub-agents)
-- [Cloudflare, Orchestrating AI Code Review at Scale](https://blog.cloudflare.com/ai-code-review/) — 7-specialist + coordinator architecture, 131k runs / 30 days
-- [Agent-as-a-Judge: Evaluating Agents with Agents (OpenReview / ICLR)](https://openreview.net/forum?id=DeVm3YUnpj) — DevAI benchmark, 366 hierarchical solution requirements
-- [Adnan Masood, Rubric-Based Evaluations and LLM-as-a-Judge: Methodologies, Biases, Empirical Validation](https://medium.com/@adnanmasood/rubric-based-evals-llm-as-a-judge-methodologies-and-empirical-validation-in-domain-context-71936b989e80) — the 4 biases and mitigations
-- [MLflow, LLM-as-a-Judge Evaluation](https://mlflow.org/llm-as-a-judge) — production tooling for separated builder/evaluator
-- [LangChain, How to Calibrate LLM-as-a-Judge with Human Corrections](https://www.langchain.com/articles/llm-as-a-judge) — calibration-set workflow
+- [Cloudflare, Orchestrating AI Code Review at Scale](https://blog.cloudflare.com/ai-code-review/) — 7 专业审查者 + 协调器架构，131k 次运行 / 30 天
+- [Agent-as-a-Judge: Evaluating Agents with Agents (OpenReview / ICLR)](https://openreview.net/forum?id=DeVm3YUnpj) — DevAI 基准，366 个分层解决方案需求
+- [Adnan Masood, Rubric-Based Evaluations and LLM-as-a-Judge: Methodologies, Biases, Empirical Validation](https://medium.com/@adnanmasood/rubric-based-evals-llm-as-a-judge-methodologies-and-empirical-validation-in-domain-context-71936b989e80) — 四种偏差和缓解措施
+- [MLflow, LLM-as-a-Judge Evaluation](https://mlflow.org/llm-as-a-judge) — 分离构建者/评估者的生产工具
+- [LangChain, How to Calibrate LLM-as-a-Judge with Human Corrections](https://www.langchain.com/articles/llm-as-a-judge) — 校准集工作流
 - [Evidently AI, LLM-as-a-judge: a complete guide](https://www.evidentlyai.com/llm-guide/llm-as-a-judge)
 - [Arize, LLM as a Judge — Primer and Pre-Built Evaluators](https://arize.com/llm-as-a-judge/)
-- Phase 14 · 05 — Self-Refine and CRITIC (single-agent self-review baseline)
-- Phase 14 · 30 — Eval-driven agent development (calibration set generator)
-- Phase 14 · 38 — the verification gate the reviewer reads
-- Phase 14 · 40 — the handoff packet the reviewer report feeds
+- 阶段 14 · 05 — 自我改进和 CRITIC（单 Agent 自我审查基准）
+- 阶段 14 · 30 — 评估驱动的 Agent 开发（校准集生成器）
+- 阶段 14 · 38 — 审查者读取的验证门控
+- 阶段 14 · 40 — 审查报告馈入的交接包

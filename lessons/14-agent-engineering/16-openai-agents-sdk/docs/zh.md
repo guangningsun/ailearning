@@ -1,124 +1,124 @@
-# OpenAI Agents SDK: Handoffs, Guardrails, Tracing
+# OpenAI Agents SDK：交接、护栏、追踪
 
-> OpenAI Agents SDK is the lightweight multi-agent framework built on the Responses API. Five primitives: Agent, Handoff, Guardrail, Session, Tracing. Handoffs are tools named `transfer_to_<agent>`. Guardrails trip on input or output. Tracing is on by default.
+> OpenAI Agents SDK 是建立在 Responses API 上的轻量级多智能体框架。五个原语：Agent、Handoff、Guardrail、Session、Tracing。交接是名为 `transfer_to_<agent>` 的工具。护栏在输入或输出上触发。追踪默认开启。
 
-**Type:** Learn + Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 01 (Agent Loop), Phase 14 · 06 (Tool Use)
-**Time:** ~75 minutes
+**类型：** 学习 + 构建
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 01（智能体循环）、阶段 14 · 06（工具使用）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Name the five primitives of the OpenAI Agents SDK.
-- Explain handoffs: why they are modeled as tools, what name shape the model sees, and how context transfers.
-- Distinguish input guardrails, output guardrails, and tool guardrails; explain `run_in_parallel` vs blocking mode.
-- Implement a stdlib runtime with handoffs + guardrails + span-style tracing.
+- 说出 OpenAI Agents SDK 的五个原语。
+- 解释交接：为什么它们被建模为工具，模型看到什么名称形态，以及上下文如何转移。
+- 区分输入护栏、输出护栏和工具护栏；解释 `run_in_parallel` vs 阻塞模式。
+- 实现带有交接 + 护栏 + span 风格追踪的标准库运行时。
 
-## The Problem
+## 问题
 
-Agents that cannot delegate cleanly end up stuffing everything into one prompt. Agents without guardrails ship PII, policy-violating output, or loop forever. OpenAI's SDK codifies the three primitives that make multi-agent work tractable.
+不能干净地委托的智能体最终会把所有东西塞进一个提示词。没有护栏的智能体会泄露 PII、输出违规策略或永远循环。OpenAI 的 SDK 将使多智能体工作变得可处理的三种原语编纂成典。
 
-## The Concept
+## 概念
 
-### Five primitives
+### 五个原语
 
-1. **Agent.** LLM + instructions + tools + handoffs.
-2. **Handoff.** Delegation to another agent. Represented to the model as a tool named `transfer_to_<agent_name>`.
-3. **Guardrail.** Validation on input (first agent only), output (last agent only), or tool invocation (per function tool).
-4. **Session.** Automatic conversation history across turns.
-5. **Tracing.** Built-in spans for LLM generations, tool calls, handoffs, guardrails.
+1. **Agent。** LLM + 指令 + 工具 + 交接。
+2. **Handoff。** 委托给另一个智能体。向模型表示为名为 `transfer_to_<agent_name>` 的工具。
+3. **Guardrail。** 在输入（仅第一个智能体）、输出（仅最后一个智能体）或工具调用（每个函数工具）上进行验证。
+4. **Session。** 跨轮次的自动对话历史。
+5. **Tracing。** LLM 生成、工具调用、交接、护栏的内置 span。
 
-### Handoffs as tools
+### 作为工具的交接
 
-The model sees `transfer_to_billing_agent` in its tool list. Calling it signals the runtime to:
+模型在其工具列表中看到 `transfer_to_billing_agent`。调用它向运行时发出信号：
 
-1. Copy the conversation context (or collapse it via `nest_handoff_history` beta).
-2. Initialize the target agent with its instructions.
-3. Continue the run with the target agent.
+1. 复制对话上下文（或通过 `nest_handoff_history` beta 将其折叠）。
+2. 用其指令初始化目标智能体。
+3. 用目标智能体继续运行。
 
-This is the supervisor pattern (Lesson 13 / Lesson 28) productized.
+这是监督者模式（第 13 课 / 第 28 课）的产品化。
 
-### Guardrails
+### 护栏
 
-Three flavors:
+三种风格：
 
-- **Input guardrails.** Run on the first agent's input. Reject unsafe or out-of-scope requests before any LLM call.
-- **Output guardrails.** Run on the last agent's output. Catch PII leaks, policy violations, malformed responses.
-- **Tool guardrails.** Run per-function-tool. Validate arguments, check permissions, audit execution.
+- **输入护栏。** 在第一个智能体的输入上运行。在任何 LLM 调用之前拒绝不安全或超出范围请求。
+- **输出护栏。** 在最后一个智能体的输出上运行。捕获 PII 泄露、策略违规、格式错误的响应。
+- **工具护栏。** 每个函数工具运行一次。验证参数、检查权限、审计执行。
 
-Mode:
+模式：
 
-- **Parallel** (default). Guardrail LLM runs alongside the main LLM. Lower tail latency. If tripped, the main LLM's work is discarded (token waste).
-- **Blocking** (`run_in_parallel=False`). Guardrail LLM runs first. If tripped, no tokens wasted on the main call.
+- **并行**（默认）。护栏 LLM 与主 LLM 并行运行。较低的尾部延迟。如果触发，主 LLM 的工作会被丢弃（Token 浪费）。
+- **阻塞**（`run_in_parallel=False`）。护栏 LLM 首先运行。如果触发，主调用不会浪费 Token。
 
-Tripwires raise `InputGuardrailTripwireTriggered` / `OutputGuardrailTripwireTriggered`.
+触发线抛出 `InputGuardrailTripwireTriggered` / `OutputGuardrailTripwireTriggered`。
 
-### Tracing
+### 追踪
 
-On by default. Every LLM generation, tool call, handoff, and guardrail emits a span. `OPENAI_AGENTS_DISABLE_TRACING=1` opts out. `add_trace_processor(processor)` fans spans to your own backend alongside OpenAI's.
+默认开启。每个 LLM 生成、工具调用、交接和护栏都会发出一个 span。`OPENAI_AGENTS_DISABLE_TRACING=1` 选择退出。`add_trace_processor(processor)` 将 span 发送到你自己的后端以及 OpenAI 的后端。
 
-### Sessions
+### 会话
 
-`Session` stores conversation history in a backend (SQLite, Redis, custom). `Runner.run(agent, input, session=session)` auto-loads and appends.
+`Session` 在后端（SQLite、Redis、自定义）存储对话历史。`Runner.run(agent, input, session=session)` 自动加载和追加。
 
-### Where this pattern goes wrong
+### 这个模式哪里出了问题
 
-- **Handoff drift.** Agent A hands off to Agent B which hands back to Agent A. Add a hop counter.
-- **Guardrail bypass.** Tool guardrails only fire on function tools; built-in tools (file reader, web fetch) need separate policy.
-- **Over-tracing.** Sensitive content in spans. Pair with OTel GenAI content-capture rules (Lesson 23) — store externally, reference by ID.
+- **交接漂移。** 智能体 A 交接给智能体 B，智能体 B 又交接回智能体 A。添加一个跳计数器。
+- **护栏绕过。** 工具护栏仅在函数工具上触发；内置工具（文件读取器、网络获取）需要单独的策略。
+- **过度追踪。** Span 中的敏感内容。与 OTel GenAI 内容捕获规则（第 23 课）配对——外部存储，按 ID 引用。
 
-## Build It
+## 构建它
 
-`code/main.py` implements the SDK shape in stdlib:
+`code/main.py` 以标准库形式实现 SDK 形态：
 
-- `Agent`, `FunctionTool`, `Handoff` (as a function tool with transfer semantics).
-- `Runner` with input/output/tool guardrails, handoff dispatch, and hop counter.
-- A simple span emitter to show the trace shape.
-- A triage agent that hands off to billing or support based on the user's query; guardrail trips on one input.
+- `Agent`、`FunctionTool`、`Handoff`（作为具有转移语义的函数工具）。
+- `Runner` 带有输入/输出/工具护栏、交接调度和跳计数器。
+- 一个简单的 span 发射器来显示跟踪形态。
+- 一个分诊智能体，根据用户查询交接给计费或支持；护栏在一个输入上触发。
 
-Run it:
+运行它：
 
 ```
 python3 code/main.py
 ```
 
-The trace shows two successful handoffs, one input guardrail trip, and a span tree mirroring what the real SDK emits.
+跟踪显示两次成功的交接、一次输入护栏触发，以及一个与真实 SDK 发出的 span 树镜像。
 
-## Use It
+## 使用它
 
-- **OpenAI Agents SDK** for OpenAI-first products.
-- **Claude Agent SDK** (Lesson 17) for Claude-first products.
-- **LangGraph** (Lesson 13) when you want explicit state and durable resume.
-- **Custom** when you need exact control (voice, multi-provider, federated deployments).
+- **OpenAI Agents SDK** 用于 OpenAI 优先产品。
+- **Claude Agent SDK**（第 17 课）用于 Claude 优先产品。
+- **LangGraph**（第 13 课）当你想要显式状态和持久恢复时。
+- **自定义** 当你需要精确控制时（语音、多提供商、联合部署）。
 
-## Ship It
+## 发货
 
-`outputs/skill-agents-sdk-scaffold.md` scaffolds an Agents SDK app with a triage agent, handoffs, input/output/tool guardrails, session store, and a trace processor.
+`outputs/skill-agents-sdk-scaffold.md` 搭建一个带有分诊智能体、交接、输入/输出/工具护栏、会话存储和跟踪处理器的 Agents SDK 应用。
 
-## Exercises
+## 练习
 
-1. Add a handoff hop counter: refuse after N transfers. Trace the behavior.
-2. Implement `nest_handoff_history` as an option — collapse prior messages into one summary before transferring.
-3. Write a blocking output guardrail. Compare latency on prompts that would trip it vs ones that pass.
-4. Wire `add_trace_processor` to a JSON logger. What shape does it emit per span?
-5. Read the SDK docs. Port your stdlib toy to `openai-agents-python`. What did you model wrong?
+1. 添加一个交接跳计数器：N 次转移后拒绝。跟踪行为。
+2. 实现 `nest_handoff_history` 作为选项——在转移之前将先前消息折叠成一个摘要。
+3. 编写一个阻塞输出护栏。比较会触发它的提示与通过的提示的延迟。
+4. 将 `add_trace_processor` 连接到一个 JSON 日志记录器。每个 span 发出什么形态？
+5. 阅读 SDK 文档。将你的标准库玩具移植到 `openai-agents-python`。你哪里建模错了？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|----------------|------------------------|
-| Agent | "LLM + instructions" | Agent type in the SDK; owns tools and handoffs |
-| Handoff | "Transfer" | Tool the model calls to delegate to another agent |
-| Guardrail | "Policy check" | Validation on input / output / tool invocation |
-| Tripwire | "Guardrail trip" | Exception raised when guardrail rejects |
-| Session | "History store" | Conversation memory persisted between runs |
-| Tracing | "Spans" | Built-in observability over LLM + tool + handoff + guardrail |
-| Blocking guardrail | "Sequential check" | Guardrail runs first; no token waste on trip |
-| Parallel guardrail | "Concurrent check" | Guardrail runs alongside; lower latency, wastes tokens on trip |
+| Agent | "LLM + 指令" | SDK 中的智能体类型；拥有工具和交接 |
+| Handoff | "转移" | 模型调用以委托给另一个智能体的工具 |
+| Guardrail | "策略检查" | 在输入 / 输出 / 工具调用上的验证 |
+| Tripwire | "护栏触发" | 护栏拒绝时抛出的异常 |
+| Session | "历史存储" | 在运行之间持久化的对话内存 |
+| Tracing | "Span" | LLM + 工具 + 交接 + 护栏的内置可观测性 |
+| Blocking guardrail | "顺序检查" | 护栏首先运行；触发时不浪费 Token |
+| Parallel guardrail | "并发检查" | 护栏并行运行；延迟更低，触发时浪费 Token |
 
-## Further Reading
+## 进一步阅读
 
-- [OpenAI Agents SDK docs](https://openai.github.io/openai-agents-python/) — primitives, handoffs, guardrails, tracing
-- [Claude Agent SDK overview](https://platform.claude.com/docs/en/agent-sdk/overview) — Claude-flavored counterpart
-- [Anthropic, Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — when to reach for handoffs at all
-- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — the standard Agents SDK spans map to
+- [OpenAI Agents SDK 文档](https://openai.github.io/openai-agents-python/) — 原语、交接、护栏、追踪
+- [Claude Agent SDK 概述](https://platform.claude.com/docs/en/agent-sdk/overview) — Claude 风味的对应物
+- [Anthropic，构建有效的智能体](https://www.anthropic.com/research/building-effective-agents) — 何时应该使用交接
+- [OpenTelemetry GenAI 语义约定](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — Agents SDK span 映射到的标准

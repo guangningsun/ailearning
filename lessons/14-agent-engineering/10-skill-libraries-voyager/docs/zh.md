@@ -1,44 +1,44 @@
-# Skill Libraries and Lifelong Learning (Voyager)
+# 技能库与终身学习 (Voyager)
 
-> Voyager (Wang et al., TMLR 2024) treats executable code as a skill. Skills are named, retrievable, composable, and refined by environment feedback. This is the reference architecture for Claude Agent SDK skills, skillkit, and the 2026 skill-library pattern.
+> Voyager (Wang et al., TMLR 2024) 将可执行代码视为技能。技能是有名称的、可检索的、可组合的，并通过环境反馈进行精炼。这是 Claude Agent SDK 技能、skillkit 和 2026 年技能库模式的参考架构。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 07 (MemGPT), Phase 14 · 08 (Letta Blocks)
-**Time:** ~75 minutes
+**类型：** 搭建
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 07 (MemGPT)、阶段 14 · 08 (Letta Blocks)
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Name Voyager's three components — automatic curriculum, skill library, iterative prompting — and the role of each.
-- Explain why Voyager makes the action space code, not primitive commands.
-- Implement a stdlib skill library with registration, retrieval, composition, and failure-driven refinement.
-- Map Voyager's pattern onto the 2026 Claude Agent SDK skills and the skillkit ecosystem.
+- 说出 Voyager 的三个组件 —— 自动课程、技能库、迭代提示 —— 以及各自的作用。
+- 解释为什么 Voyager 将动作空间设为代码而非原始命令。
+- 用标准库实现一个技能库，包含注册、检索、组合和失败驱动的精炼。
+- 将 Voyager 模式映射到 2026 年 Claude Agent SDK 技能和 skillkit 生态系统。
 
-## The Problem
+## 问题
 
-Agents that rebuild every capability from scratch in every session do three things wrong:
+在每个会话中从零重建所有能力的智能体做错了三件事：
 
-1. **Waste tokens.** Every task re-elicits the same reasoning.
-2. **Lose progress.** A correction learned in session A doesn't transfer to session B.
-3. **Fail on long-horizon composition.** Complex tasks need capability hierarchies; one-shot prompts cannot express them.
+1. **浪费 token。** 每个任务都重新 elicits 相同的推理。
+2. **丢失进度。** 在会话 A 中学到的纠正不会传递到会话 B。
+3. **长时序组合失败。** 复杂任务需要能力层级；一次性提示无法表达它们。
 
-Voyager's answer: treat each reusable capability as a named chunk of code stored in a library, retrievable by similarity, composable with other skills, and refined by execution feedback.
+Voyager 的答案是：将每个可重用能力视为一段有名称的代码块，存储在库中，可按相似性检索，可与其他技能组合，并通过执行反馈进行精炼。
 
-## The Concept
+## 概念
 
-### Three components
+### 三个组件
 
-Voyager (arXiv:2305.16291) structures an agent around:
+Voyager (arXiv:2305.16291) 将智能体构建为：
 
-1. **Automatic curriculum.** A curiosity-driven proposer picks the next task based on the agent's current skill set and environment state. Exploration is bottom-up.
-2. **Skill library.** Each skill is executable code. New skills are added when a task succeeds. Skills are retrieved by query-to-description similarity.
-3. **Iterative prompting mechanism.** On failure, the agent receives execution errors, environment feedback, and self-verification output, then refines the skill.
+1. **自动课程。** 一个由好奇心驱动的提议器根据智能体当前技能集和环境状态选择下一个任务。探索是自底向上的。
+2. **技能库。** 每个技能都是可执行代码。当任务成功时添加新技能。技能通过查询到描述的相似性来检索。
+3. **迭代提示机制。** 失败时，智能体收到执行错误、环境反馈和自验证输出，然后精炼技能。
 
-The Minecraft evaluation (Wang et al., 2024): 3.3x more unique items, 8.5x faster stone tools, 6.4x faster iron tools, 2.3x longer map traversal versus baselines. The numbers are Minecraft-specific, but the pattern transfers.
+Minecraft 评估 (Wang et al., 2024)：与基线相比，独特物品增加 3.3 倍，石器快 8.5 倍，铁器快 6.4 倍，地图遍历长 2.3 倍。数字针对 Minecraft，但模式可迁移。
 
-### Action space = code
+### 动作空间 = 代码
 
-Most agents emit primitive commands. Voyager emits JavaScript functions. A skill is:
+大多数智能体发出原始命令。Voyager 发出 JavaScript 函数。技能是：
 
 ```
 async function craftIronPickaxe(bot) {
@@ -49,95 +49,95 @@ async function craftIronPickaxe(bot) {
 }
 ```
 
-Composed from sub-skills. Stored keyed on description and embedding. Retrieved as a program, not a prompt.
+由子技能组合而成。以描述和 embedding 为键存储。检索时作为一个程序而非提示。
 
-This is the 2026 Claude Agent SDK skill: a named, retrievable chunk of code plus instructions the agent loads on demand.
+这就是 2026 年 Claude Agent SDK 技能：一个有名称的、可按需加载的可检索代码块，加上下文中加载它的指令。
 
-### Skill retrieval
+### 技能检索
 
-New task "make a diamond pickaxe." Agent:
+新任务"制作钻石镐"。智能体：
 
-1. Embeds the task description.
-2. Queries the skill library for top-k similar skills.
-3. Retrieves `craftIronPickaxe`, `mineDiamond`, `placeCraftingTable` etc.
-4. Composes the new skill from retrieved primitives + new logic.
+1. Embed 任务描述。
+2. 查询技能库中相似度最高的 k 个技能。
+3. 检索到 `craftIronPickaxe`、`mineDiamond`、`placeCraftingTable` 等。
+4. 从检索到的原语和新逻辑组合新技能。
 
-This is the pattern MCP resources (Phase 13) and Agent SDK skills implement: retrieval over a knowledge/code surface, scoped to the current task.
+这就是 MCP 资源（阶段 13）和 Agent SDK 技能实现的模式：在一个知识/代码表面上的检索，范围限定在当前任务。
 
-### Iterative refinement
+### 迭代精炼
 
-Voyager's feedback loop:
+ Voyager 的反馈循环：
 
-1. Agent writes a skill.
-2. Skill runs against the environment.
-3. One of three signals returns: `success`, `error` (with stack trace), `self-verification failure`.
-4. Agent rewrites the skill using the signal as context.
-5. Loop until success or max rounds.
+1. 智能体编写一个技能。
+2. 技能在环境中运行。
+3. 三种信号之一返回：`success`、`error`（带堆栈跟踪）、`self-verification failure`。
+4. 智能体使用信号作为上下文重写技能。
+5. 循环直到成功或达到最大轮次。
 
-This is Self-Refine (Lesson 05) applied to code generation with environment-grounded verification. CRITIC (Lesson 05) is the same pattern with external tools as the verifier.
+这就是 Self-Refine（课程 05）应用于代码生成并以环境为验证基础。CRITIC（课程 05）是同一模式，以外部工具为验证器。
 
-### Curriculum and exploration
+### 课程与探索
 
-Voyager's curriculum module proposes tasks like "build a shelter near the lake" based on what the agent has and what it has not yet done. The proposer uses the environment state + skill inventory to pick a task just above current capability — the exploration sweet spot.
+ Voyager 的课程模块根据智能体已有的和尚未做的来提出"在湖泊附近建一个庇护所"之类的任务。提议器使用环境状态 + 技能清单来选择一个刚好超出当前能力范围的任务 —— 探索的甜蜜点。
 
-For production agents this translates to a "what's missing" operator: given the current skill library and a domain, what skills are we not yet covering? Teams typically implement this manually as curriculum review.
+对于生产环境中的智能体，这转化为一个"缺什么"算子：给定当前技能库和一个领域，我们还没有覆盖哪些技能？团队通常将此作为课程审查手动实现。
 
-### Where this pattern goes wrong
+### 这个模式会出问题的地方
 
-- **Skill library rot.** Same skill added 10 times with slightly different descriptions. Add deduplication on write; retrieval returns only one.
-- **Composed-skill drift.** Parent skill depends on a child that was refined. Version skills; a parent pinned to v1 doesn't magically pick up v3.
-- **Retrieval quality.** Vector retrieval over skill descriptions degrades as the library grows past a few hundred. Supplement with tag filters and hard constraints ("only skills with `category=tooling`").
+- **技能库腐化。** 同一个技能以略有不同的描述被添加了 10 次。在写入时做去重；检索只返回一个。
+- **组合技能漂移。** 父技能依赖一个被精炼过的子技能。对技能做版本控制；父技能固定在 v1 不会自动升级到 v3。
+- **检索质量。** 技能描述上的向量检索在库超过几百个后退化。用标签过滤器和硬约束补充（"只返回 `category=tooling` 的技能"）。
 
-## Build It
+## 搭建它
 
-`code/main.py` implements a stdlib skill library:
+`code/main.py` 用标准库实现一个技能库：
 
-- `Skill` — name, description, code (as string), version, tags, dependencies.
-- `SkillLibrary` — register, search (token overlap), compose (topological sort of deps), and refine (version bump on update).
-- A scripted agent that registers three primitive skills, composes a fourth, hits a failure, and refines.
+- `Skill` —— 名称、描述、代码（字符串形式）、版本、标签、依赖。
+- `SkillLibrary` —— 注册、搜索（token 重叠）、组合（依赖的拓扑排序）和精炼（更新时版本 bump）。
+- 一个脚本化智能体，注册三个原语技能，组合第四个，遇到失败并精炼到 v2。
 
-Run it:
+运行它：
 
 ```
 python3 code/main.py
 ```
 
-The trace shows library writes, retrieval, composition, a failed execution, and a v2 refinement — Voyager's loop end to end.
+追踪显示库写入、检索、组合、一次失败执行和 v2 精炼 —— Voyager 的端到端循环。
 
-## Use It
+## 使用它
 
-- **Claude Agent SDK skills** (Anthropic) — the 2026 reference: each skill has a description, code, and instructions; loaded on demand during an agent session.
-- **skillkit** (npm: skillkit) — cross-agent skill management for 32+ AI coding agents.
-- **Custom skill libraries** — domain-specific (SQL skills for data agents, Terraform skills for infra agents). The Voyager pattern scales down.
-- **OpenAI Agents SDK `tools`** — at the low end; each tool is a lightweight skill.
+- **Claude Agent SDK 技能** (Anthropic) —— 2026 年参考：每个技能有描述、代码和指令；在智能体会话中按需加载。
+- **skillkit** (npm: skillkit) —— 跨 32+ 个 AI 编码智能体的技能管理。
+- **自定义技能库** —— 领域特定的（数据智能体的 SQL 技能，基础设施智能体的 Terraform 技能）。Voyager 模式可精简使用。
+- **OpenAI Agents SDK `tools`** —— 低端；每个工具是一个轻量级技能。
 
-## Ship It
+## 交付它
 
-`outputs/skill-skill-library.md` generates a Voyager-shaped skill library with registration, retrieval, versioning, and refinement wired in for any target runtime.
+`outputs/skill-skill-library.md` 生成一个 Voyager 形态的技能库，包含为任何目标运行时连接好的注册、检索、版本控制和精炼。
 
-## Exercises
+## 练习
 
-1. Add a dependency-cycle detector to `compose()`. What happens when skill A depends on B which depends on A? Error vs warning?
-2. Implement per-skill version pinning. When a parent skill composes child `crafting@1`, a refinement to `crafting@2` must not silently upgrade the parent.
-3. Replace token-overlap retrieval with sentence-transformers embeddings (or a BM25 stdlib impl). Measure retrieval@5 on a 50-skill toy library.
-4. Add a "curriculum" agent: given the current library and a domain description, propose 5 missing skills. Call it weekly.
-5. Read Anthropic's Claude Agent SDK skill docs. Port the toy library to the SDK's skill schema. What changes about discoverability?
+1. 给 `compose()` 添加依赖循环检测器。当技能 A 依赖 B，B 又依赖 A 时会发生什么？报错还是警告？
+2. 实现每个技能的版本固定。当父技能组合子 `crafting@1` 时，对 `crafting@2` 的精炼不能静默升级父技能。
+3. 用 sentence-transformers embeddings（或一个 BM25 标准库实现）替换 token 重叠检索。在 50 个技能的玩具库上测量 retrieval@5。
+4. 添加一个"课程"智能体：给定当前库和领域描述，提出 5 个缺失的技能。每周调用它。
+5. 阅读 Anthropic 的 Claude Agent SDK 技能文档。将玩具库移植到 SDK 的技能 schema。发现能力有什么变化？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Skill | "Reusable capability" | Named chunk of code + description, retrievable by similarity |
-| Skill library | "Agent memory of how-to" | Persistent store of skills, searchable and composable |
-| Curriculum | "Task proposer" | Bottom-up goal generator driven by current capability gap |
-| Composition | "Skill DAG" | Skills invoking skills; topologically sorted on execution |
-| Iterative refinement | "Self-correcting loop" | Env feedback + errors + self-verification fold back into the next version |
-| Action-space-as-code | "Programmatic actions" | Emit functions, not primitive commands, for temporally extended behavior |
-| Dedup on write | "Skill collapse" | Near-duplicate descriptions collapse to one canonical skill |
+| 技能 | "可重用能力" | 有名称的代码块 + 描述，可按相似性检索 |
+| 技能库 | "如何做的智能体记忆" | 技能的持久存储，可搜索和可组合 |
+| 课程 | "任务提议器" | 由当前能力缺口驱动的自底向上目标生成器 |
+| 组合 | "技能 DAG" | 技能调用技能；执行时拓扑排序 |
+| 迭代精炼 | "自纠正循环" | 环境反馈 + 错误 + 自验证折叠到下一版本 |
+| 动作空间即代码 | "程序化动作" | 发出函数而非原始命令，以实现时间延展行为 |
+| 写入时去重 | "技能折叠" | 近重复描述折叠为一个规范技能 |
 
-## Further Reading
+## 延伸阅读
 
-- [Wang et al., Voyager (arXiv:2305.16291)](https://arxiv.org/abs/2305.16291) — the original skill-library paper
-- [Claude Agent SDK overview](https://platform.claude.com/docs/en/agent-sdk/overview) — skills as the 2026 productization
-- [Anthropic, Building agents with the Claude Agent SDK](https://www.anthropic.com/engineering/building-agents-with-the-claude-agent-sdk) — skills and subagents in practice
-- [Madaan et al., Self-Refine (arXiv:2303.17651)](https://arxiv.org/abs/2303.17651) — the refinement loop underneath Voyager
+- [Wang et al., Voyager (arXiv:2305.16291)](https://arxiv.org/abs/2305.16291) —— 原始技能库论文
+- [Claude Agent SDK 概述](https://platform.claude.com/docs/en/agent-sdk/overview) —— 技能作为 2026 年产品化
+- [Anthropic, 用 Claude Agent SDK 构建智能体](https://www.anthropic.com/engineering/building-agents-with-the-claude-agent-sdk) —— 实践中的技能和子智能体
+- [Madaan et al., Self-Refine (arXiv:2303.17651)](https://arxiv.org/abs/2303.17651) —— Voyager 底层的精炼循环

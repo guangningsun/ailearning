@@ -1,148 +1,148 @@
-# The Workbench on a Real Repo
+# 在真实代码仓库上的工作台
 
-> Eleven lessons of surfaces are worth nothing if they do not survive contact with a real codebase. This lesson runs the same task twice on a small sample app: prompt-only versus workbench-guided. The numbers do the arguing.
+> 十一个关于表面的教训，如果不能在真实代码库中经受住检验，就毫无价值。本课在同一个小型示例应用上运行同一任务两次：纯提示词版 versus 工作台引导版。数字会说话。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phases 14 · 32 to 14 · 40
-**Time:** ~60 minutes
+**类型：** 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 14·32 至 14·40
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Bring the seven workbench surfaces together on a small application.
-- Run the same task twice (prompt-only and workbench-guided) and measure five outcomes.
-- Read the before/after report and decide which surfaces gave the most leverage.
-- Defend the workbench against a "but my model is good enough" pushback.
+- 在一个小型应用上将七个工作台表面整合在一起。
+- 两次运行同一任务（纯提示词和工作台引导），并测量五个结果。
+- 阅读前/后报告，判断哪些表面杠杆效应最大。
+- 抵御"但我的模型已经足够好了"的反驳。
 
-## The Problem
+## 问题
 
-A demo on a toy task convinces no one. The case for the workbench is made when a real-feeling task on a real-feeling repo lands in production with fewer failures, fewer reverts, and a packet the next session can use.
+在玩具任务上的演示无法说服任何人。当一个看起来真实的任务在一个看起来真实的代码仓库中投入生产、失败更少、回滚更少、下一轮会话可以使用的交付物更多时，工作台的价值才能成立。
 
-This lesson ships that real-feeling repo and runs the same task through both pipelines. The result is a before/after report you can hand to a skeptic.
+本课发布了那个看起来真实的代码仓库，并通过两条管道运行同一任务。结果是一份前/后报告，你可以把它交给怀疑者。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart TD
-  Task[Task: validate /signup and add tests] --> A[Prompt-only run]
-  Task --> B[Workbench-guided run]
-  A --> M[Measure: 5 outcomes]
+  Task[任务：验证 /signup 并添加测试] --> A[纯提示词运行]
+  Task --> B[工作台引导运行]
+  A --> M[测量：5 个结果]
   B --> M
-  M --> Report[before-after-report.md]
+  M --> Report[前-后报告.md]
 ```
 
-### The sample app
+### 示例应用
 
-A minimal FastAPI-style handler in `sample_app/`:
+`sample_app/` 中的极简 FastAPI 风格处理器：
 
-- `app.py` with `/signup` (no validation yet).
-- `test_app.py` with one happy-path test.
-- `README.md` and `scripts/release.sh` as forbidden-zone bait.
+- `app.py`，含 `/signup`（尚无验证）。
+- `test_app.py`，含一条愉快路径测试。
+- `README.md` 和 `scripts/release.sh` 作为禁区的诱饵。
 
-### The task
+### 任务
 
-> Add input validation to `/signup`: reject passwords shorter than 8 characters, return 422 with a typed error envelope. Add a test that proves the new behavior.
+> 为 `/signup` 添加输入验证：拒绝少于 8 个字符的密码，返回 422 并附带类型化的错误信封。添加一条测试来证明新行为。
 
-### The two pipelines
+### 两条管道
 
-Prompt-only:
+纯提示词：
 
-1. Read the README.
-2. Read `app.py`.
-3. Edit files.
-4. Claim done.
+1. 读取 README。
+2. 读取 `app.py`。
+3. 编辑文件。
+4. 声称完成。
 
-Workbench-guided:
+工作台引导：
 
-1. Run init script (Lesson 35).
-2. Read scope contract (Lesson 36).
-3. Read state (Lesson 34).
-4. Edit allowed files only.
-5. Run acceptance command via feedback runner (Lesson 37).
-6. Run verification gate (Lesson 38).
-7. Run reviewer (Lesson 39).
-8. Generate handoff (Lesson 40).
+1. 运行初始化脚本（第 35 课）。
+2. 读取范围契约（第 36 课）。
+3. 读取状态（第 34 课）。
+4. 仅编辑允许范围内的文件。
+5. 通过反馈运行器运行验收命令（第 37 课）。
+6. 运行验证门（第 38 课）。
+7. 运行审查器（第 39 课）。
+8. 生成交接（第 40 课）。
 
-### The five outcomes measured
+### 测量的五个结果
 
-| Outcome | Why it matters |
+| 结果 | 为什么重要 |
 |---------|----------------|
-| `tests_actually_run` | Most "tests passed" claims are unverifiable |
-| `acceptance_met` | The test that proves the goal must be the test that ran |
-| `files_outside_scope` | Scope creep is the dominant silent failure |
-| `handoff_quality` | The next session pays for or benefits from this |
-| `reviewer_total` | Qualitative judgment on top of the gate |
+| `tests_actually_run` | 大多数"测试通过"声明无法验证 |
+| `acceptance_met` | 证明目标的测试必须是实际运行的测试 |
+| `files_outside_scope` | 范围蔓延是主要的隐性失败 |
+| `handoff_quality` | 下一轮会话为此付出或受益 |
+| `reviewer_total` | 在门之上的定性判断 |
 
-## Build It
+## 构建它
 
-`code/main.py` orchestrates the two pipelines against the same sample app fixture. Both pipelines are scripted (no LLM in the loop) so the measurement is reproducible. The script writes the comparison into `before-after-report.md` and `comparison.json`.
+`code/main.py` 针对同一个示例应用固件编排两条管道。两条管道都是脚本化的（循环中无 LLM），因此测量可复现。脚本将对比写入 `before-after-report.md` 和 `comparison.json`。
 
-Run it:
+运行它：
 
 ```
 python3 code/main.py
 ```
 
-Output: a console table of outcomes per pipeline, the markdown report saved next to the script, and the JSON for whoever wants to chart it.
+输出：每个管道结果的控制台表格，markdown 报告保存在脚本旁边，以及供想要绘图的人使用的 JSON。
 
-## Production patterns in the wild
+## 现实中的生产模式
 
-The skeptic's question is "how much does the workbench actually help?" The 2026 numbers say a lot more than the explanation.
+怀疑者的问题是"工作台实际上帮了多少？"2026 年的数字比任何解释都更有说服力。
 
-**Terminal Bench Top-30 to Top-5 on the same model.** LangChain's *Anatomy of an Agent Harness* (April 2026): a coding agent jumped from outside the top 30 to rank five on Terminal Bench 2.0 by changing only the harness. Same model. Different surfaces. Twenty-five-rank delta.
+**Terminal Bench 从 Top-30 到 Top-5，同一模型。** LangChain 的《Agent Harness 剖析》（2026 年 4 月）：一个编码 agent 仅通过更换 harness 就从 30 名之外跃升至 Terminal Bench 2.0 第五名。同样的模型，不同的表面。25 名的差距。
 
-**Vercel 80% to 100% by deleting tools.** Vercel reported deleting 80% of its agent's tools moved the success rate from 80% to 100%. Smaller tool surface, sharper scope, fewer ways to fail. Negative space wins.
+**Vercel 从 80% 到 100%，靠删除工具。** Vercel 报告称删除 agent 80% 的工具将成功率从 80% 提升到 100%。更小的工具表面、更清晰的范围、更少的失败方式。负空间胜出。
 
-**Harvey 2x accuracy via harness alone.** Legal agents more than doubled their accuracy through harness optimization, no model change.
+**Harvey 仅靠 harness 实现 2 倍准确率。** 法律 agent 仅通过 harness 优化就实现了准确率翻倍以上，无需更换模型。
 
-**88% of enterprise AI agent projects fail to reach production.** The preprints.org *Harness Engineering for Language Agents* paper (March 2026) traces the failures to runtime, not reasoning: stale state, brittle retries, overgrown context, poor recovery from intermediate mistakes.
+**88% 的企业 AI agent 项目未能投入生产。** preprint.org 的《Language Agents 的 Harness 工程》（2026 年 3 月）将失败归因于运行时而非推理：过时状态、脆弱的重试、过度生长的上下文、从中间错误中恢复不良。
 
-**Long-context collapse.** WebAgent baseline 40-50% success drops to under 10% in long-context conditions, mostly from infinite loops and goal loss. The Ralph Loop and the handoff packet exist to absorb that.
+**长上下文崩溃。** WebAgent 基线在长上下文条件下成功率从 40-50% 下降到 10% 以下，主要来自无限循环和目标丢失。Ralph 循环和交接包的存在就是为了吸收这一点。
 
-**False negatives still exist.** Single-step factual tasks, one-line lints, formatter runs, anything the model has memorized verbatim — these run faster prompt-only. The benchmark should enumerate them honestly so the workbench is not framed as overkill.
+**假阴性仍然存在。** 单步事实任务、一行代码的检查、格式化器运行、模型已经逐字记忆的任何内容——这些用纯提示词反而更快。基准测试应该诚实地列举它们，这样工作台就不会被描述为过度工程。
 
-The takeaway is not "harness wins forever." Models do absorb harness tricks over time. The takeaway is that today, the engineering load sits in the seven surfaces, and the numbers prove it.
+要旨不是"harness 永远胜出"。模型确实会随着时间吸收 harness 技巧。要旨是今天，工程负载落在七个表面上，数字已经证明了这一点。
 
-## Use It
+## 使用它
 
-This lesson is the case file you cite when:
+本课是你在以下情况下引用的案例文件：
 
-- Someone asks why every PR carries an `agent-rules.md` and a scope contract.
-- A team wants to drop the verification gate "just for this sprint."
-- A new agent product launches and you need a portable benchmark for whether it actually saves time.
+- 有人问为什么每个 PR 都带有一个 `agent-rules.md` 和一个范围契约。
+- 一个团队想要"就在这个 sprint 中"去掉验证门。
+- 一个新的 agent 产品上线，你需要一份可移植的基准来衡量它是否真的节省了时间。
 
-The numbers travel further than the explanation.
+数字比解释更能传播。
 
-## Ship It
+## 交付它
 
-`outputs/skill-workbench-benchmark.md` is a portable evaluation harness that runs any agent product through both pipelines against a project's own sample app and reports the five outcomes.
+`outputs/skill-workbench-benchmark.md` 是一个可移植的评估 harness，它将任何 agent 产品针对项目的示例应用运行两条管道，并报告五个结果。
 
-## Exercises
+## 练习
 
-1. Add a sixth outcome: time-to-first-meaningful-edit. How do you measure it cleanly?
-2. Run the comparison on a real second-day task in your codebase. Where do the workbench numbers slip?
-3. Add a "false negative" pass: tasks where prompt-only would have been faster and the workbench overhead is real cost. Defend keeping the workbench anyway.
-4. Replace the scripted "agent" with a real LLM call. Which outcomes get noisier?
-5. Author a one-page summary aimed at a non-engineer. What survives the cut?
+1. 添加第六个结果：到第一次有意义编辑的时间。你如何干净地测量它？
+2. 在你的代码库中针对真实的第二天任务运行对比。工作台数字在哪里出现了下滑？
+3. 添加一个"假阴性"通过：纯提示词会更快、而工作台开销是真实成本的任务。论证无论如何都要保留工作台。
+4. 用真正的 LLM 调用替换脚本化的"agent"。哪些结果会变得更嘈杂？
+5. 编写一份面向非工程师的一页摘要。什么能在削减中存活下来？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Sample app | "Toy repo" | Small but realistic enough to exercise all seven surfaces |
-| Pipeline | "Workflow" | Ordered sequence of surface reads/writes the agent follows |
-| Before/after report | "The receipts" | The artifact you hand to a skeptic |
-| False negative | "Workbench overkill" | Tasks where prompt-only is faster; useful to enumerate honestly |
-| Workbench benchmark | "Reliability score" | Portable harness that runs the comparison on your codebase |
+| 示例应用 | "玩具仓库" | 小但足够真实，可以锻炼所有七个表面 |
+| 管道 | "工作流" | agent 遵循的表面读写有序序列 |
+| 前/后报告 | "收据" | 你交给怀疑者的产物 |
+| 假阴性 | "工作台过度工程" | 纯提示词更快的任务；诚实地列举出来很有用 |
+| 工作台基准 | "可靠性评分" | 可移植的 harness，在你的代码库上运行对比 |
 
-## Further Reading
+## 延伸阅读
 
-- [LangChain, The Anatomy of an Agent Harness](https://blog.langchain.com/the-anatomy-of-an-agent-harness/) — Terminal Bench Top-30 to Top-5 receipt
-- [MongoDB, The Agent Harness: Why the LLM Is the Smallest Part of Your Agent System](https://www.mongodb.com/company/blog/technical/agent-harness-why-llm-is-smallest-part-of-your-agent-system) — Vercel + Harvey numbers
-- [preprints.org, Harness Engineering for Language Agents](https://www.preprints.org/manuscript/202603.1756) — 88% enterprise failure rate, runtime root causes
-- [HN: Improving 15 LLMs at Coding in One Afternoon. Only the Harness Changed](https://news.ycombinator.com/item?id=46988596) — replicated across 15 models
-- [Cloudflare, Orchestrating AI Code Review at Scale](https://blog.cloudflare.com/ai-code-review/) — 131k review runs / 30 days in production
+- [LangChain, The Anatomy of an Agent Harness](https://blog.langchain.com/the-anatomy-of-an-agent-harness/) — Terminal Bench Top-30 到 Top-5 的凭据
+- [MongoDB, The Agent Harness: Why the LLM Is the Smallest Part of Your Agent System](https://www.mongodb.com/company/blog/technical/agent-harness-why-llm-is-smallest-part-of-your-agent-system) — Vercel + Harvey 的数字
+- [preprints.org, Harness Engineering for Language Agents](https://www.preprints.org/manuscript/202603.1756) — 88% 企业失败率，运行根本原因
+- [HN: Improving 15 LLMs at Coding in One Afternoon. Only the Harness Changed](https://news.ycombinator.com/item?id=46988596) — 在 15 个模型上复现
+- [Cloudflare, Orchestrating AI Code Review at Scale](https://blog.cloudflare.com/ai-code-review/) — 30 天内 131k 次审查运行在生产中
 - [Anthropic, Building Effective Agents](https://www.anthropic.com/research/building-effective-agents)
-- Phases 14 · 32 to 14 · 40 — the surfaces this lesson exercises end-to-end
-- Phase 14 · 19 — SWE-bench, GAIA, AgentBench as the macro benchmarks this lesson complements
-- Phase 14 · 30 — eval-driven agent development the same harness plugs into
+- 阶段 14·32 至 14·40 — 本课端到端锻炼的表面
+- 阶段 14·19 — SWE-bench、GAIA、AgentBench 作为本课补充的宏观基准
+- 阶段 14·30 — eval 驱动的 agent 开发，同样的 harness 插入其中

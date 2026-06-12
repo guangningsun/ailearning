@@ -1,136 +1,136 @@
-# Tool Use and Function Calling
+# 工具使用与函数调用
 
-> Toolformer (Schick et al., 2023) started self-supervised tool annotation. Berkeley Function Calling Leaderboard V4 (Patil et al., 2025) sets the 2026 bar: 40% agentic, 30% multi-turn, 10% live, 10% non-live, 10% hallucination. Single-turn is solved. Memory, dynamic decision-making, and long-horizon tool chains are not.
+> Toolformer（Schick 等，2023）开创了自监督工具标注。Berkeley Function Calling Leaderboard V4（Patil 等，2025）设立了 2026 年的基准线：40% 代理化、30% 多轮、10% 实时、10% 非实时、10% 幻觉。单轮问题已解决。长时域工具链、动态决策和记忆仍是开放问题。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 01 (Agent Loop), Phase 13 · 01 (Function Calling Deep Dive)
-**Time:** ~60 minutes
+**类型：** 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 01（代理循环）、阶段 13 · 01（函数调用深度解析）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain Toolformer's self-supervised training signal: keep tool annotations only when execution reduces next-token loss.
-- Name BFCL V4's five evaluation categories and what each measures.
-- Implement a stdlib tool registry with schema validation, argument coercion, and execution sandboxing.
-- Diagnose the three 2026 open problems: long-horizon tool chaining, dynamic decision-making, and memory.
+- 解释 Toolformer 的自监督训练信号：仅保留能降低下一个 token 损失的候选工具调用。
+- 说出 BFCL V4 的五个评估类别及其各自衡量的内容。
+- 实现一个带有 schema 验证、参数强制转换和执行沙箱的标准库工具注册表。
+- 诊断三个 2026 年开放问题：长时域工具链、动态决策和记忆。
 
-## The Problem
+## 问题
 
-Early tool use asked: can the model predict a correct function call? Modern tool use asks: can the model chain tools across 40 steps, with memory, with partial observability, with recovery from tool failures, without hallucinating tools that do not exist?
+早期的工具使用问的是：模型能预测正确的函数调用吗？现代工具使用问的是：模型能在 40 步中链式调用工具、带记忆、在部分可观测条件下、在工具失败后恢复、且不产生不存在工具的幻觉吗？
 
-Toolformer established the baseline: models can learn when to call tools with self-supervision. BFCL V4 defines the 2026 evaluation target. The gap between them is the space production agents live in.
+Toolformer 建立了基线：模型可以通过自监督学习何时调用工具。BFCL V4 定义了 2026 年的评估目标。两者之间的差距就是生产代理所生存的空间。
 
-## The Concept
+## 概念
 
-### Toolformer (Schick et al., NeurIPS 2023)
+### Toolformer（Schick 等，NeurIPS 2023）
 
-Idea: let the model annotate its own pretraining corpus with candidate API calls. For each candidate, execute it. Keep the annotation only if including the tool result reduces loss on the next token. Fine-tune on the filtered corpus.
+核心理念：让模型在自己的预训练语料库上标注候选 API 调用。对每个候选执行它。仅当包含工具结果能减少下一个 token 的损失时，才保留该标注。在过滤后的语料库上微调。
 
-Tools covered: calculator, QA system, search engines, translator, calendar. The self-supervision signal is purely about whether the tool helps predict text — no human labels.
+覆盖的工具：计算器、问答系统、搜索引擎、翻译器、日历。自监督信号纯粹基于工具是否有助于预测文本——无需人工标签。
 
-Scale result: tool use emerges at scale. Smaller models hurt from tool annotations; larger models gain. This is why 2026 frontier models have strong tool use baked in while most 7B models need explicit tool-use fine-tuning to be reliable.
+规模结果：工具使用在规模下涌现。较小的模型因工具标注而受损；较大的模型从中受益。这就是为什么 2026 年的前沿模型内置了强大的工具使用能力，而大多数 7B 模型需要显式的工具使用微调才能可靠。
 
-### Berkeley Function Calling Leaderboard V4 (Patil et al., ICML 2025)
+### Berkeley Function Calling Leaderboard V4（Patil 等，ICML 2025）
 
-BFCL is the 2026 de facto evaluation. V4 composition:
+BFCL 是 2026 年事实上的评估标准。V4 组成：
 
-- **Agentic (40%)** — full agent trajectories: memory, multi-turn, dynamic decisions.
-- **Multi-Turn (30%)** — interactive conversations with tool chains.
-- **Live (10%)** — user-submitted real prompts (harder distribution).
-- **Non-Live (10%)** — synthetic test cases.
-- **Hallucination (10%)** — detect when no tool should be called.
+- **代理化（40%）** — 完整代理轨迹：记忆、多轮、动态决策。
+- **多轮（30%）** — 带工具链的交互式对话。
+- **实时（10%）** — 用户提交的实时提示（更难的分布）。
+- **非实时（10%）** — 合成测试用例。
+- **幻觉（10%）** — 检测何时不应调用工具。
 
-V3 introduced state-based evaluation: after a tool sequence, check the API's actual state (e.g. "is the file created?") rather than match the AST of the tool calls. V4 added web search, memory, and format sensitivity categories.
+V3 引入了基于状态的评估：在工具序列之后，检查 API 的实际状态（例如"文件是否已创建？"），而不是匹配工具调用的 AST。V4 新增了网络搜索、记忆和格式敏感类别。
 
-Key 2026 finding: single-turn function calling is near-solved. Failures concentrate in memory (carrying context across turns), dynamic decision-making (choosing tools based on prior results), long-horizon chains (drift after 20+ steps), and hallucination detection (refusing to call when no tool fits).
+2026 年的关键发现：单轮函数调用已接近解决。失败集中在记忆（跨轮次携带上下文）、动态决策（基于先前结果选择工具）、长时域链（20+ 步后漂移）和幻觉检测（当没有工具适合时拒绝调用）。
 
-### Tool schema
+### 工具 schema
 
-Every provider has a schema. They differ in details but share the same shape:
+每个提供商都有 schema。细节上有所不同，但共享相同的结构：
 
 ```
 name: string
-description: string (what it does, when to use it)
-input_schema: JSON Schema (properties, required, types, enums)
+description: string（工具功能描述、使用时机）
+input_schema: JSON Schema（properties、required、types、enums）
 ```
 
-Anthropic uses `input_schema` directly. OpenAI uses `function.parameters`. Both accept JSON Schema. Descriptions are load-bearing — the model reads them to pick the right tool. Bad tool descriptions are the #1 root cause of wrong-tool-picked failures.
+Anthropic 直接使用 `input_schema`。OpenAI 使用 `function.parameters`。两者都接受 JSON Schema。描述是承载功能的——模型读取它们来选择正确的工具。糟糕的工具描述是选错工具失败的首要根因。
 
-### Argument validation
+### 参数验证
 
-Trust no tool call. Validate:
+不要信任任何工具调用。验证：
 
-1. **Type coercion.** Model may return a string "5" where the schema says int. Coerce if unambiguous; reject if not.
-2. **Enum validation.** If the schema says `status in {"open", "closed"}` and model emits `"in_progress"`, reject with a descriptive error.
-3. **Required fields.** Missing required field -> immediate error observation back to the model, not a crash.
-4. **Format validation.** Dates, emails, URLs — validate with concrete parsers, not regex.
+1. **类型强制转换。** 模型可能返回字符串 "5" 而 schema 要求 int。如果无歧义则强制转换；否则拒绝。
+2. **枚举验证。** 如果 schema 说 `status in {"open", "closed"}` 而模型发出 `"in_progress"`，用描述性错误拒绝。
+3. **必填字段。** 缺少必填字段 → 立即向模型返回错误观测，而非崩溃。
+4. **格式验证。** 日期、邮箱、URL — 用具体解析器验证，不用正则。
 
-Every validation failure should return a structured observation so the model can retry with the correct shape.
+每次验证失败都应返回结构化观测，以便模型能用正确格式重试。
 
-### Parallel tool calls
+### 并行工具调用
 
-Modern providers support parallel tool calls in one assistant turn. The loop:
+现代提供商支持在一次助手回合中并行调用工具。循环：
 
-1. Model emits 3 tool calls with distinct `tool_use_id`s.
-2. Runtime executes them (in parallel if independent).
-3. Each result goes back as a `tool_result` block correlated by `tool_use_id`.
+1. 模型发出 3 个具有不同 `tool_use_id` 的工具调用。
+2. 运行时并行执行它们（如果相互独立）。
+3. 每个结果作为通过 `tool_use_id` 关联的 `tool_result` 块返回。
 
-Engineering rule: treat correlation IDs as load-bearing. Swap them and you get wrong-tool-to-wrong-result routing.
+工程规则：将关联 ID 视为承载功能。交换它们就会得到错误工具到错误结果的路由。
 
-### Sandboxing
+### 沙箱
 
-Tool execution is the sandbox boundary. See Lesson 09 for detail. Short version: every tool should specify read/write surface, network access, timeout, memory cap. Generic `run_shell(cmd)` is a red flag; specific `git_status()` is safer.
+工具执行就是沙箱边界。见第 09 课详述。简版：每个工具应指定读/写范围、网络访问、超时、内存上限。通用的 `run_shell(cmd)` 是危险信号；特定的 `git_status()` 更安全。
 
-## Build It
+## 构建
 
-`code/main.py` implements a production-shape tool registry:
+`code/main.py` 实现了一个生产形态的工具注册表：
 
-- JSON Schema subset validator (stdlib only).
-- Tool registration with description, input schema, timeout, and executor.
-- Argument coercion and enum validation.
-- Parallel tool dispatch with correlation IDs.
-- Error observations as structured strings.
+- JSON Schema 子集验证器（仅标准库）。
+- 带有描述、输入 schema、超时和执行器的工具注册。
+- 参数强制转换和枚举验证。
+- 带关联 ID 的并行工具分发。
+- 作为结构化字符串的错误观测。
 
-Run it:
+运行：
 
 ```
 python3 code/main.py
 ```
 
-The trace shows a mini agent calling three tools in one turn, with one deliberately malformed call that is rejected with a descriptive error the model can act on.
+跟踪显示一个迷你代理在一轮中调用三个工具，其中一个故意格式错误的调用被拒绝，并返回模型可以操作描述性错误。
 
-## Use It
+## 使用
 
-Every provider has its own tool schema — Anthropic, OpenAI, Gemini, Bedrock. Use a translation layer (OpenAI Agents SDK, Vercel AI SDK, LangChain tool adapter) if you need multi-provider. BFCL is the reference benchmark — run it against your agent before shipping if tool use is central to the product.
+每个提供商都有自己的工具 schema — Anthropic、OpenAI、Gemini、Bedrock。如果需要多提供商，使用翻译层（OpenAI Agents SDK、Vercel AI SDK、LangChain 工具适配器）。BFCL 是参考基准——如果工具使用是产品的核心，在发布前对你的代理运行它。
 
-## Ship It
+## 发布
 
-`outputs/skill-tool-registry.md` generates a tool catalog, schema, and registry for a given task domain. Includes description-quality checks (does each tool's description tell the model when to use it?).
+`outputs/skill-tool-registry.md` 为给定任务域生成工具目录、schema 和注册表。包括描述质量检查（每个工具的描述是否告诉模型何时使用它？）。
 
-## Exercises
+## 练习
 
-1. Add a "no-op" tool that lets the model explicitly refuse to use any other tool. Measure on a BFCL-like hallucination test.
-2. Implement argument coercion for int-as-string and float-as-string. Where does coercion start to hide real bugs?
-3. Add a per-tool timeout and a circuit breaker (refuse the tool for 60s after 3 consecutive failures). What does this change about how the model recovers?
-4. Read BFCL V4 description. Pick one category (e.g. "multi-turn") and run 10 example prompts through your agent. Report pass rate.
-5. Port the stdlib validator to Pydantic or Zod. What did Pydantic/Zod catch that the toy missed?
+1. 添加一个"无操作"工具，让模型能显式拒绝使用任何其他工具。在类似 BFCL 的幻觉测试上测量。
+2. 实现字符串转 int 和字符串转 float 的参数强制转换。强制转换从何时开始掩盖真正的 bug？
+3. 添加每工具超时和断路器（连续 3 次失败后拒绝该工具 60 秒）。这如何改变模型的恢复方式？
+4. 阅读 BFCL V4 描述。选择一个类别（例如"多轮"），将 10 个示例提示通过你的代理运行。报告通过率。
+5. 将标准库验证器移植到 Pydantic 或 Zod。Pydantic/Zod 捕获了玩具实现遗漏了什么？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Function calling | "Tool use" | Structured-output tool invocation with validated schema |
-| Toolformer | "Self-supervised tool annotation" | Schick 2023 — keep tool calls whose results reduce next-token loss |
-| BFCL | "Berkeley Function Calling Leaderboard" | 2026 benchmark: 40% agentic, 30% multi-turn, 10% live, 10% non-live, 10% hallucination |
-| Tool schema | "Function signature for the model" | name, description, JSON Schema of arguments |
-| tool_use_id | "Correlation ID" | Ties a tool call to its result; essential for parallel dispatch |
-| Hallucination detection | "Know when not to call" | V4 category: refuse to call when no tool fits |
-| Argument coercion | "String-to-int repair" | Narrow fixes for predictable schema-mismatch; reject if ambiguous |
-| Sandboxing | "Tool execution boundary" | Per-tool read/write surface, network, timeout, memory cap |
+| 函数调用 | "工具使用" | 带经验证 schema 的结构化输出工具调用 |
+| Toolformer | "自监督工具标注" | Schick 2023 — 保留结果能减少下一个 token 损失的候选工具调用 |
+| BFCL | "Berkeley Function Calling Leaderboard" | 2026 年基准线：40% 代理化、30% 多轮、10% 实时、10% 非实时、10% 幻觉 |
+| 工具 schema | "模型的函数签名" | 工具名称、描述、参数的 JSON Schema |
+| tool_use_id | "关联 ID" | 将工具调用与其结果绑定；对并行分发至关重要 |
+| 幻觉检测 | "知道何时不调用" | V4 类别：当没有工具适合时拒绝调用 |
+| 参数强制转换 | "字符串转 int 修复" | 可预测 schema 不匹配时的窄修复；如有歧义则拒绝 |
+| 沙箱 | "工具执行边界" | 每工具的读/写范围、网络、超时、内存上限 |
 
-## Further Reading
+## 延伸阅读
 
-- [Schick et al., Toolformer (arXiv:2302.04761)](https://arxiv.org/abs/2302.04761) — self-supervised tool annotation
-- [Berkeley Function Calling Leaderboard (V4)](https://gorilla.cs.berkeley.edu/leaderboard.html) — 2026 eval benchmark
-- [Anthropic, Tool use documentation](https://platform.claude.com/docs/en/agent-sdk/overview) — production tool schema in the Claude Agent SDK
-- [OpenAI Agents SDK docs](https://openai.github.io/openai-agents-python/) — function tool type and Guardrails
+- [Schick 等，Toolformer（arXiv:2302.04761）](https://arxiv.org/abs/2302.04761) — 自监督工具标注
+- [Berkeley Function Calling Leaderboard（V4）](https://gorilla.cs.berkeley.edu/leaderboard.html) — 2026 年评估基准
+- [Anthropic，工具使用文档](https://platform.claude.com/docs/en/agent-sdk/overview) — Claude Agent SDK 中的生产工具 schema
+- [OpenAI Agents SDK 文档](https://openai.github.io/openai-agents-python/) — 函数工具类型和 Guardrails

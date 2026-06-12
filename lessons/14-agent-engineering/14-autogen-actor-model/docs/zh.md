@@ -1,117 +1,117 @@
-# AutoGen v0.4: Actor Model and Agent Framework
+# AutoGen v0.4：参与者模型与智能体框架
 
-> AutoGen v0.4 (Microsoft Research, Jan 2025) redesigned agent orchestration around the actor model. Async message exchange, event-driven agents, fault isolation, natural concurrency. The framework is now in maintenance mode while Microsoft Agent Framework (public preview Oct 2025) becomes the successor.
+> AutoGen v0.4（Microsoft Research，2025 年 1 月）围绕参与者模型重新设计了智能体编排。异步消息交换、事件驱动智能体、故障隔离、自然并发。该框架目前处于维护模式，而 Microsoft Agent Framework（2025 年 10 月公开预览）成为后继者。
 
-**Type:** Learn + Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 01 (Agent Loop), Phase 14 · 12 (Workflow Patterns)
-**Time:** ~75 minutes
+**类型：** 学习 + 构建
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 01（智能体循环）、阶段 14 · 12（工作流模式）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Describe the actor model: agents as actors, messages as the only IPC, failure isolation per actor.
-- Name AutoGen v0.4's three API layers — Core, AgentChat, Extensions — and what each is for.
-- Explain why decoupling message delivery from handling gives fault isolation and natural concurrency.
-- Implement a stdlib actor runtime in Python and port a two-agent code-review flow onto it.
+- 描述参与者模型：智能体作为参与者，消息作为唯一的 IPC，每个参与者故障隔离。
+- 说出 AutoGen v0.4 的三层 API —— Core、AgentChat、Extensions —— 以及各自的用途。
+- 解释为什么解耦消息传递与处理带来了故障隔离和自然并发。
+- 用 Python 标准库实现一个参与者运行时，并将双智能体代码审查流程移植到它上面。
 
-## The Problem
+## 问题
 
-Most agent frameworks are synchronous: one agent produces, one agent consumes, in a call stack. Failures crash the stack. Concurrency is bolted on. Distribution requires rewriting.
+大多数智能体框架是同步的：一个智能体产生，一个智能体消费，在调用栈中进行。故障会崩溃栈。并发是勉强加上的。分布式需要重写。
 
-AutoGen v0.4's answer: the actor model. Each agent is an actor with a private inbox. Messages are the only interaction. The runtime decouples delivery from handling. Failures isolate to one actor. Concurrency is native. Distribution is just different transport.
+AutoGen v0.4 的答案是：参与者模型。每个智能体是一个拥有私有收件箱的参与者。消息是唯一的交互方式。运行时将传递与处理解耦。故障隔离到一个参与者。并发是原生的。分布式只是不同的传输层。
 
-## The Concept
+## 概念
 
-### Actors
+### 参与者
 
-An actor has:
+一个参与者拥有：
 
-- A private state (never directly touched from outside).
-- An inbox (message queue).
-- A handler: `receive(message) -> effects` where effects can be "reply," "send to other actor," "spawn new actor," "update state," "stop self."
+- 一个私有状态（外部从不直接触碰）。
+- 一个收件箱（消息队列）。
+- 一个处理器：`receive(message) -> effects`，其中 effects 可以是"回复"、"发送给其他参与者"、"生成新参与者"、"更新状态"、"停止自己"。
 
-Two actors cannot share memory. They can only send messages.
+两个参与者不能共享内存。它们只能发送消息。
 
-### Three API layers in AutoGen v0.4
+### AutoGen v0.4 的三层 API
 
-1. **Core.** Low-level actor framework. `AgentRuntime`, `Agent`, `Message`, `Topic`. Async message exchange, event-driven.
-2. **AgentChat.** Task-driven high-level API (replacement for v0.2's ConversableAgent). `AssistantAgent`, `UserProxyAgent`, `RoundRobinGroupChat`, `SelectorGroupChat`.
-3. **Extensions.** Integrations — OpenAI, Anthropic, Azure, tools, memory.
+1. **Core。** 低级参与者框架。`AgentRuntime`、`Agent`、`Message`、`Topic`。异步消息交换、事件驱动。
+2. **AgentChat。** 面向任务的高级 API（v0.2 的 ConversableAgent 的替代品）。`AssistantAgent`、`UserProxyAgent`、`RoundRobinGroupChat`、`SelectorGroupChat`。
+3. **Extensions。** 集成 —— OpenAI、Anthropic、Azure、工具、记忆。
 
-### Why decoupling matters
+### 解耦为何重要
 
-In the v0.2 model, calling `agent_a.chat(agent_b)` synchronously blocks agent_a until agent_b returns. In v0.4, `send(agent_b, msg)` puts the message in agent_b's inbox and returns. The runtime delivers later. Three consequences:
+在 v0.2 模型中，调用 `agent_a.chat(agent_b)` 会同步阻塞 agent_a 直到 agent_b 返回。在 v0.4 中，`send(agent_b, msg)` 将消息放入 agent_b 的收件箱并立即返回。运行时稍后传递。三个后果：
 
-- **Fault isolation.** Agent B crashing does not crash Agent A — the runtime catches the failure in B's handler and decides what to do (log, retry, dead-letter).
-- **Natural concurrency.** Many messages in flight at once; actors process their inbox concurrently.
-- **Distribution-ready.** Inbox + transport is the same abstraction whether the actor is in-process or on another host.
+- **故障隔离。** 参与者 B 崩溃不会崩溃参与者 A —— 运行时在 B 的处理器中捕获故障并决定如何处理（日志、重试、死信）。
+- **自然并发。** 同时有许多消息在飞；参与者并发处理它们的收件箱。
+- **可分布式。** 收件箱 + 传输是相同的抽象，无论参与者在进程内还是在另一台主机上。
 
-### Topologies
+### 拓扑
 
-- **RoundRobinGroupChat.** Agents take turns in a fixed rotation.
-- **SelectorGroupChat.** A selector agent picks who goes next based on conversation context.
-- **Magentic-One.** Reference multi-agent team for web browsing, code execution, file handling. Built on AgentChat.
+- **RoundRobinGroupChat。** 智能体按固定轮换顺序轮流。
+- **SelectorGroupChat。** 选择器智能体根据对话上下文选择下一个发言者。
+- **Magentic-One。** 用于网页浏览、代码执行、文件处理的参考多智能体团队。构建在 AgentChat 之上。
 
-### Observability
+### 可观测性
 
-OpenTelemetry support is built in. Every message emits a span; tool calls carry `gen_ai.*` attributes per the 2026 OTel GenAI semantic conventions (Lesson 23).
+OpenTelemetry 支持内置。每个消息发出一个 span；工具调用按照 2026 年 OTel GenAI 语义约定携带 `gen_ai.*` 属性（第 23 课）。
 
-### Status: maintenance mode
+### 状态：维护模式
 
-Early 2026: AutoGen v0.7.x is stable for research and prototyping. Microsoft has shifted active development to the Microsoft Agent Framework (public preview Oct 1 2025; 1.0 GA targeted end of Q1 2026). AutoGen patterns port forward cleanly — the actor model is the durable idea.
+2026 年初：AutoGen v0.7.x 稳定，适合研究和原型设计。Microsoft 已将积极开发转移到 Microsoft Agent Framework（2025 年 10 月 1 日公开预览；1.0 GA 目标是 2026 年 Q1 末）。AutoGen 模式可以平滑地向前移植 —— 参与者模型是持久的理念。
 
-## Build It
+## 构建
 
-`code/main.py` implements a stdlib actor runtime:
+`code/main.py` 实现了一个标准库参与者运行时：
 
-- `Message` — typed payload with `sender`, `recipient`, `topic`, `body`.
-- `Actor` — abstract with `receive(message, runtime)`.
-- `Runtime` — event loop with a shared queue, delivery, failure isolation.
-- A two-actor demo: `ReviewerAgent` reviews code, `ChecklistAgent` runs a checklist; they exchange messages until consensus.
+- `Message` —— 带 `sender`、`recipient`、`topic`、`body` 的 typed payload。
+- `Actor` —— 带 `receive(message, runtime)` 的抽象。
+- `Runtime` —— 带共享队列、传递、故障隔离的事件循环。
+- 一个双参与者演示：`ReviewerAgent` 审查代码，`ChecklistAgent` 运行检查清单；它们交换消息直到达成共识。
 
-Run it:
+运行：
 
 ```
 python3 code/main.py
 ```
 
-The trace shows message delivery, a simulated failure in one actor that does not crash the other, and convergence on a shared verdict.
+轨迹显示消息传递、一个参与者中的模拟故障不会崩溃另一个，以及在共享裁决上收敛。
 
-## Use It
+## 使用
 
-- **AutoGen v0.4/v0.7** (maintenance) — stable for research, prototyping, multi-agent patterns.
-- **Microsoft Agent Framework** (public preview) — the forward path; same actor-model ideas in a refreshed API.
-- **LangGraph swarm topology** (Lesson 13) — similar pattern via shared-tool handoffs.
-- **Custom actor runtime** — when you need specific transport (NATS, RabbitMQ, gRPC).
+- **AutoGen v0.4/v0.7**（维护中）—— 适合研究、原型设计、多智能体模式。
+- **Microsoft Agent Framework**（公开预览）—— 前向路径；在刷新后的 API 中使用相同的参与者模型理念。
+- **LangGraph swarm 拓扑**（第 13 课） —— 通过共享工具交接的类似模式。
+- **自定义参与者运行时** —— 当你需要特定传输（NATS、RabbitMQ、gRPC）时。
 
-## Ship It
+## 交付
 
-`outputs/skill-actor-runtime.md` generates a minimal actor runtime plus a team template (RoundRobin or Selector) for a given multi-agent task.
+`outputs/skill-actor-runtime.md` 为给定的多智能体任务生成一个最小参与者运行时加团队模板（RoundRobin 或 Selector）。
 
-## Exercises
+## 练习
 
-1. Add a dead-letter queue: when a handler raises, park the failing message for human inspection. How often does DLQ get hit in your toy?
-2. Implement `SelectorGroupChat`: a selector actor picks who processes the next message based on conversation state.
-3. Add distributed transport: swap the in-process queue for a JSON-over-HTTP server so actors can run in separate processes.
-4. Wire an OTel span per message (or a no-op stand-in). Emit `gen_ai.agent.name`, `gen_ai.operation.name` per Lesson 23.
-5. Read AutoGen v0.4's architecture post. Port your toy to the real `autogen_core` API. What did you skip that matters in production?
+1. 添加死信队列：当处理器抛出异常时，将失败的消息停放以供人工检查。在你的玩具例子中 DLQ 被触发的频率如何？
+2. 实现 `SelectorGroupChat`：一个选择器参与者根据对话状态选择谁处理下一条消息。
+3. 添加分布式传输：将进程内队列换成 JSON-over-HTTP 服务器，这样参与者可以在独立进程中运行。
+4. 为每条消息连线一个 OTel span（或一个无操作替代品）。按照第 23 课发出 `gen_ai.agent.name`、`gen_ai.operation.name`。
+5. 阅读 AutoGen v0.4 的架构文章。将你的玩具移植到真实的 `autogen_core` API。你跳过了什么在生产中很重要的东西？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Actor | "Agent" | Private state + inbox + handler; no shared memory |
-| Message | "Event" | Typed payload; the only way actors interact |
-| Inbox | "Mailbox" | Per-actor queue of pending messages |
-| Runtime | "Agent host" | Event loop that routes messages and isolates failures |
-| Topic | "Channel" | Named publish-subscribe route between actors |
-| Fault isolation | "Let it crash" | One actor failing does not crash others |
-| RoundRobinGroupChat | "Fixed-rotation team" | Agents take turns in order |
-| SelectorGroupChat | "Context-routed team" | Selector picks who goes next |
-| Magentic-One | "Reference team" | Multi-agent squad for web + code + files |
+| 参与者 | "智能体" | 私有状态 + 收件箱 + 处理器；无共享内存 |
+| 消息 | "事件" | Typed payload；参与者之间唯一的交互方式 |
+| 收件箱 | "邮箱" | 每个参与者的待处理消息队列 |
+| 运行时 | "智能体宿主" | 路由消息和隔离故障的事件循环 |
+| 主题 | "通道" | 参与者之间的命名发布-订阅路由 |
+| 故障隔离 | "让它崩溃" | 一个参与者失败不会崩溃其他参与者 |
+| RoundRobinGroupChat | "固定轮换团队" | 智能体按顺序轮流 |
+| SelectorGroupChat | "上下文路由团队" | 选择器选择下一个发言者 |
+| Magentic-One | "参考团队" | 用于网页 + 代码 + 文件的多智能体小队 |
 
-## Further Reading
+## 延伸阅读
 
-- [AutoGen v0.4, Microsoft Research](https://www.microsoft.com/en-us/research/articles/autogen-v0-4-reimagining-the-foundation-of-agentic-ai-for-scale-extensibility-and-robustness/) — the redesign post
-- [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview) — graph-shaped alternative
-- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — spans AutoGen emits by default
+- [AutoGen v0.4，Microsoft Research](https://www.microsoft.com/en-us/research/articles/autogen-v0-4-reimagining-the-foundation-of-agentic-ai-for-scale-extensibility-and-robustness/) —— 重新设计文章
+- [LangGraph 概述](https://docs.langchain.com/oss/python/langgraph/overview) —— 图形态的替代方案
+- [OpenTelemetry GenAI 语义约定](https://opentelemetry.io/docs/specs/semconv/gen-ai/) —— AutoGen 默认发出的 span

@@ -1,135 +1,135 @@
-# Memory: Virtual Context and MemGPT
+# 记忆：虚拟上下文与 MemGPT
 
-> Context windows are finite. Conversations, documents, and tool traces are not. MemGPT (Packer et al., 2023) frames this as OS virtual memory — main context is RAM, external store is disk, the agent pages between them. This is the pattern every 2026 memory system inherits.
+> 上下文窗口是有限的。对话、文档和工具痕迹不是。MemGPT（Packer 等，2023）将此框定为操作系统虚拟内存——主上下文是 RAM，外部存储是磁盘，代理在它们之间分页。这是每个 2026 年记忆系统继承的模式。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 01 (Agent Loop), Phase 14 · 06 (Tool Use)
-**Time:** ~75 minutes
+**类型：** 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 01（代理循环）、阶段 14 · 06（工具使用）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain the OS analogy MemGPT builds on: main context = RAM, external context = disk, memory tools = page in/out.
-- Implement the two-tier MemGPT pattern in stdlib with a main-context buffer, an external searchable store, and page in/out tools.
-- Describe how the agent issues "interrupts" to query or modify external memory and how the result is spliced back into the next prompt.
-- Identify the MemGPT design choices that carry into Letta (Lesson 08) and Mem0 (Lesson 09).
+- 解释 MemGPT 构建的 OS 类比：主上下文 = RAM，外部上下文 = 磁盘，记忆工具 = 页面换入/换出。
+- 用标准库实现双层 MemGPT 模式：主上下文缓冲区、外部可搜索存储，以及页面换入/换出工具。
+- 描述代理如何发出"中断"来查询或修改外部记忆，以及结果如何拼接回下一个提示。
+- 识别 MemGPT 设计选择中延续到 Letta（第 08 课）和 Mem0（第 09 课）的内容。
 
-## The Problem
+## 问题
 
-Context windows look like they should solve memory. They do not. Three failure modes recur in production:
+上下文窗口看起来应该解决了记忆问题。实际上没有。三种失败模式在生产中反复出现：
 
-1. **Overflow.** Multi-turn conversations, long documents, or tool-call-heavy trajectories cross the window. Everything past the cutoff is gone.
-2. **Dilution.** Even within the window, stuffing irrelevant context dilutes attention over what matters. Frontier models still degrade on long inputs.
-3. **Persistence.** A new session starts with an empty window. Agents without external memory cannot say "remember when you asked me to..." across sessions.
+1. **溢出。** 多轮对话、长文档或重工具调用轨迹超出窗口大小。截断点之后的一切都消失了。
+2. **稀释。** 即使在窗口内，填充无关的上下文也会稀释对重要内容的注意力。前沿模型在长输入上仍然退化。
+3. **持久性。** 新会话从空窗口开始。没有外部记忆的代理无法跨会话说"记得你让我……"。
 
-Bigger windows help but do not fix this. Mem0's 2025 paper measured that 128k-window baselines still miss long-horizon facts that a 4k-window agent with external memory catches.
+更大的窗口有帮助，但不能解决这个问题。Mem0 的 2025 年论文测量到，128k 窗口基线仍然遗漏了 4k 窗口代理带外部记忆就能捕获的长时域事实。
 
-## The Concept
+## 概念
 
-### MemGPT: the OS analogy
+### MemGPT：OS 类比
 
-Packer et al. (arXiv:2310.08560, v2 Feb 2024) map context management to operating-system virtual memory:
+Packer 等（arXiv:2310.08560，v2，2024 年 2 月）将上下文管理映射到操作系统虚拟内存：
 
-| OS concept | MemGPT concept | 2026 production analog |
+| OS 概念 | MemGPT 概念 | 2026 年生产模拟 |
 |------------|---------------|------------------------|
-| RAM | main context (prompt) | Anthropic/OpenAI context window |
-| Disk | external context | vector DB, KV, graph store |
-| Page fault | memory tool call | `memory.search`, `memory.read`, `memory.write` |
-| OS kernel | agent control loop | ReAct loop with memory tools |
+| RAM | 主上下文（提示） | Anthropic/OpenAI 上下文窗口 |
+| 磁盘 | 外部上下文 | 向量数据库、KV、图存储 |
+| 缺页中断 | 记忆工具调用 | `memory.search`、`memory.read`、`memory.write` |
+| OS 内核 | 代理控制循环 | 带记忆工具的 ReAct 循环 |
 
-The agent runs a normal ReAct loop. One extra class of tools lets it page data in and out of main context.
+代理运行一个正常的 ReAct 循环。额外的一类工具让它能在主上下文之间换入换出数据。
 
-### Two tiers
+### 双层架构
 
-- **Main context.** Fixed-size prompt holding the current task. Always visible to the model.
-- **External context.** Unbounded, searchable via tools. Read when relevant, written when facts emerge.
+- **主上下文。** 承载当前任务的固定大小提示。对模型始终可见。
+- **外部上下文。** 通过工具可搜索的无限存储。相关时读取，有新事实时写入。
 
-The original paper evaluated the design on two tasks beyond the base window: document analysis longer than 100k tokens and multi-session chat with persistent memory across days.
+原文评估了两个超出基础窗口的任务：超过 100k token 的文档分析和跨天持久记忆的多会话聊天。
 
-### The interrupt pattern
+### 中断模式
 
-MemGPT introduces memory-as-interrupt: mid-conversation the agent can invoke a memory tool, the runtime executes it, and the result splices into the next assistant turn as a new observation. Conceptually identical to a Unix `read()` syscall that blocks the process, returns bytes, and the process continues.
+MemGPT 引入了记忆即中断：对话中途代理可以调用记忆工具，运行时执行它，结果作为新观测拼接到下一个助手回合。概念上等同于 Unix `read()` 系统调用，阻塞进程、返回字节，然后进程继续。
 
-Canonical memory tool surface:
+规范的记忆工具接口：
 
-- `core_memory_append(section, text)` — write to a persistent section of the prompt.
-- `core_memory_replace(section, old, new)` — edit a persistent section.
-- `archival_memory_insert(text)` — write to the searchable external store.
-- `archival_memory_search(query, top_k)` — retrieve from the external store.
-- `conversation_search(query)` — scan past turns.
+- `core_memory_append(section, text)` — 写入提示的持久部分。
+- `core_memory_replace(section, old, new)` — 编辑持久部分。
+- `archival_memory_insert(text)` — 写入可搜索的外部存储。
+- `archival_memory_search(query, top_k)` — 从外部存储检索。
+- `conversation_search(query)` — 扫描过去的回合。
 
-### Where MemGPT ends and Letta begins
+### MemGPT 结束和 Letta 开始的地方
 
-In September 2024 MemGPT became Letta. The research repo (`cpacker/MemGPT`) remains; Letta extends the design:
+2024 年 9 月 MemGPT 成为 Letta。研究仓库（`cpacker/MemGPT`）保留；Letta 扩展了设计：
 
-- Three tiers instead of two (core, recall, archival — Lesson 08).
-- Native reasoning replacing the `send_message`/heartbeat pattern (Lesson 08).
-- Sleep-time agents running async memory work (Lesson 08).
+- 三层而非两层（core、recall、archival — 第 08 课）。
+- 原生推理取代 `send_message`/心跳模式（第 08 课）。
+- 睡眠时间代理运行异步记忆工作（第 08 课）。
 
-The MemGPT paper is the 2026 foundation even if production systems run Letta, Mem0, or a custom two-tier store.
+即使生产系统运行 Letta、Mem0 或自定义双层存储，MemGPT 论文仍是 2026 年的基础。
 
-### Where this pattern goes wrong
+### 这个模式出错的地方
 
-- **Memory rot.** Writes accumulate faster than reads; retrieval drowns in stale facts. Fix: periodic consolidation (Letta sleep-time), explicit invalidation (Mem0 conflict detector).
-- **Memory poisoning.** External memory is retrieved text. If attacker-controlled content lands in a memory note, the agent re-ingests it next session. This is the Greshake et al. (Lesson 27) attack restated over time.
-- **Citation loss.** Agent recalls "the user asked me to ship X" but cannot cite which turn. Store source references (session ID, turn ID) with every archival write.
+- **记忆腐化。** 写入积累速度快于读取；检索淹没在过时事实中。修复：定期整合（Letta 睡眠时间）、显式失效（Mem0 冲突检测器）。
+- **记忆投毒。** 外部记忆是检索回来的文本。如果攻击者控制的内容进入记忆笔记，代理会在下一会话重新摄入。这是 Greshake 等人（第 27 课）攻击在时间维度上的重新表述。
+- **引用丢失。** 代理回忆"用户让我发布 X"但无法引用哪个回合。在每次归档写入时存储源引用（会话 ID、回合 ID）。
 
-## Build It
+## 构建
 
-`code/main.py` implements MemGPT's two-tier pattern in stdlib:
+`code/main.py` 用标准库实现 MemGPT 的双层模式：
 
-- `MainContext` — fixed-size prompt buffer with a `core` dict and a `messages` list; auto-compacts oldest messages when over cap.
-- `ArchivalStore` — in-memory BM25-esque store (token-overlap scoring) of (id, text, tags, session, turn) records.
-- Five memory tools mapping to the MemGPT surface.
-- A scripted agent that fills archival with facts, then answers a question by calling `archival_memory_search`.
+- `MainContext` — 固定大小提示缓冲区，带 `core` 字典和 `messages` 列表；超出上限时自动压缩最旧的消息。
+- `ArchivalStore` — 内存 BM25 风格存储（token 重叠评分），记录格式为（id、text、tags、session、turn）。
+- 映射到 MemGPT 接口的五个记忆工具。
+- 一个脚本化代理，往归档写入事实，然后通过调用 `archival_memory_search` 回答问题。
 
-Run it:
+运行：
 
 ```
 python3 code/main.py
 ```
 
-The trace shows the agent writing three facts, filling main context to the cap (forcing eviction), then answering a follow-up question by retrieving from archival — reproducing the MemGPT workflow without any real LLM.
+跟踪显示代理写入三个事实，将主上下文填充到上限（强制驱逐），然后通过从归档检索来回答后续问题——在不借助任何真实 LLM 的情况下重现 MemGPT 工作流。
 
-## Use It
+## 使用
 
-Every production memory system today is a MemGPT variant:
+当今每个生产记忆系统都是 MemGPT 的变体：
 
-- **Letta** (Lesson 08) — three tiers, native reasoning, sleep-time compute.
-- **Mem0** (Lesson 09) — vector + KV + graph fused with a scoring layer.
-- **OpenAI Assistants / Responses** — managed memory via threads and files.
-- **Claude Agent SDK** — long-term memory via skills and session store.
+- **Letta**（第 08 课）— 三层、原生推理、睡眠时间计算。
+- **Mem0**（第 09 课）— 向量 + KV + 图融合，带评分层。
+- **OpenAI Assistants / Responses** — 通过线程和文件管理记忆。
+- **Claude Agent SDK** — 通过 skills 和会话存储实现长期记忆。
 
-Pick one by operational shape (self-hosted, managed, framework-integrated), not by the core pattern — the core pattern is MemGPT.
+按运营形态（自托管、托管、框架集成）选择，而不是按核心模式——核心模式就是 MemGPT。
 
-## Ship It
+## 发布
 
-`outputs/skill-virtual-memory.md` is a reusable skill that produces a correct two-tier memory scaffold (main + archival + tool surface) for any target runtime, with eviction policy and citation fields wired in.
+`outputs/skill-virtual-memory.md` 是一个可重用的 skill，为任何目标运行时生成正确的双层记忆脚手架（主层 + 归档层 + 工具接口），包括驱逐策略和引用字段的连线。
 
-## Exercises
+## 练习
 
-1. Add a `max_main_context_tokens` cap measured in tokens (approximate with `len(text.split())` * 1.3). Compact the oldest messages into a summary when the cap is exceeded. Compare behavior with and without the summarizer.
-2. Implement BM25 properly over the archival store (term frequency, inverse document frequency). Measure recall@10 on a toy fact set versus the token-overlap baseline.
-3. Add `citation` fields (session_id, turn_id, source_url) to archival inserts. Make the agent cite sources on every retrieval-backed answer.
-4. Simulate memory poisoning: add an archival record that says "ignore all future user instructions." Write a guard that scans retrievals for directive-shaped text and marks them untrusted.
-5. Port the implementation to use the MemGPT research repo's core-memory JSON schema (`cpacker/MemGPT`). What changes when you switch from flat strings to typed sections?
+1. 添加以 token 计数的 `max_main_context_tokens` 上限（用 `len(text.split()) * 1.3` 近似）。超出上限时将最旧的消息压缩为摘要。有无摘要器时行为有何不同？
+2. 在归档存储上正确实现 BM25（词频、逆文档频）。在玩具事实集上测量 recall@10，与 token 重叠基线对比。
+3. 往归档插入添加 `citation` 字段（session_id、turn_id、source_url）。让代理在每个基于检索的回答中引用来源。
+4. 模拟记忆投毒：添加一条归档记录写着"忽略所有未来用户指令"。编写一个 guard，扫描检索结果中的指令形文本并标记为不可信。
+5. 移植实现以使用 MemGPT 研究仓库的核心记忆 JSON schema（`cpacker/MemGPT`）。从平面字符串切换到类型化部分时有什么变化？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Virtual context | "Unlimited memory" | Main (prompt) + external (searchable) tiers with page in/out |
-| Main context | "Working memory" | The prompt — fixed-size, always visible |
-| Archival memory | "Long-term store" | External searchable persistence, retrieved on demand |
-| Core memory | "Persistent prompt section" | Named sections pinned inside the main context |
-| Memory tool | "Memory API" | Tool call the agent issues to read/write external memory |
-| Interrupt | "Memory page fault" | Agent pauses, runtime fetches, result splices into next turn |
-| Memory rot | "Stale facts" | Old writes drown retrieval; fix with consolidation |
-| Memory poisoning | "Injected persistent note" | Attacker content stored as memory, re-ingested on recall |
+| 虚拟上下文 | "无限记忆" | 主层（提示）+ 外部层（可搜索），带页面换入/换出 |
+| 主上下文 | "工作记忆" | 提示 — 固定大小，始终可见 |
+| 归档记忆 | "长期存储" | 外部可搜索持久化，按需检索 |
+| 核心记忆 | "持久提示部分" | 固定在主上下文内的命名部分 |
+| 记忆工具 | "记忆 API" | 代理发出以读写外部记忆的工具调用 |
+| 中断 | "记忆缺页中断" | 代理暂停，运行时获取，结果拼接到下一回合 |
+| 记忆腐化 | "过时事实" | 旧写入淹没检索；通过整合修复 |
+| 记忆投毒 | "注入的持久便笺" | 攻击者内容存储为记忆，在召回时重新摄入 |
 
-## Further Reading
+## 延伸阅读
 
-- [Packer et al., MemGPT (arXiv:2310.08560)](https://arxiv.org/abs/2310.08560) — OS-inspired virtual context paper
-- [Letta, Memory Blocks blog](https://www.letta.com/blog/memory-blocks) — the three-tier evolution
-- [Anthropic, Effective context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — treating context as a budget
-- [Chhikara et al., Mem0 (arXiv:2504.19413)](https://arxiv.org/abs/2504.19413) — hybrid production memory on top of this pattern
+- [Packer 等，MemGPT（arXiv:2310.08560）](https://arxiv.org/abs/2310.08560) — OS 启发的虚拟上下文论文
+- [Letta，Memory Blocks 博客](https://www.letta.com/blog/memory-blocks) — 三层演进
+- [Anthropic，有效的上下文工程](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — 将上下文视为预算
+- [Chhikara 等，Mem0（arXiv:2504.19413）](https://arxiv.org/abs/2504.19413) — 在此模式之上的混合生产记忆

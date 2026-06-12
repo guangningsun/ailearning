@@ -1,130 +1,130 @@
-# Tree of Thoughts and LATS: Deliberate Search
+# 思维树与 LATS：深思熟虑的搜索
 
-> A single chain-of-thought trajectory has no room to backtrack. ToT (Yao et al., 2023) turns reasoning into a tree with self-evaluation on each node. LATS (Zhou et al., 2024) unifies ToT with ReAct and Reflexion under Monte Carlo Tree Search. Game of 24 goes from 4% (CoT) to 74% (ToT); LATS hits 92.7% pass@1 on HumanEval.
+> 单条的思维链轨迹没有回溯的空间。ToT（Yao 等，2023）将推理建模为一棵树，每个节点上做自我评估。LATS（Zhou 等，2024）用蒙特卡洛树搜索统一了 ToT、ReAct 和 Reflexion。24 点游戏从 4%（CoT）提升到 74%（ToT）；LATS 在 HumanEval 上达到 92.7% pass@1。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 01 (Agent Loop), Phase 14 · 03 (Reflexion)
-**Time:** ~75 minutes
+**类型：** 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 01（智能体循环）、阶段 14 · 03（Reflexion）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Frame reasoning as search: nodes are "thoughts," edges are "expansions," value is "how promising."
-- Implement a stdlib ToT-style BFS tree search with self-evaluation scoring.
-- Extend to a toy LATS MCTS loop with select / expand / simulate / backpropagate.
-- Decide when search is worth the token multiplier (Game of 24, code generation) and when a single trajectory is enough (simple Q&A).
+- 将推理建模为搜索：节点是"思考"，边是"扩展"，价值是"有多有希望"。
+- 用标准库实现一个 ToT 风格的 BFS 树搜索，带自我评估打分。
+- 扩展为玩具 LATS MCTS 循环，包含选择 / 扩展 / 模拟 / 反向传播。
+- 判断何时搜索值得消耗 token 倍率（24 点游戏、代码生成），何时单条轨迹就够用（简单问答）。
 
-## The Problem
+## 问题
 
-Chain-of-thought is a linear walk. If the first step is wrong, every subsequent step works on a bad premise. On Game of 24 (use four digits with + − × ÷ to make 24), GPT-4 CoT hits 4% accuracy. The model picks the wrong subexpression early and cannot recover.
+思维链是一条线性路径。如果第一步错了，之后每一步都在一个糟糕的前提上运作。在 24 点游戏中（用四个数字通过 + − × ÷ 运算得到 24），GPT-4 CoT 准确率只有 4%。模型早早选错了子表达式，无法恢复。
 
-What reasoning needs is the ability to propose multiple candidates, evaluate them, pick the promising ones, and backtrack when dead ends appear. That is search. Tree of Thoughts and LATS are the two canonical formulations.
+推理真正需要的是：能够提出多个候选、评估它们、选择有希望的选项、在出现死胡同时回溯。这就是搜索。思维树和 LATS 是两种经典的形式化。
 
-## The Concept
+## 概念
 
-### Tree of Thoughts (Yao et al., NeurIPS 2023)
+### 思维树（Yao 等，NeurIPS 2023）
 
-Each node is a coherent intermediate step ("a thought"). Each node can expand to K child thoughts. The LLM self-evaluates each node with a scoring prompt. Search explores the tree — BFS, DFS, or beam.
+每个节点是一个连贯的中间步骤（"一个思考"）。每个节点可以扩展出 K 个子思考。大语言模型用评分提示词对每个节点做自我评估。搜索遍历这棵树——BFS、DFS 或束搜索。
 
 ```
-                     (root: "find 24 from 4 6 4 1")
+                     (根节点: "用 4 6 4 1 找到 24")
                     /               |            \
-           ("6 - 4 = 2")    ("4 + 1 = 5")    ("4 * 6 = 24")  <- Score: HIGH
+           ("6 - 4 = 2")    ("4 + 1 = 5")    ("4 * 6 = 24")  <- 评分: 高
               /   \              |                  |
-          ...    ...          ...                finish
+          ...    ...          ...                完成
 ```
 
-Self-evaluation is the load-bearing piece. The paper shows three variants: `sure / likely / impossible` classification, `1..10` numeric score, and vote among candidates. All three beat CoT substantially on Game of 24 (4% -> 74% with GPT-4).
+自我评估是承重的那一块。论文展示了三种变体：`sure / likely / impossible` 分类、`1..10` 数值评分、以及候选之间的投票。在 24 点游戏上，三种都显著超越 CoT（4% → 74%，使用 GPT-4）。
 
-### LATS (Zhou et al., ICML 2024)
+### LATS（Zhou 等，ICML 2024）
 
-LATS unifies ToT, ReAct, and Reflexion under MCTS. The LLM plays three roles:
+LATS 在 MCTS 框架下统一了 ToT、ReAct 和 Reflexion。大语言模型扮演三种角色：
 
-- **Policy**: propose candidate next actions (ReAct-style).
-- **Value function**: score a partial trajectory (ToT-style self-eval).
-- **Self-reflector**: on failure, write a natural-language reflection (Reflexion-style) and use it to reseed future rollouts.
+- **策略**：提出候选的下一步动作（ReAct 风格）。
+- **价值函数**：对部分轨迹打分（ToT 风格的自我评估）。
+- **自我反思者**：在失败时，写一段自然语言反思（Reflexion 风格），用它来重新播种未来的 rollout。
 
-Environment feedback (observations) mixes into the value function so the search is informed by real tool results, not just model opinions. Results at paper time: HumanEval pass@1 92.7% with GPT-4 (SOTA), WebShop average 75.9 with GPT-3.5 (approaching gradient-based fine-tuning).
+环境反馈（观察结果）混入价值函数，使搜索受到真实工具结果的引导，而非仅凭模型的意见。论文当时的成绩：HumanEval pass@1 92.7%（GPT-4，SOTA），WebShop 平均 75.9（GPT-3.5，接近梯度微调的水平）。
 
-### MCTS, minimally
+### MCTS，最小化实现
 
-Four phases per iteration:
+每次迭代四个阶段：
 
-1. **Select** — walk from root to a leaf using UCT (upper confidence bound for trees).
-2. **Expand** — generate K children via the policy.
-3. **Simulate** — rollout from a child using the policy, score the leaf with the value function (or environment reward).
-4. **Backpropagate** — update visit counts and value estimates up the path.
+1. **选择**——用 UCT（树上置信上界）从根走到一个叶子。
+2. **扩展**——通过策略生成 K 个子节点。
+3. **模拟**——从某个子节点用策略做 rollout，用价值函数对叶子打分（或用环境奖励）。
+4. **反向传播**——沿路径更新访问次数和价值估计。
 
-UCT formula: `Q(s, a) + c * sqrt(ln N(s) / N(s, a))`. First term is exploitation; second is exploration. Tune `c` per task.
+UCT 公式：`Q(s, a) + c * sqrt(ln N(s) / N(s, a))`。第一项是 exploitation；第二项是 exploration。根据任务调整 `c`。
 
-### The cost reality
+### 成本现实
 
-Search explodes tokens. ToT on Game of 24 uses 100–1000x the tokens of CoT. LATS is similar. This is not free; reserve search for:
+搜索会爆炸式消耗 token。ToT 在 24 点游戏上消耗的 token 是 CoT 的 100–1000 倍。LATS 也差不多。这不是免费的；只为以下情况保留搜索：
 
-- Tasks where a single trajectory is demonstrably insufficient (Game of 24, complex code).
-- Tasks where wall-clock is less important than correctness.
-- Tasks with a cheap, reliable value function (unit tests for code, explicit target for math).
+- 任务中单条轨迹明显不够用（24 点游戏、复杂代码）。
+- 任务中正确性比墙上时钟时间更重要。
+- 有廉价可靠的价值函数的任务（代码的单元测试、明确的数学目标）。
 
-If your task has a single right answer and a noisy evaluator, search often makes things worse — it finds a "good-scoring" wrong answer.
+如果你的任务有唯一正确答案且评估器有噪声，搜索往往适得其反——它会找到一个"评分高"的错误答案。
 
-### 2026 positioning
+### 2026 年的定位
 
-Most production agents do not run LATS. They run ReAct with tool-grounded verification (CRITIC, Lesson 05). Search shows up in specialized niches:
+大多数生产智能体不运行 LATS。它们运行带工具接地验证的 ReAct（CRITIC，第 05 课）。搜索出现在专业细分领域：
 
-- Coding agents that run tests as the value function (HumanEval-style).
-- Deep-research agents that explore multiple query paths.
-- Planning-heavy workflows inside LangGraph subgraphs.
+- 用测试作为价值函数的编码智能体（HumanEval 风格）。
+- 探索多条查询路径的深度研究智能体。
+- LangGraph 子图内的重规划工作流。
 
-AlphaEvolve (Lesson 11) is the 2025 extreme: evolutionary search over code, machine-checkable fitness, frontier gains (first 4x4 matmul improvement in 56 years).
+AlphaEvolve（第 11 课）是 2025 年的极端案例：代码上的进化搜索、程序化可检查的适应度、业界领先的成绩（56 年来首个 4x4 矩阵乘法改进）。
 
-## Build It
+## 构建它
 
-`code/main.py` implements:
+`code/main.py` 实现了：
 
-- A tiny ToT BFS on a stylized "pick arithmetic ops" task.
-- A toy LATS MCTS loop on the same task (Select / Expand / Simulate / Backpropagate) with UCT selection.
-- A value function that composes a symbolic score plus a self-eval score.
+- 一个小型 ToT BFS，处理风格化的"选取算术运算"任务。
+- 同一个任务上的玩具 LATS MCTS 循环（选择 / 扩展 / 模拟 / 反向传播），带 UCT 选择。
+- 一个由符号评分和自我评估评分组合而成的价值函数。
 
-Run it:
+运行它：
 
 ```
 python3 code/main.py
 ```
 
-The trace shows ToT expanding three candidates per node with BFS, compared to LATS converging on the best rollout via MCTS. Token counts printed for both.
+跟踪显示 ToT 每节点扩展三个候选（用 BFS），而 LATS 通过 MCTS 收敛到最优 rollout。两者都打印了 token 计数。
 
-## Use It
+## 使用它
 
-LangGraph ships ToT-style exploration as subgraph patterns; the LangChain team's blog on LATS (May 2024) is the reference tutorial. LlamaIndex ships a `TreeOfThoughts` agent. For most 2026 production agents this pattern lives behind an `if task_complexity > threshold: use_search()` gate — see the evaluator-optimizer pattern in Lesson 05.
+LangGraph 以子图模式提供 ToT 风格的探索；LangChain 团队的 LATS 博客（2024 年 5 月）是参考教程。LlamaIndex 提供 `TreeOfThoughts` 智能体。对大多数 2026 年的生产智能体，这个模式藏在 `if task_complexity > threshold: use_search()` 门控后面——参见第 05 课中的评估器-优化器模式。
 
-## Ship It
+## 交付它
 
-`outputs/skill-search-policy.md` selects between linear ReAct, ToT, LATS, and evolutionary search given task shape, budget, and evaluator fidelity.
+`outputs/skill-search-policy.md` 根据任务形状、预算和评估器保真度，在线性 ReAct、ToT、LATS 和进化搜索之间做出选择。
 
-## Exercises
+## 练习
 
-1. Run the toy LATS with UCT c=0.1 vs c=2.0. What changes in the trace?
-2. Swap the value function for a noisier scorer (add random jitter). Does MCTS still find the best leaf? What is the minimum signal-to-noise it tolerates?
-3. Implement beam-search ToT (keep top-k at each level) and compare to BFS. Which is better on a tight token budget?
-4. Read LATS Section 5.1. Reproduce the HumanEval trajectory count: how many rollouts does it take to hit the reported pass@1?
-5. Read the LATS paper's discussion on "when LATS helps less." Write a one-paragraph decision rule mapping task shape to search strategy.
+1. 用 UCT c=0.1 和 c=2.0 运行玩具 LATS。跟踪里有什么变化？
+2. 把价值函数换成噪声更大的评估器（加随机抖动）。MCTS 还能找到最优叶子吗？它能容忍的最低信噪比是多少？
+3. 实现束搜索 ToT（每层保留 top-k），并与 BFS 比较。在紧张的 token 预算下哪个更好？
+4. 阅读 LATS 第 5.1 节。复现 HumanEval 的轨迹计数：要达到报告的 pass@1 需要多少个 rollout？
+5. 阅读 LATS 论文中关于"LATS 何时帮助较小"的讨论。写一段决策规则，将任务形状映射到搜索策略。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Tree of Thoughts | "Branching CoT" | Yao et al. — tree of thought nodes with self-evaluation |
-| LATS | "MCTS for LLMs" | Zhou et al. — unifies ToT + ReAct + Reflexion under MCTS |
-| UCT | "Upper confidence bound" | Select formula balancing exploitation (Q) and exploration (ln N / n) |
-| Value function | "How good is this state" | Prompted LLM score or environment reward; feeds backprop |
-| Policy | "Action proposer" | ReAct-style generator; emits candidate next thoughts/actions |
-| Rollout | "Simulated trajectory" | Walk from a node to a leaf using policy, score with value |
-| Backpropagate | "Update ancestors" | Push the leaf's reward up the path, updating visit counts and Q |
-| Search cost | "Token explosion" | 100-1000x CoT on Game of 24; budget before you adopt |
+| Tree of Thoughts | "分支 CoT" | Yao 等——带自我评估的思考节点树 |
+| LATS | "LLM 的 MCTS" | Zhou 等——在 MCTS 下统一 ToT + ReAct + Reflexion |
+| UCT | "置信上界" | 平衡 exploitation（Q）和 exploration（ln N / n）的选择公式 |
+| Value function | "这个状态有多好" | 大语言模型提示评分或环境奖励；反馈给反向传播 |
+| Policy | "动作提议者" | ReAct 风格的生成器；发出候选的下一步思考/动作 |
+| Rollout | "模拟轨迹" | 用策略从节点走到叶子，用价值打分 |
+| Backpropagate | "更新祖先" | 把叶子的奖励沿路径向上推送，更新访问次数和 Q |
+| Search cost | "Token 爆炸" | 24 点游戏上是 CoT 的 100-1000 倍；采用前先算好预算 |
 
-## Further Reading
+## 延伸阅读
 
-- [Yao et al., Tree of Thoughts (arXiv:2305.10601)](https://arxiv.org/abs/2305.10601) — the canonical paper
-- [Zhou et al., LATS (arXiv:2310.04406)](https://arxiv.org/abs/2310.04406) — MCTS with Reflexion feedback
-- [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview) — subgraph patterns for search
-- [AlphaEvolve (arXiv:2506.13131)](https://arxiv.org/abs/2506.13131) — evolutionary search with programmatic evaluators
+- [Yao 等，Tree of Thoughts（arXiv:2305.10601）](https://arxiv.org/abs/2305.10601)——经典论文
+- [Zhou 等，LATS（arXiv:2310.04406）](https://arxiv.org/abs/2310.04406)——带 Reflexion 反馈的 MCTS
+- [LangGraph 概述](https://docs.langchain.com/oss/python/langgraph/overview)——搜索子图模式
+- [AlphaEvolve（arXiv:2506.13131）](https://arxiv.org/abs/2506.13131)——带程序化评估器的进化搜索

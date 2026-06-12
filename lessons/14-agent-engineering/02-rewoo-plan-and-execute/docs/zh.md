@@ -1,121 +1,121 @@
-# ReWOO and Plan-and-Execute: Decoupled Planning
+# ReWOO 与 Plan-and-Execute：解耦规划
 
-> ReAct interleaves thought and action in one stream. ReWOO separates them: one big plan up front, then execute. 5x fewer tokens, +4% accuracy on HotpotQA, and you can distill the planner into a 7B model. Plan-and-Execute generalized it; Plan-and-Act scaled it to web navigation.
+> ReAct 在一个流中交织思考和行动。ReWOO 将它们分离：先做一个大计划，然后执行。减少 5 倍 token，HotpotQA 准确率提升 4%，你可以将规划器蒸馏到 7B 模型中。Plan-and-Execute 将其泛化；Plan-and-Act 将其扩展到网络导航。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 01 (Agent Loop)
-**Time:** ~60 minutes
+**类型：** 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 01（智能体循环）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain why ReWOO's Planner / Worker / Solver split saves tokens and improves robustness over ReAct's interleaved loop.
-- Implement a plan DAG, a dependency-ordered executor, and a solver that composes worker outputs — all stdlib.
-- Decide when a task should run as plan-then-execute vs interleaved ReAct, using the 2026 "five workflow patterns" framing (Anthropic).
-- Recognize when Plan-and-Act's synthetic plan data is needed for long-horizon web or mobile tasks.
+- 解释为什么 ReWOO 的规划器/工作者/求解器分离比 ReAct 的交织循环节省 token 并提高鲁棒性。
+- 实现一个计划 DAG、一个依赖顺序执行器和一个组合工作者输出的求解器 —— 全部用标准库。
+- 使用 2026 年「五种工作流模式」框架（Anthropic）决定任务何时应该运行 plan-then-execute 与交织式 ReAct。
+- 识别何时需要 Plan-and-Act 的合成计划数据来处理长时域网络或移动任务。
 
-## The Problem
+## 问题
 
-ReAct's interleaved thought-action-observation loop is simple and flexible, but each tool call has to carry the full prior context — including every previous thought. Token usage grows quadratically with depth. Worse: when a tool fails mid-loop, the model has to re-derive the whole plan from the error observation.
+ReAct 的交织思考-行动-观察循环简单灵活，但每次工具调用都必须携带完整的先前上下文 —— 包括每一个之前的思考。Token 使用量随深度二次增长。更糟糕的是：当一个工具在循环中途失败时，模型必须从错误观察中重新推导整个计划。
 
-ReWOO (Xu et al., arXiv:2305.18323, May 2023) noticed this and made a bet: plan the whole thing up front, fetch evidence in parallel, compose the answer at the end. One LLM call to plan, N tool calls for evidence (can be parallel), one LLM call to solve. The trade is less flexibility (the plan is static) for much better token efficiency and clearer failure modes.
+ReWOO（Xu 等，arXiv:2305.18323，2023 年 5 月）注意到了这一点并做出一个赌注：提前规划好所有事情，并行获取证据，最后组合答案。一次 LLM 调用来规划，N 次工具调用获取证据（可以并行），一次 LLM 调用来求解。权衡是牺牲灵活性（计划是静态的）换取更好的 token 效率和更清晰的失败模式。
 
-## The Concept
+## 概念
 
-### The three roles
+### 三个角色
 
 ```
-Planner:  user_question -> [plan_dag]
-Workers:  [plan_dag]     -> [evidence]        (tool calls, possibly parallel)
-Solver:   user_question, plan_dag, evidence -> final_answer
+Planner（规划器）:  user_question -> [plan_dag]
+Workers（工作者）:  [plan_dag]     -> [evidence]        （工具调用，可能并行）
+Solver（求解器）:   user_question, plan_dag, evidence -> final_answer
 ```
 
-Planner produces a DAG. Each node names a tool, its arguments, and which earlier nodes it depends on (references like `#E1`, `#E2`). Workers execute nodes in topological order. Solver stitches everything together.
+规划器产生一个 DAG。每个节点命名一个工具及其参数，以及它依赖的早期节点（引用如 `#E1`、`#E2`）。工作者按拓扑顺序执行节点。求解器将所有内容拼接在一起。
 
-### Why 5x fewer tokens
+### 为什么减少 5 倍 token
 
-ReAct grows prompt length linearly with step count. At step 10, the prompt contains thought 1 plus action 1 plus observation 1 plus thought 2 plus action 2 plus observation 2, and so on. Each intermediate step also redundantly includes the original prompt.
+ReAct 的提示长度随步数线性增长。在第 10 步时，提示包含思考 1 加上行动 1 加上观察 1 加上思考 2 加上行动 2 加上观察 2，以此类推。每个中间步骤还冗余地包含原始提示。
 
-ReWOO pays one planner prompt (large), N small worker prompts (each just the tool call, no chain), and one solver prompt. On HotpotQA the paper measures ~5x fewer tokens while scoring +4 absolute accuracy.
+ReWOO 支付一个规划器提示（大的），N 个小工作者提示（每个只是工具调用，没有链），和一个求解器提示。在 HotpotQA 上论文测量到减少约 5 倍 token，同时准确率提升 4 个绝对值。
 
-### Why it is more robust
+### 为什么它更鲁棒
 
-If worker 3 fails in ReAct, the loop has to reason out of the error mid-stream. In ReWOO, worker 3 returns an error string; the solver sees it in context with the original plan and can degrade gracefully. Failure localization is per-node, not per-step.
+如果 ReAct 中工作者 3 失败，循环必须在错误中途进行推理。在 ReWOO 中，工作者 3 返回一个错误字符串；求解器在原始计划的上下文中看到它，可以优雅地降级。失败定位是按节点，不是按步。
 
-### Planner distillation
+### 规划器蒸馏
 
-The paper's second result: because the planner does not see observations, you can fine-tune a 7B model on planner outputs from a 175B teacher. The small model handles planning; the big model is not needed at inference. This is now standard — many 2026 production agents use a small planner and a big executor or vice-versa.
+论文的第二个结果：因为规划器看不到观察，你可以用 175B 教师模型的规划器输出对 7B 模型进行微调。小模型处理规划；大模型在推理时不需要。这现在是标准做法 —— 许多 2026 年生产智能体使用小规划器和大执行器，或反之。
 
-### Plan-and-Execute (LangChain, 2023)
+### Plan-and-Execute（LangChain，2023 年）
 
-The LangChain team's August 2023 post generalized ReWOO into a pattern name: Plan-and-Execute. Up-front planner emits a step list, executor runs each step, an optional replanner can revise after observing results. This is closer to ReAct than ReWOO (the replanner brings observations back into planning) but preserves the token savings.
+LangChain 团队 2023 年 8 月的帖子将 ReWOO 泛化为一个模式名称：Plan-and-Execute。前置规划器发出一系列步骤，执行器运行每个步骤，可选的重新规划器可以在观察结果后修订。这比 ReWOO 更接近 ReAct（重新规划器将观察带回规划）但保留了 token 节省。
 
-### Plan-and-Act (Erdogan et al., arXiv:2503.09572, ICML 2025)
+### Plan-and-Act（Erdogan 等，arXiv:2503.09572，ICML 2025）
 
-Plan-and-Act scales the pattern to long-horizon web and mobile agents. The key contribution is synthetic plan data: a labeled trajectory generator produces training data where the plan is explicit. Used to fine-tune planner models that keep working past 30–50 steps on WebArena-like tasks where a single ReAct trajectory loses coherence.
+Plan-and-Act 将该模式扩展到长时域网络和移动智能体。关键贡献是合成计划数据：一个标记的轨迹生成器产生训练数据，其中计划是显式的。用于微调规划器模型，使其在 WebArena 类任务上超过 30–50 步仍能继续工作，而在这些任务上单个 ReAct 轨迹会失去连贯性。
 
-### When to pick which
+### 何时选择哪个
 
-| Pattern | When |
+| 模式 | 何时使用 |
 |---------|------|
-| ReAct | Short tasks, unknown environment, need reactive exception handling |
-| ReWOO | Structured tasks with known tools, token-sensitive, parallelizable evidence |
-| Plan-and-Execute | Like ReWOO but with replanning after partial execution |
-| Plan-and-Act | Long-horizon (>30 steps), web/mobile/computer-use |
-| Tree of Thoughts | Search is worth paying for (Lesson 04) |
+| ReAct | 短任务、未知环境、需要反应式异常处理 |
+| ReWOO | 结构化任务、已知工具、token 敏感、可并行的证据 |
+| Plan-and-Execute | 像 ReWOO 但在部分执行后有重新规划 |
+| Plan-and-Act | 长时域（>30 步）、网络/移动/计算机使用 |
+| 思维树（Tree of Thoughts） | 搜索值得付出代价（第 4 课） |
 
-Anthropic's Dec 2024 guidance: start with the simplest. If the task is one tool call plus a summary, do not build ReWOO. If the task is a 40-step research assignment, do not do ReAct alone.
+Anthropic 2024 年 12 月的指导：从最简单的开始。如果任务是一次工具调用加总结，不要构建 ReWOO。如果任务是一个 40 步的研究任务，不要单独使用 ReAct。
 
-## Build It
+## 构建它
 
-`code/main.py` implements a toy ReWOO:
+`code/main.py` 实现了一个玩具 ReWOO：
 
-- `Planner` — a scripted policy that emits a plan DAG from a prompt.
-- `Worker` — dispatches each node's tool call via the registry.
-- `Solver` — scripted composition that reads evidence and produces a final answer.
-- Dependency resolution — references like `#E1` are substituted with earlier worker outputs.
+- `Planner` —— 一个脚本化策略，从提示中发出计划 DAG。
+- `Worker` —— 通过注册表分派每个节点的工具调用。
+- `Solver` —— 脚本化组合，读取证据并产生最终答案。
+- 依赖解析 —— 引用如 `#E1` 在分派时替换为早期工作者输出。
 
-The demo answers "What is the population of the capital of France, rounded to millions?" using a two-step plan: (1) look up the capital, (2) look up the population, then solve.
+演示回答「法国首都的人口是多少，以百万为单位四舍五入？」使用两步计划：（1）查找首都，（2）查找人口，然后求解。
 
-Run it:
+运行它：
 
 ```
 python3 code/main.py
 ```
 
-The trace shows the full plan first, then worker results, then solver composition. Compare the token count (we print a rough character count) to a ReAct-style interleaved run — ReWOO wins on this kind of structured task.
+追踪首先显示完整计划，然后是工作者结果，然后是求解器组合。将 token 计数与我们打印的粗略字符计数进行比较（与 ReAct 风格的交织运行相比 —— 在这种结构化任务上 ReWOO 胜出）。
 
-## Use It
+## 使用它
 
-LangGraph ships Plan-and-Execute as a recipe (`create_react_agent` for ReAct, custom graphs for plan-execute). CrewAI's Flows encode the pattern directly: you define tasks up front and the Flow DAG executes them. Plan-and-Act's synthetic data approach is still mostly research; the runtime pattern (explicit plan DAG) ships in production through LangGraph and CrewAI Flows.
+LangGraph 以配方形式提供 Plan-and-Execute（`create_react_agent` 用于 ReAct，自定义图用于计划-执行）。CrewAI 的 Flows 直接编码该模式：你预先定义任务，Flow DAG 执行它们。Plan-and-Act 的合成数据方法仍然主要是研究性的；运行时模式（显式计划 DAG）通过 LangGraph 和 CrewAI Flows 在生产中发布。
 
-## Ship It
+## 交付它
 
-`outputs/skill-rewoo-planner.md` generates a ReWOO plan DAG from a user request, given a tool catalog. It validates the plan (acyclic, every reference resolved, every tool exists) before handing off to an executor.
+`outputs/skill-rewoo-planner.md` 给定工具目录，从用户请求生成 ReWOO 计划 DAG。它在交给执行器之前验证计划（无环、每个引用已解析、每个工具存在）。
 
-## Exercises
+## 练习
 
-1. Parallelize worker execution for independent plan nodes. What does it buy you on a 6-node DAG with 2 parallel groups?
-2. Add a replanner node that fires if any worker returns an error. What is the smallest change to ReWOO that makes it Plan-and-Execute?
-3. Replace `Planner` with a small model (7B class) and keep `Solver` on a frontier model. Compare end-to-end quality — where does the split fail?
-4. Read Section 4 of the ReWOO paper on planner distillation. Reproduce the 175B -> 7B result conceptually: what training data do you need, and how do you score plan quality?
-5. Port the toy to Plan-and-Act's trajectory shape: plan is a sequence, not a DAG. What tradeoffs change?
+1. 并行化独立计划节点的工作者执行。在有 2 个并行组的 6 节点 DAG 上，这能给你带来什么？
+2. 添加一个重新规划器节点，如果任何工作者返回错误则触发。对 ReWOO 的最小更改是什么使其成为 Plan-and-Execute？
+3. 用一个小模型（7B 类）替换 `Planner`，保持 `Solver` 在前沿模型上。比较端到端质量 —— 分裂在哪里失败？
+4. 阅读 ReWOO 论文第 4 节关于规划器蒸馏的内容。从概念上重现 175B → 7B 的结果：你需要什么训练数据，如何评分计划质量？
+5. 将玩具移植到 Plan-and-Act 的轨迹形态：计划是一个序列，不是 DAG。哪些权衡会改变？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| ReWOO | "Reasoning without observations" | Plan, then fetch evidence in parallel, then solve — no observations in the planning prompt |
-| Plan-and-Execute | "LangChain's plan-execute pattern" | ReWOO with an optional replanner node after execution |
-| Plan-and-Act | "Scaled plan-execute" | Explicit planner/executor split with synthetic plan training data for long-horizon tasks |
-| Evidence reference | "#E1, #E2, ..." | Plan-node placeholder substituted with prior worker output at dispatch time |
-| Planner distillation | "Small planner, big executor" | Fine-tune a small model on planner traces from a large teacher |
-| Token efficiency | "Fewer round trips" | 5x fewer tokens on HotpotQA vs ReAct in the paper |
-| DAG executor | "Topological dispatcher" | Runs plan nodes in dependency order; parallel at each level |
+| ReWOO | "推理不带观察" | 先计划，然后并行获取证据，然后求解 —— 规划提示中没有观察 |
+| Plan-and-Execute | "LangChain 的计划-执行模式" | 带可选的重新规划器节点的 ReWOO（在执行后） |
+| Plan-and-Act | "扩展的计划-执行" | 显式的规划器/执行器分离，带合成计划训练数据用于长时域任务 |
+| 证据引用 | "#E1, #E2, ..." | 在分派时替换为先前工作者输出的计划节点占位符 |
+| 规划器蒸馏 | "小规划器，大执行器" | 用大教师的规划器轨迹微调小模型 |
+| Token 效率 | "更少的往返" | 论文中 HotpotQA 比 ReAct 减少 5 倍 token |
+| DAG 执行器 | "拓扑分派器" | 按依赖顺序运行计划节点；在每一层并行 |
 
-## Further Reading
+## 进一步阅读
 
-- [Xu et al., ReWOO: Decoupling Reasoning from Observations (arXiv:2305.18323)](https://arxiv.org/abs/2305.18323) — the canonical paper
-- [Erdogan et al., Plan-and-Act (arXiv:2503.09572)](https://arxiv.org/abs/2503.09572) — scaled planner-executor with synthetic plans
-- [LangGraph Plan-and-Execute tutorial](https://docs.langchain.com/oss/python/langgraph/overview) — the framework recipe
-- [Anthropic, Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — pick the simplest pattern that works
+- [Xu 等，ReWOO：将推理与观察解耦（arXiv:2305.18323）](https://arxiv.org/abs/2305.18323) —— 经典论文
+- [Erdogan 等，Plan-and-Act（arXiv:2503.09572）](https://arxiv.org/abs/2503.09572) —— 带合成计划的扩展规划器-执行器
+- [LangGraph Plan-and-Execute 教程](https://docs.langchain.com/oss/python/langgraph/overview) —— 框架配方
+- [Anthropic，构建有效的智能体](https://www.anthropic.com/research/building-effective-agents) —— 选择最简单的可行模式

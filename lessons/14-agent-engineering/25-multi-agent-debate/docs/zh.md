@@ -1,119 +1,119 @@
-# Multi-Agent Debate and Collaboration
+# 多 Agent 辩论与协作
 
-> Du et al. (ICML 2024, "Society of Minds") run N model instances that independently propose answers, then iteratively critique each other over R rounds to converge. Improves factuality, rule-following, reasoning. Sparse topology beats full mesh on token cost.
+> Du 等人（ICML 2024，"Society of Minds"）运行 N 个模型实例独立提出答案，然后迭代地相互批判 R 轮以收敛。提升事实正确性、规则遵循和推理能力。稀疏拓扑在 token 成本上优于全网格。
 
-**Type:** Learn + Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 14 · 12 (Workflow Patterns), Phase 14 · 05 (Self-Refine and CRITIC)
-**Time:** ~60 minutes
+**类型：** 学习型 + 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 14 · 12（工作流模式）、阶段 14 · 05（Self-Refine 和 CRITIC）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain the debate protocol: N proposers, R rounds, converge on a shared answer.
-- Describe why debate improves factuality, rule-following, and reasoning.
-- Explain sparse topology: not every debater needs to see every other.
-- Implement a stdlib debate over a scripted LLM with full-mesh and sparse variants; measure token cost vs accuracy.
+- 解释辩论协议：N 个提议者、R 轮，就共同答案收敛。
+- 描述辩论为何能提升事实正确性、规则遵循和推理能力。
+- 解释稀疏拓扑：并非每个辩论者都需要看到所有其他辩论者。
+- 用标准库实现一个基于脚本化 LLM 的辩论，包含全网格和稀疏变体；测量 token 成本 vs 准确率。
 
-## The Problem
+## 问题
 
-Self-Refine (Lesson 05) is one model critiquing itself — risks groupthink. CRITIC (Lesson 05) grounds critique in external tools — not always available. Debate introduces a third mode: multiple instances, cross-critique, convergence by disagreement.
+Self-Refine（第 05 课）是一个模型自我批判 —— 有群体思维的风险。CRITIC（第 05 课）让批判基于外部工具 —— 并非总是可用。辩论引入第三种模式：多个实例、交叉批判、通过分歧收敛。
 
-## The Concept
+## 概念
 
-### Society of Minds (Du et al., ICML 2024)
+### Society of Minds（Du 等人，ICML 2024）
 
-- N model instances independently propose answers to the same question.
-- Over R rounds, each model reads the others' proposals and critiques them.
-- Models update their answers based on the critiques.
-- After R rounds, return the convergent answer.
+- N 个模型实例独立对同一问题提出答案。
+- 在 R 轮中，每个模型阅读他人的提议并批判它们。
+- 模型根据批判更新自己的答案。
+- R 轮后，返回收敛后的答案。
 
-Original experiments used N=3, R=2 due to cost. Accuracy improves with more agents and more rounds on hard problems (MMLU, GSM8K, Chess Move Validity, biography generation).
+由于成本原因，原始实验使用 N=3、R=2。在难题（MMLU、GSM8K、象棋走子有效性、传记生成）上，更多的 Agent 和更多的轮次能提升准确率。
 
-Cross-model combinations beat single-model debates: ChatGPT + Bard together > either alone.
+跨模型组合优于单模型辩论：ChatGPT + Bard 一起 > 各自单独。
 
-### Sparse topology
+### 稀疏拓扑
 
-"Improving Multi-Agent Debate with Sparse Communication Topology" (arXiv:2406.11776, 2024-2025) showed full-mesh debate is not always optimal. Sparse topologies (star, ring, hub-and-spoke) can match accuracy at lower token cost. Each debater sees only a subset of peers.
+"通过稀疏通信拓扑改进多 Agent 辩论"（arXiv:2406.11776，2024-2025）表明全网格辩论并非总是最优的。稀疏拓扑（星型、环型、中心辐射型）可以在更低的 token 成本下达到相当的准确率。每个辩论者只看到一部分同伴。
 
-Implications:
+含义：
 
-- Full mesh N=5, R=3 = 5 × 3 = 15 proposals, each reading 4 peers = 60 critique ops.
-- Star N=5, R=3 (one hub + 4 spokes) = 15 proposals, spokes read only the hub = 12 critique ops.
+- 全网格 N=5、R=3 = 5 × 3 = 15 个提议，每个读取 4 个同伴 = 60 个批判操作。
+- 星型 N=5、R=3（一个中心 + 4 个辐条）= 15 个提议，辐条只读中心 = 12 个批判操作。
 
-### When debate helps
+### 辩论何时有效
 
-- **Factuality.** N independent proposals, cross-check reduces hallucination.
-- **Rule-following.** Chess move validity — one model misses a rule, others catch it.
-- **Open-ended reasoning.** Multiple framings narrow in on the right answer.
+- **事实正确性。** N 个独立提议，交叉检查减少幻觉。
+- **规则遵循。** 象棋走子有效性 —— 一个模型漏掉一条规则，其他模型会 catch 到。
+- **开放式推理。** 多种框架缩小到正确答案。
 
-### When debate hurts
+### 辩论何时有害
 
-- **Latency-sensitive UX.** N × R serial rounds is latency you may not have.
-- **Cost-sensitive scale.** N × R tokens per question.
-- **Simple factual lookups.** One lookup is cheaper than five debates.
+- **延迟敏感的 UX。** N × R 串行轮次带来你可能无法承受的延迟。
+- **成本敏感的规模化。** 每个问题 N × R 个 token。
+- **简单的事实查询。** 一次查询比五次辩论更便宜。
 
-### 2026 practical instantiations
+### 2026 年的实际应用
 
-- **Anthropic orchestrator-workers** (Lesson 12) — one variant of debate with a synthesis step.
-- **LangGraph supervisor** (Lesson 13) — central router + specialist agents can implement debate as a node.
-- **OpenAI Agents SDK** (Lesson 16) — agents handoff back and forth for iterative critique.
-- **Multi-agent evals** — pair debate + evaluator-optimizer for eval signal.
+- **Anthropic 编排器-工作者**（第 12 课）—— 一种带综合步骤的辩论变体。
+- **LangGraph 监督器**（第 13 课）—— 中央路由器 + 专家 Agent 可以将辩论实现为一个节点。
+- **OpenAI Agents SDK**（第 16 课）—— Agent 迭代批判地来回交接。
+- **多 Agent 评估** —— 将辩论 + 评估器-优化器配对以获得评估信号。
 
-### Where this pattern goes wrong
+### 这个模式容易出错的地方
 
-- **Convergence collapse.** All agents converge on the first wrong answer. Mitigate with required disagreement rounds.
-- **Hub failure.** In a star topology, a bad hub corrupts everyone. Rotate or use multiple hubs.
-- **Prompt homogenization.** All agents use the same prompt; they produce the same answers. Use diverse prompts and/or models.
+- **收敛坍缩。** 所有 Agent 收敛到第一个错误的答案。用必需的分歧轮次来缓解。
+- **中心故障。** 在星型拓扑中，一个坏的中心会 corrupt 所有节点。轮换或使用多个中心。
+- **提示词同质化。** 所有 Agent 使用相同的提示词；它们产生相同的答案。使用多样化的提示词和/或模型。
 
-## Build It
+## 构建
 
-`code/main.py` implements stdlib debate:
+`code/main.py` 实现标准库辩论：
 
-- `Debater` class (scripted LLM with per-debater opinion drift).
-- `FullMeshDebate` and `SparseDebate` runners.
-- Three questions: one factual, one rule-based, one reasoning.
-- Metrics: convergent answer, rounds to convergence, total critique ops.
+- `Debater` 类（带每个辩论者观点漂移的脚本化 LLM）。
+- `FullMeshDebate` 和 `SparseDebate` 运行器。
+- 三个问题：一个事实型、一个规则型、一个推理型。
+- 指标：收敛答案、收敛轮次、总批判操作数。
 
-Run it:
+运行：
 
 ```
 python3 code/main.py
 ```
 
-Output: per-protocol accuracy and cost; sparse matches full mesh on 2/3 questions at lower cost.
+输出：每个协议类型的准确率和成本；稀疏变体在 2/3 的问题上以更低成本匹配全网格。
 
-## Use It
+## 使用
 
-- **Anthropic orchestrator-workers** for simple 2-3-worker debates.
-- **LangGraph** for stateful multi-round debate with checkpointing.
-- **Custom** for research or specialized correctness guarantees.
+- **Anthropic 编排器-工作者** 用于简单的 2-3 个工作者的辩论。
+- **LangGraph** 用于带检查点的有状态多轮辩论。
+- **自定义** 用于研究或专门的正确性保证。
 
-## Ship It
+## 交付
 
-`outputs/skill-debate.md` scaffolds a multi-agent debate with configurable topology, N, R, and a convergence rule.
+`outputs/skill-debate.md` 脚手架一个多 Agent 辩论，可配置拓扑、N、R 和收敛规则。
 
-## Exercises
+## 练习
 
-1. Implement a "forced disagreement" rule: in round 1, every debater must produce a distinct proposal. Measure effect on convergence speed.
-2. Add a confidence-weighted aggregation: debaters return (answer, confidence); aggregator weights by confidence. Does it help?
-3. Swap one "agent" for a different scripted LLM with different opinions. Does heterogeneity improve accuracy?
-4. Measure token cost for full mesh vs sparse on your 3 questions. Plot cost vs accuracy.
-5. Read the Society of Minds paper. Port your toy to N=5, R=3. What breaks? What gets better?
+1. 实现"强制分歧"规则：在第 1 轮，每个辩论者必须产生一个不同的提议。测量对收敛速度的影响。
+2. 添加置信度加权聚合：辩论者返回（答案，置信度）；聚合器按置信度加权。有帮助吗？
+3. 将一个"Agent"替换为不同观点的不同脚本化 LLM。异质性会提升准确率吗？
+4. 在你的 3 个问题上测量全网格 vs 稀疏的 token 成本。绘制成本 vs 准确率图。
+5. 阅读 Society of Minds 论文。将你的玩具版移植到 N=5、R=3。什么会出问题？什么会变好？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Debate | "Multi-agent critique" | N proposers, R rounds of cross-critique, converge |
-| Full mesh | "Everyone reads everyone" | Every debater reads every peer each round |
-| Sparse topology | "Limited peer view" | Debaters read only a subset of peers |
-| Hub-and-spoke | "Star topology" | One central debater, N-1 spokes read only the hub |
-| Convergence | "Agreement" | Debaters converge on a shared answer |
-| Society of Minds | "Du et al. debate paper" | ICML 2024 multi-agent debate method |
+| 辩论（Debate） | "多 Agent 批判" | N 个提议者、R 轮交叉批判、收敛 |
+| 全网格（Full mesh） | "每个人都读每个人" | 每轮每个辩论者阅读每个同伴 |
+| 稀疏拓扑（Sparse topology） | "有限的同伴视图" | 辩论者只阅读部分同伴 |
+| 中心辐射型（Hub-and-spoke） | "星型拓扑" | 一个中心辩论者，N-1 个辐条只读中心 |
+| 收敛（Convergence） | "达成一致" | 辩论者就一个共同答案收敛 |
+| Society of Minds | "Du 等人辩论论文" | ICML 2024 多 Agent 辩论方法 |
 
-## Further Reading
+## 延伸阅读
 
-- [Du et al., Society of Minds (arXiv:2305.14325)](https://arxiv.org/abs/2305.14325) — canonical multi-agent debate
-- [Sparse Communication Topology (arXiv:2406.11776)](https://arxiv.org/abs/2406.11776) — sparse topology results
-- [Anthropic, Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — orchestrator-workers as a debate variant
-- [Madaan et al., Self-Refine (arXiv:2303.17651)](https://arxiv.org/abs/2303.17651) — single-model self-critique counterpart
+- [Du 等人，Society of Minds（arXiv:2305.14325）](https://arxiv.org/abs/2305.14325) —— 标准多 Agent 辩论
+- [稀疏通信拓扑（arXiv:2406.11776）](https://arxiv.org/abs/2406.11776) —— 稀疏拓扑结果
+- [Anthropic，Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) —— 编排器-工作者作为一种辩论变体
+- [Madaan 等人，Self-Refine（arXiv:2303.17651）](https://arxiv.org/abs/2303.17651) —— 单模型自我批判对应方法
