@@ -1,229 +1,229 @@
-# Why Multi-Agent?
+# 为什么是多智能体？
 
-> One agent hits a wall. The smart move is not a bigger agent - it is more agents.
+> 一个智能体碰壁了。聪明的做法不是更大的智能体——而是更多的智能体。
 
-**Type:** Learn
-**Languages:** TypeScript
-**Prerequisites:** Phase 14 (Agent Engineering)
-**Time:** ~60 minutes
+**类型：** 学习型
+**语言：** TypeScript
+**前置条件：** 阶段 14（智能体工程）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Identify the single-agent ceiling (context overflow, mixed expertise, sequential bottleneck) and explain when splitting into multiple agents is the right move
-- Compare orchestration patterns (pipeline, parallel fan-out, supervisor, hierarchical) and select the right one for a given task structure
-- Design a multi-agent system with clear role boundaries, shared state, and a communication contract
-- Analyze the tradeoffs of multi-agent complexity (latency, cost, debugging difficulty) versus single-agent simplicity
+- 识别单智能体的上限（上下文溢出、专业混杂、顺序瓶颈），并解释何时拆分为多个智能体是正确的选择
+- 对比编排模式（流水线、并行扇出、监督器、分层），并根据给定任务结构选择合适的模式
+- 设计一个多智能体系统，具备清晰的角色边界、共享状态和通信契约
+- 分析多智能体复杂性的权衡（延迟、成本、调试难度）与单智能体简单性的对比
 
-## The Problem
+## 问题
 
-You built a single agent in Phase 14. It works. It can read files, run commands, call APIs, and reason about results. Then you point it at a real codebase: 200 files, three languages, tests that depend on infrastructure, and a requirement to research external APIs before writing code.
+你在阶段 14 中构建了一个单智能体。它能正常运行。它可以读取文件、运行命令、调用 API，并对结果进行推理。然后你把它指向一个真实的代码库：200 个文件、三种语言、依赖基础设施的测试，以及在编写代码之前需要研究外部 API 的需求。
 
-The agent chokes. Not because the LLM is dumb, but because the task exceeds what one agent loop can handle. The context window fills up with file contents. The agent forgets what it read 40 tool calls ago. It tries to be a researcher, a coder, and a reviewer all at once, and does all three poorly.
+智能体卡住了。不是因为 LLM 太笨，而是因为任务超出了单个智能体循环能处理的能力。上下文窗口被文件内容填满。智能体忘记了 40 次工具调用前读取的内容。它试图同时扮演研究员、程序员和审查员三种角色，结果每一样都做得很差。
 
-This is the single-agent ceiling. You hit it every time a task requires:
+这就是单智能体的上限。每当任务需要以下条件时，你就会遇到它：
 
-- **More context than fits in one window** - reading 50 files blows past 200k tokens
-- **Different expertise at different stages** - research requires different prompting than code generation
-- **Work that can happen in parallel** - why read three files sequentially when you can read them simultaneously?
+- **更多上下文而不止一个窗口的容量** —— 读取 50 个文件就会超过 200k token
+- **不同阶段需要不同专业知识** —— 研究需要不同于代码生成的提示方式
+- **可以并行完成的工作** —— 为什么要顺序读取三个文件，而不是同时读取？
 
-## The Concept
+## 概念
 
-### The Single-Agent Ceiling
+### 单智能体的上限
 
-A single agent is one loop, one context window, one system prompt. Picture it:
+单个智能体是一个循环、一个上下文窗口、一个系统提示。可以这样想象它：
 
 ```
 ┌─────────────────────────────────────────┐
-│            SINGLE AGENT                 │
+│            单智能体                      │
 │                                         │
 │  ┌───────────────────────────────────┐  │
-│  │         Context Window            │  │
+│  │         上下文窗口                  │  │
 │  │                                   │  │
-│  │  research notes                   │  │
-│  │  + code files                     │  │
-│  │  + test output                    │  │
-│  │  + review feedback                │  │
-│  │  + API docs                       │  │
+│  │  研究笔记                         │  │
+│  │  + 代码文件                       │  │
+│  │  + 测试输出                       │  │
+│  │  + 审查反馈                       │  │
+│  │  + API 文档                       │  │
 │  │  + ...                            │  │
 │  │                                   │  │
-│  │  ██████████████████████ FULL ███  │  │
+│  │  ██████████████████████ 已满 ███  │  │
 │  └───────────────────────────────────┘  │
 │                                         │
-│  One system prompt tries to cover       │
-│  research + coding + review + testing   │
+│  一个系统提示试图涵盖                    │
+│  研究 + 编码 + 审查 + 测试              │
 │                                         │
-│  Result: mediocre at everything         │
+│  结果：每件事都做得很平庸                │
 └─────────────────────────────────────────┘
 ```
 
-Three things break:
+有三件事会出问题：
 
-1. **Context saturation** - tool results pile up. By turn 30, the agent has consumed 150k tokens of file contents, command outputs, and prior reasoning. Critical details from turn 5 get lost.
+1. **上下文饱和** —— 工具结果堆积。到第 30 轮时，智能体已经消耗了 150k token 的文件内容、命令输出和之前的推理。第 5 轮的关键细节丢失了。
 
-2. **Role confusion** - a system prompt that says "you are a researcher, coder, reviewer, and tester" produces an agent that half-researches, half-codes, and never finishes reviewing.
+2. **角色混淆** —— 一个说"你是研究员、程序员、审查员和测试员"的系统提示会产生一个半研究、半编码、永远完成不了审查的智能体。
 
-3. **Sequential bottleneck** - the agent reads file A, then file B, then file C. Three serial LLM calls. Three serial tool executions. No parallelism.
+3. **顺序瓶颈** —— 智能体先读文件 A，再读文件 B，然后读文件 C。三次串行 LLM 调用。三次串行工具执行。没有并行。
 
-### The Multi-Agent Solution
+### 多智能体解决方案
 
-Split the work. Give each agent one job, one context window, and one system prompt tuned for that job:
+拆分工作。让每个智能体做一个任务、一个上下文窗口、一个针对该任务调优的系统提示：
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    ORCHESTRATOR                          │
+│                    编排器                                 │
 │                                                          │
-│  "Build a REST API for user management"                  │
+│  "为用户管理构建一个 REST API"                           │
 │                                                          │
 │         ┌──────────┬──────────┬──────────┐               │
 │         │          │          │          │               │
 │         ▼          ▼          ▼          ▼               │
 │   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-│   │RESEARCHER│ │  CODER   │ │ REVIEWER │ │  TESTER  │  │
+│   │  研究员   │ │  程序员   │ │  审查员   │ │  测试员   │  │
 │   │          │ │          │ │          │ │          │  │
-│   │ Reads    │ │ Writes   │ │ Checks   │ │ Runs     │  │
-│   │ docs,    │ │ code     │ │ code     │ │ tests,   │  │
-│   │ finds    │ │ based on │ │ quality, │ │ reports  │  │
-│   │ patterns │ │ research │ │ finds    │ │ results  │  │
-│   │          │ │ + spec   │ │ bugs     │ │          │  │
-│   └─────┬────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘  │
+│   │  读取    │ │  编写    │ │  检查    │ │  运行    │  │
+│   │  文档，   │ │  代码    │ │  代码    │ │  测试，   │  │
+│   │  发现    │ │  基于    │ │  质量，   │ │  报告    │  │
+│   │  模式    │ │  研究    │ │  找出    │ │  结果    │  │
+│   │          │ │  + 规范  │ │  bug    │ │          │  │
+│   └─────┬────┘ └────┬─────┘ └────┬────┘ └────┬─────┘  │
 │         │           │            │             │         │
 │         └───────────┴────────────┴─────────────┘         │
 │                          │                               │
-│                     Merge results                        │
+│                     合并结果                              │
 └──────────────────────────────────────────────────────────┘
 ```
 
-Each agent has:
-- A focused system prompt ("You are a code reviewer. Your only job is finding bugs.")
-- Its own context window (not polluted by other agents' work)
-- A clear input/output contract (receives research notes, outputs code)
+每个智能体都有：
+- 一个专注的系统提示（"你是一个代码审查员。你唯一的工作是找 bug。"）
+- 自己的上下文窗口（不会被其他智能体的工作污染）
+- 清晰的输入/输出契约（接收研究笔记，输出代码）
 
-### Real Systems That Do This
+### 真正这样做的系统
 
-**Claude Code subagents** - when Claude Code spawns a subagent with `Task`, it creates a child agent with a scoped task. The parent keeps its context clean. The child does focused work and returns a summary.
+**Claude Code 子智能体** —— 当 Claude Code 用 `Task` 生成一个子智能体时，它会创建一个带有作用域任务的子智能体。父智能体保持上下文干净。子智能体做专注的工作并返回摘要。
 
-**Devin** - runs a planner agent, a coder agent, and a browser agent. The planner breaks work into steps. The coder writes code. The browser researches documentation. Each has separate context.
+**Devin** —— 运行一个规划器智能体、一个程序员智能体和一个浏览器智能体。规划器把工作分成步骤。程序员编写代码。浏览器研究文档。每个都有独立的上下文。
 
-**Multi-agent coding teams (SWE-bench)** - top-performing systems on SWE-bench use a researcher that reads the codebase, a planner that designs the fix, and a coder that implements it. Single-agent systems score lower.
+**多智能体编程团队（SWE-bench）** —— SWE-bench 上表现最好的系统使用一个研究员来阅读代码库、一个规划器来设计修复方案、一个程序员来实现它。单智能体系统得分较低。
 
-**ChatGPT Deep Research** - spawns multiple search agents in parallel, each exploring a different angle, then synthesizes results.
+**ChatGPT 深度研究** —— 并行生成多个搜索智能体，每个从不同角度探索，然后综合结果。
 
-### The Spectrum
+### 频谱
 
-Multi-agent is not binary. It is a spectrum:
+多智能体不是二元的。它是一个频谱：
 
 ```
-SIMPLE ──────────────────────────────────────────── COMPLEX
+简单 ──────────────────────────────────────────── 复杂
 
- Single        Sub-         Pipeline      Team         Swarm
- Agent         agents
+ 单个        子智能体       流水线         团队          群体
+ 智能体
 
  ┌───┐       ┌───┐        ┌───┐───┐    ┌───┐───┐    ┌─┐┌─┐┌─┐
  │ A │       │ A │        │ A │ B │    │ A │ B │    │ ││ ││ │
  └───┘       └─┬─┘        └───┘─┬─┘    └─┬─┘─┬─┘    └┬┘└┬┘└┬┘
                │                │        │   │       ┌┴──┴──┴┐
-             ┌─┴─┐          ┌───┘───┐    │   │       │shared │
-             │ a │          │ C │ D │  ┌─┴───┴─┐    │ state │
-             └───┘          └───┘───┘  │  msg   │    └───────┘
-                                       │  bus   │
- 1 loop      Parent +      Stage by    │       │    N peers,
- 1 context   child tasks   stage       └───────┘    emergent
-                                       Explicit      behavior
-                                       roles
+             ┌─┴─┐          ┌───┘───┐    │   │       │共享   │
+             │ a │          │ C │ D │  ┌─┴───┴─┐    │状态   │
+             └───┘          └───┘───┘  │  消息   │    └───────┘
+                                       │  总线   │
+ 1 个循环     父 +        按阶段       │        │    N 个对等体，
+ 1 个上下文   子任务       执行         └───────┘    涌现行为
+                                       明确的
+                                       角色
 ```
 
-**Single agent** - one loop, one prompt. Good for simple tasks.
+**单智能体** —— 一个循环、一个提示。适合简单任务。
 
-**Subagents** - a parent spawns children for focused subtasks. The parent maintains the plan. Children report back. This is what Claude Code does.
+**子智能体** —— 父智能体生成子智能体来处理专注的子任务。父智能体维护计划。子智能体汇报工作。这就是 Claude Code 做的事。
 
-**Pipeline** - agents run in sequence. Agent A's output becomes Agent B's input. Good for staged workflows: research -> code -> review -> test.
+**流水线** —— 智能体按顺序运行。智能体 A 的输出成为智能体 B 的输入。适合分阶段工作流：研究 -> 编码 -> 审查 -> 测试。
 
-**Team** - agents run in parallel with a shared message bus. Each has a role. An orchestrator coordinates. Good when different skills are needed simultaneously.
+**团队** —— 智能体通过共享消息总线并行运行。每个有各自角色。编排器协调。适合需要同时使用不同技能的场景。
 
-**Swarm** - many identical or near-identical agents with shared state. No fixed orchestrator. Agents pick up work from a queue. Good for high-throughput parallel tasks.
+**群体** —— 许多相同或几乎相同的智能体共享状态。没有固定的编排器。智能体从队列中领取工作。适合高吞吐量并行任务。
 
-### The Four Multi-Agent Patterns
+### 四种多智能体模式
 
-#### Pattern 1: Pipeline
-
-```
-Input ──▶ Agent A ──▶ Agent B ──▶ Agent C ──▶ Output
-          (research)  (code)      (review)
-```
-
-Each agent transforms the data and passes it forward. Simple to reason about. Failure in one stage blocks the rest.
-
-#### Pattern 2: Fan-out / Fan-in
+#### 模式 1：流水线
 
 ```
-                ┌──▶ Agent A ──┐
+输入 ──▶ 智能体 A ──▶ 智能体 B ──▶ 智能体 C ──▶ 输出
+          (研究)      (编码)       (审查)
+```
+
+每个智能体转换数据并向前传递。简单易理解。一个阶段的失败阻塞其余阶段。
+
+#### 模式 2：扇出 / 扇入
+
+```
+                ┌──▶ 智能体 A ──┐
                 │              │
-Input ──▶ Split ├──▶ Agent B ──├──▶ Merge ──▶ Output
+输入 ──▶ 拆分 ├──▶ 智能体 B ──├──▶ 合并 ──▶ 输出
                 │              │
-                └──▶ Agent C ──┘
+                └──▶ 智能体 C ──┘
 ```
 
-Split work across parallel agents, then merge results. Good for tasks that decompose into independent subtasks.
+跨并行智能体拆分工作，然后合并结果。适合能分解为独立子任务的任务。
 
-#### Pattern 3: Orchestrator-Worker
+#### 模式 3：编排器-工作器
 
 ```
                     ┌──────────┐
-                    │  Orch.   │
+                    │  编排器   │
                     └──┬───┬───┘
-                  task │   │ task
+                  任务 │   │ 任务
                  ┌─────┘   └─────┐
                  ▼               ▼
            ┌──────────┐   ┌──────────┐
-           │ Worker A │   │ Worker B │
+           │ 工作器 A  │   │ 工作器 B  │
            └──────────┘   └──────────┘
 ```
 
-A smart orchestrator decides what to do, delegates to workers, and synthesizes results. The orchestrator is itself an agent with tools for spawning workers.
+智能编排器决定做什么，委托给工作器，并综合结果。编排器本身是一个带有用于生成工作器的工具的智能体。
 
-#### Pattern 4: Peer Swarm
+#### 模式 4：对等群体
 
 ```
-         ┌───┐ ◄──── msg ────▶ ┌───┐
+         ┌───┐ ◄──── 消息 ────▶ ┌───┐
          │ A │                  │ B │
          └─┬─┘                  └─┬─┘
            │                      │
-      msg  │    ┌───────────┐     │ msg
-           └───▶│  Shared   │◄────┘
-                │  State    │
-           ┌───▶│  / Queue  │◄────┐
+      消息 │    ┌───────────┐     │ 消息
+           └───▶│  共享     │◄────┘
+                │  状态     │
+           ┌───▶│  / 队列   │◄────┐
            │    └───────────┘     │
-      msg  │                      │ msg
+      消息 │                      │ 消息
          ┌─┴─┐                  ┌─┴─┐
-         │ C │ ◄──── msg ────▶ │ D │
+         │ C │ ◄──── 消息 ────▶ │ D │
          └───┘                  └───┘
 ```
 
-No central orchestrator. Agents communicate peer-to-peer. Decisions emerge from interaction. Harder to debug, but scales to many agents.
+没有中央编排器。智能体点对点通信。决策从交互中涌现。更难调试，但能扩展到多个智能体。
 
-### When NOT to Use Multi-Agent
+### 何时不使用多智能体
 
-Multi-agent adds complexity. Every message between agents is a potential failure point. Debugging goes from "read one conversation" to "trace messages across five agents."
+多智能体增加复杂性。智能体之间的每个消息都是一个潜在的故障点。调试从"阅读一个对话"变成"跨五个智能体跟踪消息"。
 
-**Stay single-agent when:**
-- The task fits in one context window (under ~100k tokens of working data)
-- You do not need different system prompts for different stages
-- Sequential execution is fast enough
-- The task is simple enough that splitting it adds more overhead than value
+**在以下情况下保持单智能体：**
+- 任务适合一个上下文窗口（工作数据在 ~100k token 以内）
+- 不同阶段不需要不同的系统提示
+- 顺序执行已经足够快
+- 任务足够简单，拆分它的开销大于价值
 
-**The complexity cost:**
-- Every agent boundary is a lossy compression step: agent A's full context gets summarized into a message for agent B
-- Coordination logic (who does what, when, in what order) is its own source of bugs
-- Latency increases: N agents means N serial LLM calls minimum, more if they need to talk back and forth
-- Cost multiplies: each agent burns tokens independently
+**复杂性代价：**
+- 每个智能体边界都是一个有损压缩步骤：智能体 A 的完整上下文被总结成智能体 B 的一条消息
+- 协调逻辑（谁做什么、何时做、按什么顺序）本身就是 bug 的来源
+- 延迟增加：N 个智能体意味着至少 N 次串行 LLM 调用，如果它们需要来回通信则更多
+- 成本成倍增加：每个智能体独立消耗 token
 
-Rule of thumb: if a task takes fewer than 20 tool calls and fits in 100k tokens, keep it single-agent.
+经验法则：如果一个任务少于 20 次工具调用且在 100k token 以内，保持单智能体。
 
-## Build It
+## 构建
 
-### Step 1: The Overloaded Single Agent
+### 第 1 步：过载的单智能体
 
-Here is a single agent trying to do everything. It has one massive system prompt and one context window holding research, code, and reviews:
+这里是一个试图完成所有事情的单个智能体。它有一个庞大的系统提示和一个包含研究、代码和审查的上下文窗口：
 
 ```typescript
 type AgentResult = {
@@ -233,25 +233,25 @@ type AgentResult = {
 };
 
 async function singleAgentApproach(task: string): Promise<AgentResult> {
-  const systemPrompt = `You are a full-stack developer. You must:
-1. Research the requirements
-2. Write the code
-3. Review the code for bugs
-4. Write tests
-Do ALL of these in a single conversation.`;
+  const systemPrompt = `你是一个全栈开发者。你必须：
+1. 研究需求
+2. 编写代码
+3. 审查代码中的 bug
+4. 编写测试
+在一次对话中完成所有这些。`;
 
   const contextWindow: string[] = [];
   let totalTokens = 0;
   let totalToolCalls = 0;
 
-  const research = await fakeLLMCall(systemPrompt, `Research: ${task}`);
+  const research = await fakeLLMCall(systemPrompt, `研究：${task}`);
   contextWindow.push(research.output);
   totalTokens += research.tokens;
   totalToolCalls += research.calls;
 
   const code = await fakeLLMCall(
     systemPrompt,
-    `Given this research:\n${contextWindow.join("\n")}\n\nNow write code for: ${task}`
+    `根据这项研究：\n${contextWindow.join("\n")}\n\n现在为以下任务编写代码：${task}`
   );
   contextWindow.push(code.output);
   totalTokens += code.tokens;
@@ -259,7 +259,7 @@ Do ALL of these in a single conversation.`;
 
   const review = await fakeLLMCall(
     systemPrompt,
-    `Given all previous context:\n${contextWindow.join("\n")}\n\nReview the code.`
+    `根据所有之前的上下文：\n${contextWindow.join("\n")}\n\n审查代码。`
   );
   contextWindow.push(review.output);
   totalTokens += review.tokens;
@@ -273,14 +273,14 @@ Do ALL of these in a single conversation.`;
 }
 ```
 
-Problems with this approach:
-- The context window grows with every stage. By the review step, it contains research notes AND code AND prior reasoning.
-- The system prompt is generic. It cannot be tuned for each stage.
-- Nothing runs in parallel.
+这种做法的问题：
+- 上下文窗口随着每个阶段增长。到审查步骤时，它包含研究笔记 AND 代码 AND 之前的推理。
+- 系统提示是通用的。它不能为每个阶段调优。
+- 没有东西是并行运行的。
 
-### Step 2: Specialist Agents
+### 第 2 步：专业智能体
 
-Now split it. Each agent gets one job:
+现在拆分它。每个智能体做一个任务：
 
 ```typescript
 type SpecialistAgent = {
@@ -306,25 +306,25 @@ function createSpecialist(name: string, systemPrompt: string): SpecialistAgent {
 
 const researcher = createSpecialist(
   "researcher",
-  "You are a technical researcher. Read documentation, find patterns, and summarize findings. Output only the facts needed for implementation."
+  "你是一个技术研究员。阅读文档，发现模式，并总结发现。只输出实现所需的事实。"
 );
 
 const coder = createSpecialist(
   "coder",
-  "You are a senior TypeScript developer. Given requirements and research notes, write clean, tested code. Nothing else."
+  "你是一个高级 TypeScript 开发者。根据需求和研究笔记，编写干净、有测试的代码。不做其他事。"
 );
 
 const reviewer = createSpecialist(
   "reviewer",
-  "You are a code reviewer. Find bugs, security issues, and logic errors. Be specific. Cite line numbers."
+  "你是一个代码审查员。找出 bug、安全问题和逻辑错误。要具体。引用行号。"
 );
 ```
 
-Each specialist has a focused prompt. Each gets a clean context window with only the input it needs.
+每个专业智能体有一个专注的提示。每个获得一个只有它所需输入的干净上下文窗口。
 
-### Step 3: Coordinate Through Messages
+### 第 3 步：通过消息协调
 
-Wire the specialists together with explicit message passing:
+用显式消息传递将专业智能体连接在一起：
 
 ```typescript
 type AgentMessage = {
@@ -351,7 +351,7 @@ async function multiAgentApproach(task: string): Promise<AgentResult> {
 
   const coderInput = messages
     .filter((m) => m.to === "coder")
-    .map((m) => `[From ${m.from}]: ${m.content}`)
+    .map((m) => `[来自 ${m.from}]：${m.content}`)
     .join("\n");
 
   const codeResult = await coder.run(coderInput);
@@ -366,7 +366,7 @@ async function multiAgentApproach(task: string): Promise<AgentResult> {
 
   const reviewerInput = messages
     .filter((m) => m.to === "reviewer")
-    .map((m) => `[From ${m.from}]: ${m.content}`)
+    .map((m) => `[来自 ${m.from}]：${m.content}`)
     .join("\n");
 
   const reviewResult = await reviewer.run(reviewerInput);
@@ -380,60 +380,60 @@ async function multiAgentApproach(task: string): Promise<AgentResult> {
   totalToolCalls += reviewResult.toolCalls;
 
   return {
-    content: messages.map((m) => `[${m.from} -> ${m.to}]: ${m.content}`).join("\n\n"),
+    content: messages.map((m) => `[${m.from} -> ${m.to}]：${m.content}`).join("\n\n"),
     tokensUsed: totalTokens,
     toolCalls: totalToolCalls,
   };
 }
 ```
 
-Each agent receives only the messages addressed to it. No context pollution. The researcher's 50k tokens of documentation reading never enter the reviewer's context.
+每个智能体只接收发给它的消息。没有上下文污染。研究员的 50k token 文档阅读永远不会进入审查员的上下文。
 
-### Step 4: Compare
+### 第 4 步：对比
 
 ```typescript
 async function compare() {
-  const task = "Build a rate limiter middleware for an Express.js API";
+  const task = "为 Express.js API 构建一个限流中间件";
 
-  console.log("=== Single Agent ===");
+  console.log("=== 单智能体 ===");
   const single = await singleAgentApproach(task);
-  console.log(`Tokens: ${single.tokensUsed}`);
-  console.log(`Tool calls: ${single.toolCalls}`);
+  console.log(`Token：${single.tokensUsed}`);
+  console.log(`工具调用：${single.toolCalls}`);
 
-  console.log("\n=== Multi-Agent ===");
+  console.log("\n=== 多智能体 ===");
   const multi = await multiAgentApproach(task);
-  console.log(`Tokens: ${multi.tokensUsed}`);
-  console.log(`Tool calls: ${multi.toolCalls}`);
+  console.log(`Token：${multi.tokensUsed}`);
+  console.log(`工具调用：${multi.toolCalls}`);
 }
 ```
 
-The multi-agent version uses more total tokens (three agents, three separate LLM calls) but each agent's context stays clean. The quality of each stage improves because the system prompt is specialized.
+多智能体版本使用更多总 token（三个智能体，三次独立的 LLM 调用），但每个智能体的上下文保持干净。由于系统提示是专门的，每个阶段的质量都会提高。
 
-## Use It
+## 实际使用
 
-This lesson produces a reusable prompt for deciding when to go multi-agent. See `outputs/prompt-multi-agent-decision.md`.
+本课产出一个可重用的提示词，用于决定何时使用多智能体。参见 `outputs/prompt-multi-agent-decision.md`。
 
-## Exercises
+## 练习
 
-1. Add a fourth specialist: a "tester" agent that receives code from the coder and review feedback from the reviewer, then writes tests
-2. Modify the pipeline so the reviewer can send feedback back to the coder for a revision loop (max 2 rounds)
-3. Convert the sequential pipeline into a fan-out: run the researcher and a "requirements analyzer" agent in parallel, then merge their outputs before passing to the coder
+1. 添加第四个专业智能体：一个"测试员"智能体，接收来自程序员的代码和来自审查员的审查反馈，然后编写测试
+2. 修改流水线，使审查员可以将反馈发回给程序员进行修订循环（最多 2 轮）
+3. 将顺序流水线转换为扇出：并行运行研究员和一个"需求分析器"智能体，然后在传递给程序员之前合并它们的输出
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|----------------------|
-| Swarm | "A hive mind of AI agents" | A set of peer agents with shared state and no fixed leader. Behavior emerges from local interactions. |
-| Orchestrator | "The boss agent" | An agent whose tools include spawning and managing other agents. It plans and delegates but may not do the actual work. |
-| Coordinator | "The traffic cop" | A non-agent component (often just code, not an LLM) that routes messages between agents based on rules. |
-| Consensus | "The agents agree" | A protocol where multiple agents must reach agreement before proceeding. Used when conflicting outputs need resolution. |
-| Emergent behavior | "The agents figured it out themselves" | System-level patterns that arise from agent interactions but were not explicitly programmed. Can be useful or harmful. |
-| Fan-out / fan-in | "Map-reduce for agents" | Splitting a task across parallel agents (fan-out), then combining their results (fan-in). |
-| Message passing | "Agents talk to each other" | The communication mechanism between agents: structured data sent from one agent to another, replacing shared context windows. |
+| 群体 | "AI 智能体的蜂巢思维" | 一组具有共享状态且没有固定领导的对等智能体。行为从局部交互中涌现。 |
+| 编排器 | "老板智能体" | 一个其工具包含生成和管理其他智能体的智能体。它做规划和委托，但可能不做实际工作。 |
+| 协调器 | "交通警察" | 一个非智能体组件（通常是代码，不是 LLM），根据规则在智能体之间路由消息。 |
+| 共识 | "智能体们达成一致" | 在继续之前多个智能体必须达成协议的协议。当冲突输出需要解决时使用。 |
+| 涌现行为 | "智能体们自己想出来的" | 从智能体交互中产生的但未明确编程的系统级模式。可能有用也可能有害。 |
+| 扇出 / 扇入 | "智能体的 map-reduce" | 跨并行智能体拆分任务（扇出），然后组合它们的结果（扇入）。 |
+| 消息传递 | "智能体们互相交谈" | 智能体之间的通信机制：从一个智能体发送到另一个的結構化数据，取代共享上下文窗口。 |
 
-## Further Reading
+## 延伸阅读
 
-- [The Landscape of Emerging AI Agent Architectures](https://arxiv.org/abs/2409.02977) - survey of multi-agent patterns
-- [AutoGen: Enabling Next-Gen LLM Applications](https://arxiv.org/abs/2308.08155) - Microsoft's multi-agent conversation framework
-- [Claude Code subagents documentation](https://docs.anthropic.com/en/docs/claude-code) - how Claude Code delegates with Task
-- [CrewAI documentation](https://docs.crewai.com/) - role-based multi-agent framework
+- [新兴 AI 智能体架构全景](https://arxiv.org/abs/2409.02977) —— 多智能体模式调查
+- [AutoGen：实现下一代 LLM 应用](https://arxiv.org/abs/2308.08155) —— 微软的多智能体对话框架
+- [Claude Code 子智能体文档](https://docs.anthropic.com/en/docs/claude-code) —— Claude Code 如何用 Task 委托
+- [CrewAI 文档](https://docs.crewai.com/) —— 基于角色的多智能体框架

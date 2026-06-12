@@ -1,149 +1,149 @@
-# Evaluation and Coordination Benchmarks
+# 评估与协调基准
 
-> Five 2025-2026 benchmarks cover the multi-agent evaluation space. **MultiAgentBench / MARBLE** (ACL 2025, arXiv:2503.01935) evaluates star/chain/tree/graph topologies with milestone KPIs; **graph is best for research**, cognitive planning adds ~3% milestone achievement. **COMMA** evaluates multimodal asymmetric-information coordination; state-of-the-art models including GPT-4o struggle to beat a random baseline. **MedAgentBoard** (arXiv:2505.12371) covers four medical task categories and often finds multi-agent does not dominate single-LLM. **AgentArch** (arXiv:2509.10769) benchmarks enterprise agent architectures combining tool-use + memory + orchestration. **SWE-bench Pro** ([arXiv:2509.16941](https://arxiv.org/abs/2509.16941)) has 1865 problems across 41 repos spanning business apps, B2B services, and developer tools; frontier models score ~23% on Pro vs 70%+ on Verified — a reality check on contamination. Claude Opus 4.7 (April 2026) is reported at **64.3%** on Pro with explicit agent-teams coordination (no Anthropic primary source published yet — treat as preliminary); Verdent (agent scaffold) hits **76.1% pass@1** on Verified ([Verdent technical report](https://www.verdent.ai/blog/swe-bench-verified-technical-report)). **AAAI 2026 Bridge Program WMAC** (https://multiagents.org/2026/) is the 2026 community focal point. This lesson builds on MARBLE's metrics, runs a topology-vs-metric sweep, and pins the "just passing SWE-bench Verified is not evidence of generalization" rule.
+> 五个 2025-2026 年的基准覆盖多智能体评估领域。**MultiAgentBench / MARBLE**（ACL 2025，arXiv:2503.01935）以里程碑 KPI 评估星型/链型/树型/图型拓扑；**图型对研究最优**，认知规划在各里程碑成就上提升约 3%。**COMMA** 评估多模态非对称信息协调；包括 GPT-4o 在内的最先进模型难以击败随机基线。**MedAgentBoard**（arXiv:2505.12371）覆盖四类医学任务，常发现多智能体并不主导单一 LLM。**AgentArch**（arXiv:2509.10769）基准测试结合工具使用 + 记忆 + 编排的企业智能体架构。**SWE-bench Pro**（arXiv:2509.16941）有横跨商业应用、B2B 服务和开发者工具的 41 个仓库的 1865 道题；前沿模型在 Pro 上得分约 23% 而 Verified 上 70%+——这是对污染的现实检验。Claude Opus 4.7（2026 年 4 月）在 Pro 上据报为 **64.3%**，使用了显式智能体团队协调（尚无 Anthropic 主要来源发表——视为初步）；Verdent（智能体脚手架）在 Verified 上达到 **76.1% pass@1**（Verdent 技术报告）。**AAAI 2026 WMAC**（https://multiagents.org/2026/）是 2026 年社区焦点。本课基于 MARBLE 的指标，运行拓扑-vs-指标扫描，并确立"SWE-bench Verified 只是通过并不能证明泛化"这一规则。
 
-**Type:** Learn
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 16 · 15 (Voting and Debate Topology), Phase 16 · 23 (Failure Modes)
-**Time:** ~75 minutes
+**类型：** 学习
+**语言：** Python（标准库）
+**前置条件：** 阶段 16 · 15（投票与辩论拓扑）、阶段 16 · 23（故障模式）
+**时间：** 约 75 分钟
 
-## Problem
+## 问题
 
-When a paper claims "our multi-agent system is better," the question is: better than what, on what, measured how? The 2023-2024 era of multi-agent evaluation was chaos — everyone picked their own metrics, their own baselines, and their own task sets. The 2025-2026 benchmarks imposed structure.
+当一篇论文声称"我们的多智能体系统更好"时，问题是：比什么好？在什么上好？如何测量的？2023-2024 年的多智能体评估时代是混沌的——每个人都选自己的指标、自己的基线、自己的任务集。2025-2026 年的基准引入了结构。
 
-Without shared benchmarks, you cannot compare two multi-agent systems meaningfully. Worse, without hold-out benchmarks, frontier models can contaminate. SWE-bench Verified became partially contaminated in training corpora by mid-2025; frontier scores inflated; Pro was designed as an uncontaminated reality check.
+没有共享基准，你无法有意义地比较两个多智能体系统。更糟的是，没有留出基准，前沿模型可能污染。SWE-bench Verified 在 2025 年中部分污染进了训练语料库；前沿分数膨胀；Pro 被设计为未受污染的现实检验。
 
-This lesson enumerates the five canonical 2026 benchmarks, names what each measures, and teaches you to read benchmark claims skeptically.
+本课列举五个 2026 年典型基准，命名每个衡量的内容，并教你审慎地阅读基准声明。
 
-## Concept
+## 概念
 
-### MultiAgentBench (MARBLE) — ACL 2025
+### MultiAgentBench（MARBLE）—— ACL 2025
 
-arXiv:2503.01935. Evaluates four coordination topologies (star, chain, tree, graph) on research, coding, and planning tasks. Milestone-based KPIs track partial progress rather than only final success.
+arXiv:2503.01935。在研究、编码和规划任务上评估四种协调拓扑（星型、链型、树型、图型）。基于里程碑的 KPI 追踪部分进展，而非仅最终成功。
 
-Measured results:
+测量结果：
 
-- **Graph** topology best for research scenarios; supports any-to-any critique.
-- **Chain** best for stepwise-refinement coding.
-- **Star** best for fast-factual consolidation.
-- **Coordination tax** appears past ~4 agents on graph.
-- **Cognitive planning** adds ~3% milestone achievement across topologies.
+- **图型**拓扑对研究场景最优；支持任意到任意的批评。
+- **链型**对逐步细化编码最优。
+- **星型**对快速事实整合最优。
+- **协调税**在约 4 个智能体以上时出现。
+- **认知规划**在各拓扑上提升约 3% 的里程碑成就。
 
-Use when: you want to compare coordination topologies apples-to-apples. The MARBLE repo (https://github.com/ulab-uiuc/MARBLE) provides the evaluator.
+使用场景：你想要苹果对苹果比较协调拓扑。MARBLE 仓库（https://github.com/ulab-uiuc/MARBLE）提供评估器。
 
-### COMMA — multimodal asymmetric information
+### COMMA——多模态非对称信息
 
-Covers tasks where agents have different observation modalities and must coordinate without full information sharing. The reported result is uncomfortable: frontier models including GPT-4o struggle to beat a **random baseline** on agent-agent collaboration in COMMA. The signal is that multi-agent modalities are under-trained and under-evaluated — LLMs handle single-modality cooperation reasonably; multi-modality coordination collapses.
+覆盖智能体具有不同观测模态且必须在非完全信息共享下协调的任务。报告结果令人不安：包括 GPT-4o 在内的前沿模型在 COMMA 上智能体间协作难以击败**随机基线**。信号是多智能体模态训练不足、评估不足——LLM 处理单模态协作尚可；多模态协调崩溃。
 
-Use when: your system has multimodal or asymmetric-information coordination. The null result from COMMA is a warning to measure before claiming.
+使用场景：你的系统有多模态或非对称信息协调。COMMA 的空结果是警告——在声称之前先测量。
 
-### MedAgentBoard — domain stress test
+### MedAgentBoard——领域压力测试
 
-arXiv:2505.12371. Four medical task categories: diagnosis, treatment planning, report generation, patient communication. Compares multi-agent vs single-LLM vs conventional rule-based systems.
+arXiv:2505.12371。四类医学任务：诊断、治疗计划、报告生成、患者沟通。比较多智能体 vs 单一 LLM vs 传统基于规则的系统。
 
-Finding: multi-agent does NOT dominate single-LLM on most categories. The multi-agent advantage is narrow — task decomposition helps when the subtasks are clearly separable (diagnosis + treatment); it hurts when coordination overhead exceeds specialization gain (report generation).
+发现：多智能体在大多数类别上并**不主导**单一 LLM。多智能体优势是狭窄的——当子任务可清晰分离时（诊断 + 治疗），任务分解有帮助；当协调开销超过专业化收益时（报告生成），它有害。
 
-Use when: your domain has clear-cut single-LLM baselines. If MedAgentBoard's lesson generalizes, many proposed multi-agent systems are over-engineered.
+使用场景：你的领域有清晰的单一 LLM 基线。如果 MedAgentBoard 的教训可以推广，许多提议的多智能体系统是过度工程化的。
 
-### AgentArch — enterprise architectures
+### AgentArch——企业架构
 
-arXiv:2509.10769. Enterprise settings with tool use, memory, and orchestration layered together. Benchmark isolates the contribution of each layer: how much does adding tools help? Adding memory? Adding multi-agent orchestration?
+arXiv:2509.10769。带有分层工具使用、记忆和编排的企业设置。基准隔离每层的贡献：加工具帮助多少？加记忆呢？加多智能体编排呢？
 
-Use when: you are designing an enterprise agent stack and need to justify each layer. AgentArch helps avoid buying features you cannot measure the value of.
+使用场景：你正在设计企业智能体栈并需要为每层辩护。AgentArch 帮助避免购买你无法衡量其价值的特性。
 
-### SWE-bench Pro — the reality check
+### SWE-bench Pro——现实检验
 
-arXiv:2509.16941. 1865 problems across 41 repositories spanning business apps, B2B services, and developer tools. Designed to be **uncontaminated** with later training cutoffs. Frontier models score ~23% on Pro vs 70%+ on Verified. The gap is the contamination signal.
+arXiv:2509.16941。横跨商业应用、B2B 服务和开发者工具的 41 个仓库的 1865 道题。设计为与后续训练截止日期**无污染**。前沿模型在 Pro 上得分约 23% 而 Verified 上 70%+。差距是污染信号。
 
-April 2026 scores:
-- Claude Opus 4.7 on Pro: **64.3%** (reported with explicit agent-teams coordination; no Anthropic primary source published yet — treat as preliminary).
-- Verdent (agent scaffold) on Verified: **76.1% pass@1** ([technical report](https://www.verdent.ai/blog/swe-bench-verified-technical-report)).
-- Frontier raw scores on Pro without agent scaffolding: ~23-35% ([SWE-bench Pro paper](https://arxiv.org/abs/2509.16941)).
+2026 年 4 月分数：
+- Claude Opus 4.7 在 Pro 上：**64.3%**（据报使用了显式智能体团队协调；尚无 Anthropic 主要来源发表——视为初步）。
+- Verdent（智能体脚手架）在 Verified 上：**76.1% pass@1**（技术报告）。
+- 前沿原始分数在 Pro 上无智能体脚手架：约 23-35%（SWE-bench Pro 论文）。
 
-The takeaway: "we beat SWE-bench Verified" is no longer evidence of capability. Pro is the current gating test. Agent-team scaffolding produces measurable gains on Pro (~30-40 point delta), which is one of the strongest empirical arguments for multi-agent coordination in 2026.
+结论："我们击败了 SWE-bench Verified"不再是能力的证明。Pro 是当前的门槛测试。智能体团队脚手架在 Pro 上产生可衡量的提升（约 30-40 分差），这是 2026 年多智能体协调最有力的实证论据之一。
 
 ### AAAI 2026 WMAC
 
-AAAI 2026 Bridge Program — Workshop on Multi-Agent Coordination (https://multiagents.org/2026/). The 2026 community focal point for multi-agent AI research. Accepted papers and workshop proceedings are the canonical venue for evaluating new methods; defer to WMAC-accepted claims over arXiv preprints for production decisions.
+AAAI 2026 Bridge Program — 多智能体协调研讨会（https://multiagents.org/2026/）。2026 年多智能体 AI 研究的社区焦点。接受的论文和研讨会论文集是评估新方法的权威场所；对于生产决策，优先采用 WMAC 接受的声明而非 arXiv 预印本。
 
-### Read benchmark claims skeptically — the 2026 checklist
+### 审慎阅读基准声明——2026 年清单
 
-When someone claims a multi-agent result:
+当有人声称多智能体结果时：
 
-1. **Which benchmark, which split?** SWE-bench Verified vs Pro matters a lot. A number reported on the wrong split is worthless.
-2. **Contamination check.** Was the benchmark released after the model's training cutoff? If not, treat with caution.
-3. **Baseline comparison.** Vs single-LLM baseline, vs random, vs prior multi-agent work. Not "vs untuned version of the same system."
-4. **Statistical significance.** N trials, p-value, confidence interval. Frontier models are high-variance; single runs mislead.
-5. **Task diversity.** One task or many? Generalization matters for production.
-6. **Cost disclosure.** Tokens per task, wall-clock. A 90% solution at 20x cost is a business decision, not a capability claim.
+1. **哪个基准，哪个划分？** SWE-bench Verified vs Pro 很重要。在错误划分上报告的数字毫无价值。
+2. **污染检查。** 基准是在模型训练截止日期之后发布的吗？如果不是，谨慎对待。
+3. **基线比较。** vs 单一 LLM 基线、vs 随机、vs 先前多智能体工作。不是"vs 同一系统的未调参版本"。
+4. **统计显著性。** N 次试验、p 值、置信区间。前沿模型是高方差的；单次运行会误导。
+5. **任务多样性。** 一个任务还是很多？泛化对生产很重要。
+6. **成本披露。** 每任务 token 数、墙上时钟时间。90% 解决方案以 20 倍成本是商业决策，不是能力声称。
 
-### What none of the benchmarks measure well
+### 没有基准衡量得好的
 
-- **Long-horizon coordination.** Days of wall-clock interaction. All current benchmarks run short.
-- **Adversarial resilience.** What happens when one agent is malicious or compromised?
-- **Drift under deployment.** Benchmarks are static; production distributions shift.
-- **Cost-normalized performance.** Most benchmarks report raw accuracy, not accuracy-per-dollar.
+- **长时协调。** 天的墙上时钟交互。当前所有基准都是短时的。
+- **对抗弹性。** 当一个智能体是恶意或被破坏时会发生什么？
+- **部署下的漂移。** 基准是静态的；生产分布会移动。
+- **成本归一化性能。** 大多数基准报告原始准确率，而非准确率每美元。
 
-Building your own internal benchmark for the axis you actually care about is often the right move.
+为你真正关心的维度构建自己的内部基准通常是正确做法。
 
-## Build It
+## 构建
 
-`code/main.py` is a non-interactive walk-through:
+`code/main.py` 是一个非交互式演练：
 
-- Simulates 3 multi-agent systems on a toy task.
-- Computes MARBLE-style milestone metrics for each.
-- Runs a contamination check by withholding tasks from a "training" set.
-- Compares to a random baseline explicitly.
-- Prints a benchmark-claims scorecard.
+- 在一个玩具任务上模拟 3 个多智能体系统。
+- 为每个系统计算 MARBLE 风格的里程碑指标。
+- 通过从"训练"集中保留任务来运行污染检查。
+- 显式与随机基线比较。
+- 打印基准声明记分卡。
 
-Run:
+运行：
 
 ```bash
 python3 code/main.py
 ```
 
-Expected output: system scorecard with raw accuracy, milestone achievement, cost-per-task, vs-random baseline delta, and a contamination-check note.
+预期输出：系统记分卡，包含原始准确率、里程碑成就、每任务成本、与随机基线 delta 以及污染检查备注。
 
-## Use It
+## 使用
 
-`outputs/skill-benchmark-reader.md` reads any multi-agent benchmark claim and applies the scrutiny checklist. Output: a grade and caveats.
+`outputs/skill-benchmark-reader.md` 阅读任何多智能体基准声明并应用审查清单。输出：评级和注意事项。
 
-## Ship It
+## 上线
 
-Production evaluation discipline:
+生产评估纪律：
 
-- **Build an internal benchmark** that reflects your actual production distribution. Public benchmarks inform but do not substitute.
-- **Include a random baseline** in every comparison. If you cannot beat random by a large margin on a coordination task, the task may be ill-posed.
-- **Report cost alongside accuracy.** Token cost and wall-clock. Ops teams need both.
-- **Rebuild the benchmark quarterly.** Production distribution shifts; stale benchmarks mislead.
-- **Avoid published-benchmark overfitting.** If your team is optimizing specifically for SWE-bench Pro numbers, you will regress on production.
+- **构建反映你实际生产分布的内部基准。** 公共基准提供信息但不能替代。
+- **在每次比较中包含随机基线。** 如果你在协调任务上不能大幅击败随机，任务可能本身有问题。
+- **同时报告成本和准确率。** Token 成本和墙上时钟时间。运维团队两者都需要。
+- **每季度重建基准。** 生产分布会移动；过时基准会误导。
+- **避免 Published-benchmark overfitting。** 如果你的团队专门优化 SWE-bench Pro 数字，你会在生产上回归。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Identify which of the three simulated systems has the best cost-per-milestone. Does it match the highest raw-accuracy system?
-2. Read MultiAgentBench (arXiv:2503.01935). For your own task domain, decide which of the four topologies MARBLE would recommend. Justify from the paper's results.
-3. Read the SWE-bench Pro paper. What specifically makes it contamination-resistant? Could the same technique be applied to other benchmarks you care about?
-4. Read COMMA's finding on multimodal coordination. Design a simple multimodal coordination task you could add to your internal benchmark. What would count as a useful signal?
-5. Apply the benchmark-claims checklist to one recent multi-agent paper's headline result. What grade would you give the claim?
+1. 运行 `code/main.py`。识别三个模拟系统中哪个每里程碑成本最好。它与最高原始准确率系统匹配吗？
+2. 阅读 MultiAgentBench（arXiv:2503.01935）。对于你自己的任务领域，决定 MARBLE 会推荐四种拓扑中的哪一种。从论文结果中 justification。
+3. 阅读 SWE-bench Pro 论文。是什么使其特别抗污染？相同技术可以应用于你关心的其他基准吗？
+4. 阅读 COMMA 关于多模态协调的发现。设计一个你可以添加到内部基准的简单多模态协调任务。什么会算作有用信号？
+5. 将基准声明清单应用于最近一篇多智能体论文的头条结果。你会给该声称什么评级？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| MARBLE | "MultiAgentBench" | ACL 2025; star/chain/tree/graph topologies with milestone KPIs. |
-| COMMA | "Multimodal benchmark" | Multimodal asymmetric-info coordination; frontier models struggle vs random. |
-| MedAgentBoard | "Domain stress test" | Four medical categories; often finds multi-agent does not dominate single-LLM. |
-| AgentArch | "Enterprise benchmark" | Tools + memory + orchestration layered. |
-| SWE-bench Pro | "Contamination-resistant" | 1865 problems, 41 repos; ~23% vs 70%+ on Verified (the contamination signal). |
-| Milestone achievement | "Partial credit" | Benchmarks that reward progress, not only final success. |
-| Contamination | "Benchmark leaked into training" | Post-release, benchmarks drift into training corpora; scores inflate. |
-| WMAC | "AAAI 2026 Bridge Program" | Workshop on Multi-Agent Coordination; community focal point. |
+| MARBLE | "MultiAgentBench" | ACL 2025；带里程碑 KPI 的星型/链型/树型/图型拓扑。 |
+| COMMA | "多模态基准" | 多模态非对称信息协调；前沿模型 vs 随机难以胜出。 |
+| MedAgentBoard | "领域压力测试" | 四类医学；常发现多智能体不主导单一 LLM。 |
+| AgentArch | "企业基准" | 工具 + 记忆 + 编排分层。 |
+| SWE-bench Pro | "抗污染" | 1865 道题，41 个仓库；Pro 上约 23% vs Verified 上 70%+（污染信号）。 |
+| 里程碑成就 | "部分信用" | 奖励进展而非仅最终成功的基准。 |
+| 污染 | "基准泄露进训练" | 发布后，基准漂移进训练语料库；分数膨胀。 |
+| WMAC | "AAAI 2026 Bridge Program" | 多智能体协调研讨会；社区焦点。 |
 
-## Further Reading
+## 延伸阅读
 
-- [MultiAgentBench / MARBLE](https://arxiv.org/abs/2503.01935) — topology benchmark with milestone KPIs
-- [MARBLE repository](https://github.com/ulab-uiuc/MARBLE) — reference implementation
-- [MedAgentBoard](https://arxiv.org/abs/2505.12371) — domain stress test; multi-agent often does not dominate
-- [AgentArch](https://arxiv.org/abs/2509.10769) — enterprise agent architectures
-- [SWE-bench leaderboards](https://www.swebench.com/) — Verified and Pro scores for frontier models
-- [AAAI 2026 WMAC](https://multiagents.org/2026/) — the 2026 community focal point
+- [MultiAgentBench / MARBLE](https://arxiv.org/abs/2503.01935) — 带里程碑 KPI 的拓扑基准
+- [MARBLE 仓库](https://github.com/ulab-uiuc/MARBLE) — 参考实现
+- [MedAgentBoard](https://arxiv.org/abs/2505.12371) — 领域压力测试；多智能体常不主导
+- [AgentArch](https://arxiv.org/abs/2509.10769) — 企业智能体架构
+- [SWE-bench 排行榜](https://swebench.com/) — Verified 和 Pro 的前沿模型分数
+- [AAAI 2026 WMAC](https://multiagents.org/2026/) — 2026 年社区焦点

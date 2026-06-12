@@ -1,179 +1,179 @@
-# Production Scaling — Queues, Checkpoints, Durability
+# 生产级扩展——队列、检查点与持久化
 
-> Scaling multi-agent systems to thousands of concurrent runs requires **durable execution**. LangGraph's runtime writes a checkpoint after each super-step keyed by `thread_id` (Postgres by default); worker crashes release a lease and another worker resumes. Agents can sleep indefinitely waiting for human input. **MegaAgent** (arXiv:2408.09955) ran a per-agent producer-consumer queue with three states (Idle / Processing / Response) and two-layer coordination (intra-group chat + inter-group admin chat). **Fiber/async** beats thread-per-job for LLM streaming: threads sit idle 99% of the time waiting for tokens, fibers cooperatively yield on I/O. Counterpoint: Ashpreet Bedi's "Scaling Agentic Software" argues for **FastAPI + Postgres + nothing else** until load proves otherwise — simple architectures go further than expected. This lesson builds a durable checkpoint log, a per-agent work queue with state transitions, an async-vs-thread demo, and lands the pragmatic "start simple" rule.
+> 将多智能体系统扩展到数千个并发运行需要**持久化执行**。LangGraph 的运行时在每个 super-step 后写入检查点，以 `thread_id` 为键（默认使用 Postgres）；工作进程崩溃后释放租约，另一个工作进程恢复执行。智能体可以无限期休眠等待人工输入。**MegaAgent**（arXiv:2408.09955）采用每个智能体一个生产者-消费者队列，运行三种状态（Idle / Processing / Response）和双层协调（组内聊天 + 组间管理聊天）。**Fiber/async** 在 LLM 流式输出时优于 thread-per-job：线程 99% 的时间都在空闲等待下一个 token，而 fiber 在 I/O 时协作让出。反驳观点：Ashpreet Bedi 的"Scaling Agentic Software"主张在负载证明需要之前使用 **FastAPI + Postgres + 别无他物**——简单架构的效果往往超出预期。本课构建一个持久化检查点日志、一个带状态转换的每个智能体工作队列、一个 async-vs-thread 演示，并落地"从简单开始"的原则。
 
-**Type:** Learn + Build
-**Languages:** Python (stdlib, `asyncio`, `sqlite3`)
-**Prerequisites:** Phase 16 · 09 (Parallel Swarm Networks), Phase 16 · 13 (Shared Memory)
-**Time:** ~75 minutes
+**类型：** 学习 + 构建
+**语言：** Python（标准库，`asyncio`，`sqlite3`）
+**前置条件：** 阶段 16 · 09（并行蜂群网络）、阶段 16 · 13（共享内存）
+**时间：** 约 75 分钟
 
-## Problem
+## 问题
 
-A prototype multi-agent system works on one laptop with three agents in an in-memory event loop. You move to production:
+一个多智能体系统原型在三台笔记本上用内存事件循环跑起来了。你要上线生产：
 
-- Agents sometimes run for hours (long research, human-in-the-loop waits).
-- Worker processes crash. Restarting loses state.
-- Peak load is 10x average; you need horizontal scaling.
-- Users pay per agent-run; you need exactly-once semantics for charging.
+- 智能体有时要跑几个小时（长时研究、人机交互等待）。
+- 工作进程会崩溃。重启后状态丢失。
+- 峰值负载是平均负载的 10 倍；你需要水平扩展。
+- 用户按智能体运行次数付费；你需要恰好一次（exactly-once）语义来计费。
 
-The in-memory event loop does none of these. You need a durable execution layer underneath. The 2026 canonical options are:
+内存事件循环做不到以上任何一点。你需要一个持久化执行层作为底座。2026 年的典型方案有：
 
-1. A workflow engine with checkpoints (Temporal, LangGraph runtime).
-2. A message queue with a state store (Postgres + SQS/RabbitMQ).
-3. Actor-model frameworks (MegaAgent's producer-consumer per agent).
-4. Hand-rolled FastAPI + Postgres (Bedi's argument).
+1. 带检查点的工作流引擎（Temporal、LangGraph 运行时）。
+2. 带状态存储的消息队列（Postgres + SQS/RabbitMQ）。
+3. Actor 模型框架（MegaAgent 的每个智能体生产者-消费者）。
+4. 手撸的 FastAPI + Postgres（Bedi 的方案）。
 
-This lesson builds a miniature of each.
+本课构建一个每种方案的迷你版。
 
-## Concept
+## 概念
 
-### Durable execution, the pattern
+### 持久化执行，模式
 
-A durable-execution engine persists the full program state after each "step" (super-step, in LangGraph's language). On crash:
-
-```
-worker crashes mid-step
-  -> lease timeout
-  -> another worker picks up the thread_id
-  -> resumes from last checkpoint
-  -> no duplicate side effects
-```
-
-Requirements for this to work:
-
-- **Serializable state.** All agent state has to be persistable. Function closures with live database connections do not survive.
-- **Deterministic resume.** Given the same state and same inputs, the agent produces the same actions (or defers to an external deterministic oracle for LLM calls).
-- **Idempotent side effects.** External calls (tool calls, payments) must be idempotent or use a deduplication key.
-
-LangGraph writes a checkpoint after each super-step; Temporal writes after each activity; Restate uses event-sourced journals. All three implement the same pattern.
-
-### LangGraph's runtime
-
-Each agent has a `thread_id`; state is a typed dict; each super-step writes a row to the checkpoints table. On resume, the runtime replays from the last checkpoint, not from scratch. Agents can `interrupt()` waiting for human input; the runtime persists and releases the worker. When input arrives, any worker can resume.
-
-This is the reference production design in April 2026.
-
-### MegaAgent's per-agent queue
-
-arXiv:2408.09955 describes a scale experiment: thousands of concurrent agents in one cluster. Architecture:
+持久化执行引擎在每个"步骤"（LangGraph 术语中的 super-step）后持久化完整程序状态。崩溃时：
 
 ```
-agent i:
+工作进程在步骤中途崩溃
+  → 租约超时
+  → 另一个工作进程获取 thread_id
+  → 从上一个检查点恢复
+  → 无重复副作用
+```
+
+这能工作的前提：
+
+- **可序列化状态。** 所有智能体状态都必须可持久化。带有活跃数据库连接的函数闭包无法存活。
+- **确定性恢复。** 给定相同状态和相同输入，智能体产生相同动作（或委托给外部确定性 oracle 处理 LLM 调用）。
+- **幂等副作用。** 外部调用（工具调用、支付）必须幂等，或使用去重键。
+
+LangGraph 在每个 super-step 后写检查点；Temporal 在每个 activity 后写；Restate 使用事件溯源日志。三者实现的是同一模式。
+
+### LangGraph 的运行时
+
+每个智能体有一个 `thread_id`；状态是一个类型化字典；每个 super-step 向检查点表写入一行。恢复时，运行时从最后一个检查点重放，而非从头开始。智能体可以 `interrupt()` 等待人工输入；运行时持久化并释放工作进程。输入到达后，任何工作进程都可以恢复。
+
+这是 2026 年 4 月的生产设计参考。
+
+### MegaAgent 的每个智能体队列
+
+arXiv:2408.09955 描述了一个规模实验：单个集群中数千个并发智能体。架构：
+
+```
+智能体 i：
   state ∈ {Idle, Processing, Response}
-  in_queue   <- messages addressed to agent i
-  out_queue  -> replies + side effects
+  in_queue   <- 发给智能体 i 的消息
+  out_queue  -> 回复 + 副作用
 
-coordinators:
-  intra-group chat  (agents in the same group)
-  inter-group admin chat  (high-level routing)
+协调器：
+  组内聊天  （同一组的智能体）
+  组间管理聊天  （高层路由）
 ```
 
-The two-layer coordination lets intra-group conversation happen densely while inter-group stays sparse — the pattern used for keeping cost linear in thousands of agents.
+双层协调让组内对话密集发生，组间保持稀疏——这是将成本控制在数千智能体规模的关键模式。
 
-### Async vs thread-per-job
+### Async 与 thread-per-job
 
-LLM calls are I/O-bound. A thread waiting for the next token is idle 99% of the time. Threads cost ~1MB RAM each; at 10,000 concurrent calls, that is 10GB just for stacks.
+LLM 调用是 I/O 密集型的。线程等待下一个 token 时 99% 的时间都在空闲。每个线程约消耗 1MB RAM；10000 个并发调用仅栈就要用掉 10GB。
 
-Fibers (Python `asyncio`, Go goroutines, Rust `tokio`) cooperatively yield on I/O. The same 10,000 calls fit comfortably in process. At LLM-agent scale, async is not an optimization — it is the architecture.
+Fiber（Python `asyncio`、Go goroutine、Rust `tokio`）在 I/O 上协作让出。10000 个并发调用可以轻松放入一个进程。在 LLM-智能体规模下，async 不是优化——它是架构。
 
-Exception: CPU-bound post-processing (embedding, tokenizer tricks) still wants threads or processes. Separate your I/O layer from your CPU layer.
+例外：CPU 密集型的后处理（embedding、分词器技巧）仍然需要线程或进程。将 I/O 层和 CPU 层分开。
 
-### Bedi's counterpoint
+### Bedi 的反驳
 
-"Scaling Agentic Software" (Ashpreet Bedi, 2026) argues that most teams over-engineer before they have measured load. The pragmatic default:
+"Scaling Agentic Software"（Ashpreet Bedi，2026）认为大多数团队在未测量负载之前就过度设计了。务实的默认方案：
 
-- FastAPI + Postgres.
-- Each agent run is a row; state updated in-place with optimistic concurrency.
-- Background jobs via `pg_notify` or a simple Celery worker.
-- Retry policy in application code.
+- FastAPI + Postgres。
+- 每个智能体运行是一行；以乐观并发原地更新状态。
+- 后台任务通过 `pg_notify` 或简单的 Celery worker。
+- 应用代码中的重试策略。
 
-For loads under ~100 concurrent agent-runs on manageable tasks, this is often all you need. Upgrade when you measure it failing.
+对于负载在 ~100 个并发智能体运行以下、可管理任务的情况，这通常就够了。测量到失败后再升级。
 
-The rule: adopt durable-execution frameworks when you hit a concrete problem that simple architectures cannot solve. Premature adoption burns time on ceremonies that do not pay off.
+原则：当你遇到简单架构无法解决的具体问题时，才采用持久化执行框架。过早采用会在无回报的仪式性工作上浪费时间。
 
-### Exactly-once semantics
+### 恰好一次语义
 
-For paid agent runs, you need "exactly-once effective" (at-least-once delivery + idempotent consumer). The engineering moves:
+对于付费的智能体运行，你需要"有效恰好一次"（至少一次投递 + 幂等消费者）。工程手段：
 
-- **Dedup key per run.** Include it in every side-effect call.
-- **Outbox pattern.** Side effects write to a table first, then a separate process executes them. Both steps idempotent.
-- **Compensating transactions.** When a side effect succeeds but its tracking write fails, schedule a compensate.
+- **每次运行的去重键。** 包含在每个副作用调用中。
+- **发件箱模式。** 副作用先写入表，然后由单独进程执行。两步都幂等。
+- **补偿事务。** 当副作用成功但其跟踪写入失败时，安排一次补偿。
 
-These are database-engineering patterns, not LLM-specific. The LLM tax is only that LLM calls are slow; everything else is standard distributed systems.
+这些是数据库工程模式，非 LLM 特有。LLM 的代价只是调用慢；其他都是标准分布式系统。
 
-### Rainbow deployment
+### 彩虹部署
 
-Anthropic's multi-agent research system uses "rainbow deployments": multiple versions of the agent runtime run concurrently so long-running agents do not have to be killed on every code deploy. Canary new versions on a slice of traffic; retire old versions when their agents finish.
+Anthropic 的多智能体研究系统使用"彩虹部署"：智能体运行时多个版本并发运行，这样长时运行的智能体不必在每次代码部署时被杀死。新版本在部分流量上做金丝雀测试；旧版本在其智能体完成后才退出。
 
-This is standard for long-running stateful systems; the 2026 adaptation is that agents can live for hours, so deployment cycles must accommodate.
+这对长时运行的有状态系统是标准做法；2026 年的适配在于智能体可以存活数小时，因此部署周期必须适应这一点。
 
-### The canonical production checklist
+### 生产检查清单
 
-- Durable state (checkpoints, snapshots, or outbox + replayable log).
-- Idempotent side effects.
-- Async I/O layer for LLM calls.
-- At-least-once delivery with dedup.
-- Rainbow/canary deployment for stateful workloads.
-- Observability: per-agent traces, super-step audit, retry counter.
+- 持久化状态（检查点、快照，或发件箱 + 可重放日志）。
+- 幂等副作用。
+- LLM 调用的 Async I/O 层。
+- 至少一次投递 + 去重。
+- 有状态工作负载的彩虹/金丝雀部署。
+- 可观测性：每个智能体追踪、super-step 审计、重试计数。
 
-## Build It
+## 构建
 
-`code/main.py` implements:
+`code/main.py` 实现：
 
-- `CheckpointStore` — SQLite-backed checkpoint log with thread-id keys. Each super-step appends a row.
-- `run_with_checkpoint(agent, thread_id)` — simulates a crash mid-run; a second worker resumes from last checkpoint.
-- `AgentQueue` — per-agent Idle / Processing / Response state machine with a small work queue.
-- `demo_async_vs_threads()` — runs 500 concurrent simulated "LLM calls" via asyncio and via threads; reports wall-clock and peak memory (approximated).
+- `CheckpointStore` — 以 thread-id 为键的 SQLite 检查点日志。每个 super-step 追加一行。
+- `run_with_checkpoint(agent, thread_id)` — 模拟中途崩溃；第二个工作进程从上一个检查点恢复。
+- `AgentQueue` — 每个智能体的 Idle / Processing / Response 状态机，带小型工作队列。
+- `demo_async_vs_threads()` — 通过 asyncio 和线程运行 500 个并发模拟"LLM 调用"；报告墙上时钟时间和峰值内存（近似值）。
 
-Run:
+运行：
 
 ```
 python3 code/main.py
 ```
 
-Expected output: checkpoint resume succeeds after simulated crash; async version handles 500 concurrent calls in < 1s; thread version takes several seconds and uses orders of magnitude more memory per concurrent unit.
+预期输出：检查点在模拟崩溃后恢复成功；async 版本在 <1 秒内处理 500 个并发调用；线程版本需要几秒钟，每个并发单元的内存消耗高几个数量级。
 
-## Use It
+## 使用
 
-`outputs/skill-scaling-advisor.md` advises on durable-execution choice: FastAPI + Postgres, LangGraph runtime, Temporal, or custom. Calibrated by load, state-retention needs, and deploy frequency.
+`outputs/skill-scaling-advisor.md` 就持久化执行方案提供建议：FastAPI + Postgres、LangGraph 运行时、Temporal 或自定义。按负载、状态保留需求和部署频率校准。
 
-## Ship It
+## 上线
 
-Canonical production hardening:
+典型的生产强化：
 
-- **Start simple (Bedi's rule).** FastAPI + Postgres until you measure it failing.
-- **Instrument everything before optimizing.** Per-run latency histogram, per-step time, retry count, failure categorization.
-- **Outbox pattern for side effects.** Especially payments and external API calls.
-- **Rainbow deploys.** Never kill in-flight agent runs during deploys.
-- **Adopt durable-execution engines (Temporal / LangGraph / Restate) when** you hit specific problems: hour-long human-in-the-loop waits, cross-region coordination, complex retry/compensation policies.
-- **Async for the I/O layer.** Threads only for CPU-bound post-processing.
+- **从简单开始（Bedi 原则）。** FastAPI + Postgres，直到你测量到它失败。
+- **优化前先对所有内容插桩。** 每次运行的延迟直方图、每步时间、重试计数、失败分类。
+- **副作用用发件箱模式。** 特别是支付和外部 API 调用。
+- **彩虹部署。** 部署期间绝不杀死进行中的智能体运行。
+- **当遇到具体问题时采用持久化执行引擎（Temporal / LangGraph / Restate）：** 数小时的人机交互等待、跨区域协调、复杂的重试/补偿策略。
+- **I/O 层用 async。** CPU 密集型后处理才用线程。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Confirm checkpoint resume works; measure async vs thread concurrency difference.
-2. Implement an **outbox** table: every tool call writes to outbox first, then a separate goroutine/task executes. Verify idempotency by running the tool call twice.
-3. Simulate a **rainbow deploy**: two concurrent runtime versions; route half of new thread_ids to each; confirm that in-flight threads on the old version are not interrupted.
-4. Read LangGraph's runtime doc (linked below). Identify which features of the runtime would take the longest to replicate in a hand-rolled FastAPI + Postgres version. Is that a reason to adopt, or can you defer?
-5. Read MegaAgent (arXiv:2408.09955) Section 3. The two-layer coordination (intra-group + inter-group admin chat) is explicit. Sketch how you would map this to a message queue with two queue families.
+1. 运行 `code/main.py`。确认检查点恢复有效；测量 async 与线程并发差异。
+2. 实现一个**发件箱**表：每个工具调用先写入发件箱，然后由单独的 goroutine/task 执行。通过两次运行工具调用来验证幂等性。
+3. 模拟**彩虹部署**：两个并发运行时版本；将一半新 thread_id 路由到每个；确认旧版本上正在进行的线程不会被中断。
+4. 阅读 LangGraph 运行时文档（链接如下）。识别运行时哪些功能在手撸 FastAPI + Postgres 版本中最难复制。这是你采用的理由，还是可以推迟？
+5. 阅读 MegaAgent（arXiv:2408.09955）第 3 节。双层协调（组内 + 组间管理聊天）是明确的。描述你如何将其映射到两个队列族的消息队列。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Durable execution | "Persist the program state" | Engine writes state after each super-step; crash recovery is deterministic. |
-| Super-step | "Transactional boundary" | Unit of work between checkpoints. LangGraph term. |
-| thread_id | "Agent run identifier" | Key that binds checkpoints and resume logic. |
-| Idempotency | "Safe to retry" | Repeating a side effect produces the same result as one attempt. |
-| Outbox pattern | "Decouple side effects" | Write intent to a table; a separate executor performs and marks done. |
-| At-least-once delivery | "Possible duplicates" | Message queue semantics; dedup key makes consumer effective-once. |
-| Rainbow deploy | "Overlapping versions" | Multiple runtime versions concurrent during long-running workloads. |
-| Async fiber | "Cooperative yielding" | User-mode concurrency; cheap compared to threads for I/O-bound loads. |
-| Checkpoint | "State snapshot" | Serialized state at a super-step boundary; key for resume. |
+| 持久化执行 | "持久化程序状态" | 引擎在每个 super-step 后写状态；崩溃恢复是确定性的。 |
+| Super-step | "事务边界" | 检查点之间的工作单元。LangGraph 术语。 |
+| thread_id | "智能体运行标识符" | 绑定检查点和恢复逻辑的键。 |
+| 幂等性 | "安全重试" | 重复副作用产生的结果与一次尝试相同。 |
+| 发件箱模式 | "解耦副作用" | 将意图写入表；单独的执行器执行并标记完成。 |
+| 至少一次投递 | "可能有重复" | 消息队列语义；去重键使消费者有效恰好一次。 |
+| 彩虹部署 | "重叠版本" | 长时运行工作负载期间多个运行时版本并发。 |
+| Async fiber | "协作让出" | 用户态并发；与线程相比，对 I/O 密集型负载很廉价。 |
+| 检查点 | "状态快照" | 在 super-step 边界处的序列化状态；恢复的键。 |
 
-## Further Reading
+## 延伸阅读
 
-- [LangChain — The runtime behind production deep agents](https://www.langchain.com/conceptual-guides/runtime-behind-production-deep-agents) — LangGraph runtime design
-- [MegaAgent](https://arxiv.org/abs/2408.09955) — per-agent producer-consumer queue; two-layer coordination at thousands of concurrent agents
-- [Matrix](https://arxiv.org/abs/2511.21686) — decentralized framework with message queues as the coordination substrate
-- [Temporal docs](https://docs.temporal.io/) — the reference workflow engine for durable execution
-- [Anthropic — Multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) — production lessons including rainbow deployment
+- [LangChain — 生产深度智能体背后的运行时](https://www.langchain.com/conceptual-guides/runtime-behind-production-deep-agents) — LangGraph 运行时设计
+- [MegaAgent](https://arxiv.org/abs/2408.09955) — 每个智能体的生产者-消费者队列；数千并发智能体的双层协调
+- [Matrix](https://arxiv.org/abs/2511.21686) — 以消息队列为协调基底的去中心化框架
+- [Temporal 文档](https://docs.temporal.io/) — 持久化执行的工作流引擎参考
+- [Anthropic — 多智能体研究系统](https://www.anthropic.com/engineering/multi-agent-research-system) — 生产经验包括彩虹部署

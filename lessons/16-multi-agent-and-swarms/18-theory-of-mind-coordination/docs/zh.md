@@ -1,163 +1,162 @@
-# Theory of Mind and Emergent Coordination
+# 心理理论与涌现协调
 
-> Li et al. (arXiv:2310.10701) showed that LLM agents in a cooperative text game exhibit **emergent high-order Theory of Mind** (ToM) — reasoning about what another agent believes about a third agent's beliefs — but fail on long-horizon planning due to context management and hallucination. Riedl (arXiv:2510.05174) measured higher-order synergy across a population and found that **only** the ToM-prompt condition produces identity-linked differentiation and goal-directed complementarity; lower-capacity LLMs show only spurious emergence. That is, coordination emergence is prompt-conditional and model-dependent, not free. This lesson implements a minimal ToM-aware agent, runs a cooperative task with and without ToM prompting, and measures the coordination delta against the Riedl 2025 protocol.
+> Li 等人（arXiv:2310.10701）表明，在合作文本游戏中，LLM 智能体表现出**涌现的高阶心理理论**（ToM）——推理关于另一个智能体对第三个智能体信念的信念——但在长期规划上因上下文管理和幻觉而失败。Riedl（arXiv:2510.05174）测量了群体中的高阶协同效应，发现**只有** ToM 提示条件产生身份关联的分化和目标导向的互补性；较低容量的 LLM 仅显示虚假涌现。也就是说，协调涌现是提示条件的和模型依赖的，不是免费的。本课实现一个最小 ToM 感知智能体，运行带/不带 ToM 提示的合作任务，并按照 Riedl 2025 协议测量协调增量。
 
-**Type:** Learn + Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 16 · 07 (Society of Mind and Debate), Phase 16 · 17 (Generative Agents)
-**Time:** ~75 minutes
+**类型：** 学习 + 构建
+**语言：** Python（标准库）
+**前置条件：** 阶段 16 · 07（心智社会与辩论）、阶段 16 · 17（生成式智能体）
+**时间：** 约 75 分钟
 
-## Problem
+## 问题
 
-Multi-agent coordination often looks magical: agents divide labor, anticipate each other, avoid redundancy. Usually this "emergence" is an artifact of prompt engineering — someone told the agents to "coordinate." Remove the prompt, remove the coordination.
+多智能体协调通常看起来很神奇：智能体分工、预测彼此、避免重复。通常这种"涌现"是提示工程的产物——有人告诉智能体要"协调"。去掉提示，去掉协调。
 
-Riedl's 2025 finding is stricter: under controlled conditions, coordination only emerges when agents are prompted to reason about **other agents' minds** (ToM). Without the ToM prompt, even strong models show coordination patterns that do not survive statistical controls. This matters for production: teams ship "multi-agent coordination" features that are prompt-dependent and brittle.
+Riedl 2025 年的发现更严格：在受控条件下，协调只在智能体被提示推理关于**其他智能体的心理**（ToM）时才涌现。没有 ToM 提示，即使强模型也显示无法通过统计控制的协调模式。这对生产很重要：团队交付的"多智能体协调"功能是提示依赖的和脆弱的。
 
-This lesson treats ToM as a specific capability (reasoning about beliefs about beliefs), builds a minimal ToM-aware agent, and measures what real coordination looks like vs. what prompt dressing looks like.
+本课将 ToM 作为一种特定能力（关于信念的信念的推理）来处理，构建一个最小 ToM 感知智能体，测量真实协调与提示装饰的协调。
 
-## Concept
+## 概念
 
-### What ToM means
+### ToM 是什么意思
 
-Developmental psychology: a 3-year-old thinks anyone's inner world matches theirs. A 5-year-old understands others have different beliefs. A 7-year-old reasons about beliefs about beliefs ("she thinks that I think the ball is under the cup"). These are zeroth, first, and second-order ToM.
+发展心理学：3 岁的孩子认为任何人的内心世界与他们相同。5 岁的孩子理解他人有不同的信念。7 岁的孩子推理关于信念的信念（"她认为我认为球在杯子下面"）。这些分别是零阶、一阶和二阶 ToM。
 
-For LLM agents, ToM orders map to:
+对于 LLM 智能体，ToM 阶数映射到：
 
-- **Zeroth-order:** no model of others. The agent acts on its own observations only.
-- **First-order:** the agent has a model of each other agent's beliefs. "Alice believes X."
-- **Second-order:** the agent models recursive beliefs. "Alice believes that Bob believes X."
+- **零阶：** 没有他人模型。智能体仅基于自己的观察行动。
+- **一阶：** 智能体有每个其他智能体信念的模型。"Alice 相信 X。"
+- **二阶：** 智能体建模递归信念。"Alice 认为 Bob 认为 X。"
 
-Li et al. 2023 found that first- and second-order ToM emerge in LLM agents in cooperative games but degrade with long horizon and unreliable communication.
+Li 等人 2023 年发现一阶和二阶 ToM 在合作游戏中出现在 LLM 智能体中，但随长时间和不可靠通信而退化。
 
-### The Sally-Anne test, in brief
+### Sally-Anne 测试，简述
 
-A 1985 false-belief test: Sally puts a marble in basket A, leaves. Anne moves it to basket B. Where will Sally look when she returns? A child with first-order ToM says basket A (Sally's belief differs from reality). A child without says basket B.
+1985 年的错误信念测试：Sally 把弹珠放在篮子 A 里，然后离开。Anne 把它移到篮子 B。Sally 回来时会在哪里找？有一阶 ToM 的孩子说篮子 A（Sally 的信念与现实不同）。没有 ToM 的孩子说篮子 B。
 
-GPT-4-era LLMs pass Sally-Anne-style tests when posed plainly. They fail when the narrative is long, the scene changes several times, or the question is phrased indirectly. That is the practical 2026 state of ToM in production LLMs.
+GPT-4 时代的 LLM 在简单提问时通过 Sally-Anne 风格测试。当叙述变长、场景变化多次或问题间接表述时，它们会失败。这是 2026 年生产 LLM 中 ToM 的实际状态。
 
-### Riedl's coordination measurement
+### Riedl 的协调测量
 
-Riedl (arXiv:2510.05174) built a population-scale test: N agents, a cooperative objective, variable prompt conditions. Measure:
+Riedl（arXiv:2510.05174）构建了群体规模测试：N 个智能体、合作目标、可变提示条件。测量：
 
-1. **Identity-linked differentiation.** Do agents develop stable role distinctions over time?
-2. **Goal-directed complementarity.** Do agents' actions complement each other (different subtasks) rather than duplicate?
-3. **Higher-order synergy.** A statistical measure of whether the group achieves what no subset could.
+1. **身份关联的分歧。** 智能体随时间发展出稳定的角色区分吗？
+2. **目标导向的互补性。** 智能体的行动互补（不同的子任务）而非重复吗？
+3. **高阶协同效应。** 群体是否实现了任何子集都无法实现的统计度量。
 
-Result: only under the ToM prompt condition do all three metrics produce signal above baseline. Without ToM prompting, metrics hover near chance for moderate-capacity models. Large models show some coordination without explicit ToM prompting but the effect is smaller than with explicit prompting.
+结果：只有 ToM 提示条件下，所有三个指标才产生高于基线的信号。没有 ToM 提示，中等容量模型的指标徘徊在随机附近。大模型在没有明确 ToM 提示时显示一些协调，但效果小于有明确提示时。
 
-### The coordination illusion
+### 协调幻觉
 
-Without statistical controls, "emergent coordination" in demos often reflects:
+没有统计控制的情况下，演示中的"涌现协调"通常反映：
 
-- Prompt engineering that bakes in coordination (system prompts that say "work together").
-- Observer bias (we see patterns we expect).
-- Post-hoc selection of successful runs.
+- 嵌入协调的提示工程（说"一起工作"的系统提示）。
+- 观察者偏差（我们看到我们期望的模式）。
+- 成功后选_RUN（事后选择成功的运行）。
 
-Production systems that market "emergent coordination" without measurable signal should be treated as marketing. Measure before claiming.
+在没有可测量信号的情况下营销"涌现协调"的生产系统应该被视为营销。先测量再声称。
 
-### A minimal ToM-aware agent
+### 最小 ToM 感知智能体
 
-Structure:
+结构：
 
 ```
 agent state:
-  own_beliefs:    {facts the agent believes}
-  other_models:   {other_agent_id -> {beliefs_the_agent_attributes_to_them}}
-  actions_last_N: [history of others' actions]
+  own_beliefs:    {智能体相信的事实}
+  other_models:   {other_agent_id -> {智能体归属给它们的信念}}
 
 observation update:
-  - update own_beliefs from direct observation
-  - update other_models[agent_id] from their action + prior beliefs
+  - 从直接观察更新 own_beliefs
+  - 从他们的行动 + 先前信念更新 other_models[agent_id]
 
 action selection:
-  - enumerate candidate actions
-  - for each, predict what each other agent will do next given their modeled beliefs
-  - pick action that maximizes joint outcome under those predictions
+  - 枚举候选行动
+  - 对每个，预测在给定其建模信念的情况下每个其他智能体下一步将做什么
+  - 选择在那些预测下使联合结果最大化的行动
 ```
 
-The `other_models` attribute is the ToM state. First-order ToM keeps just one level. Second-order adds `other_models[i][other_models_of_j]` — what I think agent i thinks agent j believes.
+`other_models` 属性是 ToM 状态。一阶 ToM 只保持一层。二阶添加 `other_models[i][other_models_of_j]`——我认为智能体 i 认为智能体 j 相信什么。
 
-### Why long-horizon hurts
+### 为什么长时间跨度会伤害
 
-Li et al. document: context limits cause agents to forget which belief belongs to whom. Hallucination adds false beliefs to other-agent models. Both produce "I thought he thought X" errors that compound over time.
+Li 等人记录：上下文限制导致智能体忘记哪个信念属于谁。幻觉向其他智能体模型添加错误信念。两者都产生"我认为他以为 X"错误，随时间复合。
 
-Mitigations documented in the paper and in 2024-2026 follow-ups:
+论文和 2024-2026 年后续工作中的缓解措施：
 
-- **Explicit ToM state in the prompt.** Structured format: `{agent_id: belief_list}`. Forces retrieval to preserve identity-belief binding.
-- **Shorter reasoning chains.** Fewer ToM updates per turn reduce compounding hallucination.
-- **External ToM store.** Maintain the model outside the LLM context; inject only relevant parts per turn.
+- **提示中明确的 ToM 状态。** 结构化格式：`{agent_id: belief_list}`。强制检索保留身份-信念绑定。
+- **更短的推理链。** 每次 turn 减少 ToM 更新次数，减少复合幻觉。
+- **外部 ToM 存储。** 在 LLM 上下文外维护模型；每次 turn 只注入相关部分。
 
-### Where ToM fails in production
+### ToM 在生产中失败的地方
 
-- **Adversarial settings.** Agents with good ToM are easier to manipulate (you can model what they model of you, then exploit).
-- **Heterogeneous teams.** When models are different, the ToM model that works for one opponent does not generalize.
-- **Ground-truth-dependent tasks.** ToM is about beliefs; if correctness depends on facts, ToM can be a distraction.
+- **对抗性设置。** 有好 ToM 的智能体更容易被操纵（你可以建模他们对你建模什么，然后利用）。
+- **异构团队。** 当模型不同时，对一个对手有效的 ToM 模型不能泛化。
+- **依赖 ground truth 的任务。** ToM 是关于信念的；如果正确性依赖于事实，ToM 可能是干扰。
 
-### The coordination you can actually measure
+### 你实际能测量的协调
 
-Three practical signals a team's coordination is real rather than prompt-dressed:
+三个实际信号表明一个团队的协调是真实的而非提示装饰的：
 
-1. **Complementarity over time.** Over a multi-turn task, do agents' actions cover disjoint sub-tasks?
-2. **Anticipation.** Does agent A's action at turn T+1 depend on a prediction about B's action at T+2 that turned out correct?
-3. **Correction.** When A misreads B's belief at turn T, does A correct by turn T+2?
+1. **随时间的互补性。** 在多轮任务中，智能体的行动是否覆盖不相交的子任务？
+2. **预见性。** 智能体 A 在 turn T+1 的行动是否依赖于关于 B 在 T+2 行动的预测，而这个预测被证明正确？
+3. **纠正。** 当 A 在 turn T 误读 B 的信念时，A 在 turn T+2 是否纠正？
 
-These are measurable in a logged multi-agent system. They are the substantive version of the "coordination" narrative.
+这些在日志化多智能体系统中是可测量的。它们是"协调"叙述的实质版本。
 
-## Build It
+## 构建它
 
-`code/main.py` implements:
+`code/main.py` 实现：
 
-- `ToMAgent` — tracks own beliefs and per-other-agent belief models.
-- A cooperative task: three agents must collect three tokens from three boxes; each box can hold one token. Agents cannot communicate; they infer intent from each other's actions.
-- Two configurations: `zeroth_order` (no ToM) and `first_order` (ToM with one-level belief model).
-- Measurement over 200 randomized trials: completion rate, duplication rate (two agents targeting the same box), average turns to completion.
+- `ToMAgent`——跟踪自身信念和每个其他智能体的信念模型。
+- 一个合作任务：三个智能体必须从三个箱子中收集三个代币；每个箱子只能放一个代币。智能体不能通信；它们从彼此的行动中推断意图。
+- 两种配置：`zeroth_order`（无 ToM）和 `first_order`（带一级信念模型的 ToM）。
+- 在 200 次随机化试验中测量：完成率、重复率（两个智能体指向同一箱子）、平均完成轮数。
 
-Run:
+运行：
 
 ```
 python3 code/main.py
 ```
 
-Expected output: zeroth-order agents duplicate effort at ~35% rate and complete ~60% of trials in 10 turns. First-order ToM agents duplicate at ~5% and complete ~95%. The delta is the measurable coordination effect.
+预期输出：零阶智能体以约 35% 的重复率工作，在 10 轮内完成约 60% 的试验。一阶 ToM 智能体重复率约 5%，完成率约 95%。差值是可测量的协调效应。
 
-## Use It
+## 使用它
 
-`outputs/skill-tom-auditor.md` is a skill that audits a multi-agent system's claim of "emergent coordination." Checks for prompt dressing, statistical significance against a control, and measured complementarity.
+`outputs/skill-tom-auditor.md` 是一个审计多智能体系统"涌现协调"声明的技能。检查提示装饰、对照组的统计显著性，以及可测量的互补性。
 
-## Ship It
+## 交付它
 
-Coordination claims checklist:
+协调声明清单：
 
-- **Control condition.** A version of your system without the coordination prompt. Measure both.
-- **Statistical test.** Is the difference between system and control significant at `p < 0.05` on your metric?
-- **Complementarity measure.** Action-disjointness over time, not just final success.
-- **Failure-case log.** When agents miscoordinate, what does the ToM state look like?
-- **Model-capacity disclosure.** If the effect vanishes on smaller models, say so.
+- **对照条件。** 没有协调提示的系统版本。两者都测量。
+- **统计检验。** 系统与对照之间的差异在你的指标上是否在 `p < 0.05` 下显著？
+- **互补性度量。** 随时间的行动不相交性，不仅仅是最终成功。
+- **失败案例日志。** 当智能体不协调时，ToM 状态是什么样的？
+- **模型容量披露。** 如果效果在小模型上消失，说明这一点。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Confirm first-order ToM reduces duplication rate by ~7x. Does the gap persist when you scale to 5 agents and 5 boxes?
-2. Implement second-order ToM (agent A models what B thinks about C). Does it improve over first-order? On what tasks?
-3. Inject a **hallucination** into the ToM state: randomly flip one belief per turn. How much does this degrade first-order performance?
-4. Read Li et al. (arXiv:2310.10701). Reproduce the "long-horizon degradation" finding: as turns grow from 10 to 30, how does your first-order ToM performance change?
-5. Read Riedl 2025 (arXiv:2510.05174). Implement the higher-order synergy statistic on your simulation logs. Is the effect present without the ToM prompt condition?
+1. 运行 `code/main.py`。确认一阶 ToM 将重复率降低约 7 倍。当扩展到 5 个智能体和 5 个箱子时，差距是否持续？
+2. 实现二阶 ToM（智能体 A 建模 B 对 C 的看法）。这比一阶有改进吗？在什么任务上？
+3. 向 ToM 状态注入**幻觉**：每次 turn 随机翻转一个信念。这在多大程度上降低了一阶性能？
+4. 阅读 Li 等人（arXiv:2310.10701）。重现"长期退化"发现：随着轮数从 10 增加到 30，你的一阶 ToM 性能如何变化？
+5. 阅读 Riedl 2025（arXiv:2510.05174）。在你的模拟日志上实现高阶协同效应统计。在没有 ToM 提示条件的情况下，效果是否存在？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|----------------|------------------------|
-| Theory of Mind | "Understanding others' minds" | The capacity to model another agent's beliefs. Graded by order (0, 1, 2+). |
-| Sally-Anne test | "The false-belief test" | 1985 developmental psychology; LLMs pass plain versions, fail complex ones. |
-| First-order ToM | "A believes X" | Modeling one other's beliefs about facts. |
-| Second-order ToM | "A believes B believes X" | Recursive modeling one level deeper. |
-| Identity-linked differentiation | "Stable roles over time" | Riedl's metric: roles persist, not random. |
-| Goal-directed complementarity | "Disjoint actions" | Agents target different subtasks, not the same one. |
-| Higher-order synergy | "Group exceeds any subset" | Riedl's statistical measure for real coordination. |
-| Coordination illusion | "It looks coordinated" | Prompt-dressed appearance of coordination without measurable signal. |
+| 心理理论 | "理解他人的心理" | 建模另一个智能体信念的能力。按阶数分级（0、1、2+）。 |
+| Sally-Anne 测试 | "错误信念测试" | 1985 年发展心理学；LLM 通过简单版本，复杂版本失败。 |
+| 一阶 ToM | "A 相信 X" | 建模一个他人关于事实的信念。 |
+| 二阶 ToM | "A 相信 B 相信 X" | 递归建模，深一层。 |
+| 身份关联的分歧 | "随时间稳定的角色" | Riedl 的指标：角色持续存在，而非随机。 |
+| 目标导向的互补性 | "不相交的行动" | 智能体瞄准不同的子任务，而非同一个。 |
+| 高阶协同效应 | "群体超过任何子集" | Riedl 的真实协调统计度量。 |
+| 协调幻觉 | "看起来协调了" | 没有可测量信号的提示装饰协调外观。 |
 
-## Further Reading
+## 延伸阅读
 
-- [Li et al. — Theory of Mind for Multi-Agent Collaboration via Large Language Models](https://arxiv.org/abs/2310.10701) — emergent ToM in cooperative games; long-horizon failure modes
-- [Riedl — Emergent Coordination in Multi-Agent Language Models](https://arxiv.org/abs/2510.05174) — population-scale measurement; ToM prompting is the load-bearing condition
-- [Premack & Woodruff — Does the chimpanzee have a theory of mind?](https://www.cambridge.org/core/journals/behavioral-and-brain-sciences/article/does-the-chimpanzee-have-a-theory-of-mind/1E96B02CD9850E69AF20F81FA7EB3595) — the 1978 origin of the ToM concept
-- [Baron-Cohen, Leslie, Frith — Does the autistic child have a theory of mind?](https://www.cambridge.org/core/journals/behavioral-and-brain-sciences/article/does-the-autistic-child-have-a-theory-of-mind/) — the Sally-Anne paper (1985)
+- [Li 等人 — Theory of Mind for Multi-Agent Collaboration via Large Language Models](https://arxiv.org/abs/2310.10701)——合作游戏中涌现的 ToM；长期失败模式
+- [Riedl — Emergent Coordination in Multi-Agent Language Models](https://arxiv.org/abs/2510.05174)——群体规模测量；ToM 提示是承载条件
+- [Premack & Woodruff — Does the chimpanzee have a theory of mind?](https://www.cambridge.org/core/journals/behavioral-and-brain-sciences/article/does-the-chimpanzee-have-a-theory-of-mind/1E96B02CD9850E69AF20F81FA7EB3595)——1978 年 ToM 概念起源
+- [Baron-Cohen, Leslie, Frith — Does the autistic child have a theory of mind?](https://www.cambridge.org/core/journals/behavioral-and-brain-sciences/article/does-the-autistic-child-have-a-theory-of-mind/)——Sally-Anne 论文（1985）

@@ -1,131 +1,131 @@
-# Supervisor / Orchestrator-Worker Pattern
+# 监督者 / 编排器-工作者模式
 
-> One lead agent plans and delegates; specialized workers execute in parallel contexts and report back. This is the pattern behind Anthropic's Research system (Claude Opus 4 as lead, Sonnet 4 as subagents), measured at +90.2% over single-agent Opus 4 on internal research evals. Anthropic's engineering post reports that 80% of the variance on BrowseComp is explained by token usage alone — multi-agent wins largely because each subagent gets a fresh context window. This lesson builds the supervisor pattern from the primitives and covers the 2026 engineering lessons from production deployments.
+> 一个主导智能体规划并委托；专业工作者在并行上下文中执行并汇报。这是 Anthropic 研究系统背后的模式（Claude Opus 4 作为主导，Sonnet 4 作为子智能体），在内部研究评估中比单智能体 Opus 4 高出 +90.2%。Anthropic 的工程文章报告称，在 BrowseComp 上 80% 的方差仅由 token 使用量解释——多智能体之所以胜出，主要是因为每个子智能体都有一个全新的上下文窗口。本节课从原语开始构建监督者模式，并涵盖 2026 年生产部署的工程经验。
 
-**Type:** Learn + Build
-**Languages:** Python (stdlib, `threading`)
-**Prerequisites:** Phase 16 · 04 (Primitive Model)
-**Time:** ~75 minutes
+**类型：** 学习 + 构建
+**语言：** Python（标准库，`threading`）
+**前置条件：** 阶段 16·04（原语模型）
+**时间：** 约 75 分钟
 
-## Problem
+## 问题
 
-Research is the prototypical task that single-agent systems fail. You ask "what changed in multi-agent systems between 2023 and 2026?" A single agent reads five papers sequentially, fills half its context with their text, and then has to reason about all of them together. It forgets the first paper by the time it reaches the fifth. It cannot parallelize.
+研究是单智能体系统失败的典型任务。你问"2023 年到 2026 年间多智能体系统发生了什么变化？"一个单智能体顺序阅读五篇论文，用它们的文本填满一半的上下文，然后才能将它们放在一起推理。它读到第五篇时已经忘记了第一篇。它无法并行化。
 
-The supervisor pattern fixes this: one lead agent plans the search, delegates each sub-question to a worker, and synthesizes. Each worker gets its own 200k-token window for a narrow question. The lead never sees the raw papers — only the worker summaries.
+监督者模式解决了这个问题：一个主导智能体规划搜索，将每个子问题委托给工作者，然后综合。每个工作者获得自己的 200k token 窗口来回答一个狭窄的问题。主导永远不会看到原始论文——只有工作者的摘要。
 
-Anthropic's production Research system reports +90.2% on internal research evals vs a single Opus 4. The same post notes that 80% of the BrowseComp variance is explained by *token usage alone*. Fresh context per subagent is the main mechanism.
+Anthropic 的生产研究系统在内部研究评估中比单 Opus 4 高出 +90.2%。同一篇文章指出，BrowseComp 方差的 80% 仅由*token 使用量*解释。每个子智能体的新上下文是主要机制。
 
-## Concept
+## 概念
 
-### The pattern
+### 该模式
 
 ```
                  ┌──────────────┐
-                 │   Lead       │  plans, decomposes,
-                 │  (Opus 4)    │  synthesizes
+                 │   主导        │  规划、分解、
+                 │  (Opus 4)    │  综合
                  └──┬────┬───┬──┘
                     │    │   │
             ┌───────┘    │   └───────┐
             ▼            ▼           ▼
       ┌─────────┐  ┌─────────┐  ┌─────────┐
-      │ Worker1 │  │ Worker2 │  │ Worker3 │
+      │ 工作器1 │  │ 工作器2 │  │ 工作器3 │
       │(Sonnet) │  │(Sonnet) │  │(Sonnet) │
       └─────────┘  └─────────┘  └─────────┘
-         fresh       fresh        fresh
-         context     context      context
+         新建         新建        新建
+         上下文       上下文      上下文
 ```
 
-The lead never reads the raw materials. The workers never see each other's work until the lead synthesizes. Each arrow is a handoff with a narrow artifact.
+主导从不读取原始材料。工作者在主导综合之前看不到彼此的工作。每个箭头是一个带有狭窄制品的交接。
 
-### Why it wins
+### 为什么它胜出
 
-Three mechanisms:
+三个机制：
 
-1. **Fresh context per subagent.** A worker exploring "FIPA-ACL heritage" does not carry the 40k tokens the lead spent planning. It gets a 200k window for one question.
-2. **Specialization via prompt.** The lead's prompt is "decompose and synthesize," not "research." Each worker's prompt is narrow: "find what changed in X." Focused prompts produce focused outputs.
-3. **Parallelism.** Workers run concurrently. Wall-clock time is roughly `max(worker_times) + plan + synthesis`, not `sum(worker_times)`.
+1. **每个子智能体的新上下文。** 探索"FIPA-ACL 遗产"的工作者不会携带主导花在规划上的 40k token。它获得一个 200k 窗口来回答一个问题。
+2. **通过提示词实现专业化。** 主导的提示词是"分解并综合"，而不是"研究"。每个工作者的提示词是狭窄的："找出 X 中发生了什么变化。"集中的提示词产生集中的输出。
+3. **并行性。** 工作者并发运行。墙上时钟时间大约是 `max(工作者时间) + 规划 + 综合`，而不是 `sum(工作者时间)`。
 
-### Engineering lessons (Anthropic 2025)
+### 工程经验（Anthropic 2025）
 
-The Anthropic post lists several production lessons that are still 2026-relevant:
+Anthropic 的文章列出了几个在 2026 年仍然适用的生产经验：
 
-- **Scale effort to query complexity.** Simple queries: one agent, 3-10 tool calls. Complex queries: 10+ agents. The lead must estimate this, not the caller.
-- **Broad then narrow.** Decompose into broad sub-questions first, then spawn more workers per sub-question if the answer warrants depth.
-- **Rainbow deployments.** Agents are long-running and stateful. Traditional blue-green does not work. Anthropic uses rainbow: gradual rollout of new versions while old ones drain.
-- **Token usage dominates.** Multi-agent is ~15× the tokens of single-agent. Only run it when the task value justifies the cost.
+- **根据查询复杂度扩展工作量。** 简单查询：一个智能体，3-10 次工具调用。复杂查询：10+ 个智能体。主导必须自己估计这一点，而不是调用者。
+- **先广后窄。** 先分解为广义的子问题，然后再根据答案是否需要深度产生更多工作者。
+- **彩虹部署。** 智能体是长期运行和有状态的。传统的蓝绿部署不起作用。Anthropic 使用彩虹：新版本逐渐推出，同时旧版本逐渐下线。
+- **Token 使用量占主导。** 多智能体的 token 是单智能体的约 15 倍。只有当任务价值证明成本合理时才使用它。
 
-### The LangGraph turn
+### LangGraph 的转变
 
-LangGraph originally shipped a `langgraph-supervisor` library with a high-level `create_supervisor` helper. In 2025 LangChain moved the recommendation to implementing the supervisor pattern via tool-calling directly, because tool calls give more control over *what the supervisor sees* (context engineering). The library still works; the docs now recommend the tool-calling form.
+LangGraph 最初发布了一个 `langgraph-supervisor` 库，带有一个高级 `create_supervisor` 辅助函数。2025 年，LangChain 将推荐改为通过工具调用直接实现监督者模式，因为工具调用对*监督者看到什么*有更多控制（上下文工程）。该库仍然可用；文档现在推荐工具调用形式。
 
-### The failure modes
+### 失败模式
 
-- **Lead hallucinates the plan.** If the lead generates sub-questions that do not decompose the real question, workers do precise research on the wrong target.
-- **Workers over-explore.** Without explicit scope boundaries, workers drift beyond their assigned sub-question and pollute the synthesis step.
-- **Synthesis conflicts.** Two workers return contradictory facts. The lead must either re-ask (add a round) or note the disagreement explicitly. Silent picking of one side is the worst failure: the user never knows disagreement happened.
+- **主导产生幻觉计划。** 如果主导生成的子问题不能真正分解问题，工作者会精确地研究错误的目标。
+- **工作者过度探索。** 如果没有明确的作用域边界，工作者会偏离分配的子问题并污染综合步骤。
+- **综合冲突。** 两个工作者返回矛盾的事实。主导必须么重新提问（加一轮），么明确记录分歧。静默选择一方是最糟糕的失败：用户永远不会知道发生了分歧。
 
-### When supervisor is wrong
+### 什么时候监督者模式是错误的
 
-- **Sequential tasks.** If step 2 literally needs step 1's output, parallelism buys nothing. Use a pipeline (CrewAI Sequential, LangGraph linear graph).
-- **Simple queries.** Single-agent handles them faster and cheaper. Use the lead's "scale effort" check before spawning workers.
-- **Strict determinism.** Supervisor uses LLM-selected delegation. Static graphs are better when audit/replay matter more than adaptability.
+- **顺序任务。** 如果步骤 2 确实需要步骤 1 的输出，并行化购买不了什么。使用管道（CrewAI 顺序、LangGraph 线性图）。
+- **简单查询。** 单智能体处理它们更快更便宜。在生成工作者之前，使用主导的"扩展工作量"检查。
+- **严格确定性。** 监督者使用 LLM 选择委托。当审计/回放比适应性更重要时，静态图更好。
 
-## Build It
+## 构建它
 
-`code/main.py` implements a supervisor of three parallel workers using `threading`. The lead decomposes a query into sub-questions, workers run concurrently on each sub-question, and the lead synthesizes. No real LLMs — the workers are scripted to simulate fetch-and-summarize.
+`code/main.py` 使用 `threading` 实现了一个带有三个并行工作者的监督者。主导将查询分解为子问题，工作者并发运行每个子问题，主导综合。没有真正的 LLM——工作者被脚本化以模拟获取和摘要。
 
-Key structure:
+关键结构：
 
-- `Lead.plan(query)` splits a query into 3 sub-questions.
-- `Worker.run(sub_q)` returns a fake summary (could be any tool-using agent in production).
-- `Lead.run(query)` kicks off workers in threads, joins, and synthesizes.
+- `Lead.plan(query)` 将查询分成 3 个子问题。
+- `Worker.run(sub_q)` 返回一个假摘要（在生产中可以是任何使用工具的智能体）。
+- `Lead.run(query)` 启动线程中的工作者，连接，然后综合。
 
-Run:
+运行：
 
 ```
 python3 code/main.py
 ```
 
-Output shows the plan, the parallel worker traces with start/end timestamps, and the final synthesis. You can see the wall-clock wins: three 0.3-second workers run in ~0.35 seconds, not 0.9.
+输出显示计划、带有开始/结束时间戳的并行工作者跟踪，以及最终综合。你可以看到墙上时钟的收益：三个 0.3 秒的工作者大约在 0.35 秒内运行完成，而不是 0.9 秒。
 
-## Use It
+## 使用它
 
-`outputs/skill-supervisor-designer.md` takes a user query and produces a supervisor-pattern design: lead system prompt, worker roles, sub-question decomposition rules, and the synthesis template. Use this before building a new research-style agent system.
+`outputs/skill-supervisor-designer.md` 接受用户查询并产生一个监督者模式设计：主导系统提示词、工作者角色、子问题分解规则和综合模板。在构建新的研究风格智能体系统之前使用它。
 
-## Ship It
+## 发布它
 
-Checklist before deploying a supervisor pattern:
+在部署监督者模式之前检查清单：
 
-- **Model pairing.** Lead on a reasoning-tier model (Opus class, `o3` class). Workers on a faster, cheaper model (Sonnet, `o4-mini`).
-- **Worker timeout.** Any worker that exceeds 2× median runtime gets killed; the lead either re-spawns with narrower scope or proceeds without it.
-- **Token cap per worker.** Hard limit (say 10× the expected synthesis input) prevents a runaway worker from blowing the budget.
-- **Observability.** Trace the lead's plan, each worker's tool calls, and the synthesis. This is the basis for any post-hoc debugging.
-- **Rainbow rollout.** Stateful long-running agents need gradual version transition, not hot swap.
+- **模型配对。** 主导使用推理层级模型（Opus 级，`o3` 级）。工作者使用更快更便宜的模型（Sonnet，`o4-mini`）。
+- **工作者超时。** 任何超过中位运行时间 2 倍的工作者都会被杀死；主导要么用更窄的作用域重新生成，要么在没有它的情况下继续。
+- **每个工作者的 token 上限。** 硬限制（比如说是预期综合输入的 10 倍）防止失控的工作者超出预算。
+- **可观测性。** 追踪主导的计划、每个工作者的工具调用和综合。这是任何事后调试的基础。
+- **彩虹推出。** 有状态的长期运行智能体需要渐进式版本转换，而不是热交换。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`, then modify the lead to spawn 5 workers instead of 3. Observe the wall-clock effect. At what worker count does spawn overhead exceed parallel savings in this demo?
-2. Implement a worker timeout: kill any worker that runs longer than 0.5 seconds and have the lead synthesize the remaining results. What observability do you need to know a worker was cut?
-3. Add a conflict-detection step to the lead's synthesis: if two workers return contradictory answers, the lead notes the disagreement rather than picking one. How do you detect contradiction without calling an LLM?
-4. Read Anthropic's Research-system engineering post. List three practices that this toy demo would need to adopt to run in production.
-5. Compare LangGraph's `create_supervisor` (legacy) vs the new tool-calling recommendation. Which gives you better control over what the supervisor sees? Why does Anthropic explicitly pass only sub-answers and not raw worker context into synthesis?
+1. 运行 `code/main.py`，然后修改主导以生成 5 个工作者而不是 3 个。观察墙上时钟效果。在这个演示中，工作者数量达到多少时生成开销超过并行节省？
+2. 实现工作者超时：杀死任何运行时间超过 0.5 秒的工作者，并让主导综合剩余结果。你需要什么可观测性来知道一个工作者被切断了？
+3. 在主导的综合中添加冲突检测步骤：如果两个工作者返回矛盾的答案，主导记录分歧而不是选择一方。如何在不调用 LLM 的情况下检测矛盾？
+4. 阅读 Anthropic 的研究系统工程文章。列出这个玩具演示在生产中需要采用的三个实践。
+5. 比较 LangGraph 的 `create_supervisor`（遗留）vs 新的工具调用推荐。哪个让你更好地控制监督者看到什么？为什么 Anthropic 明确只传递子答案而不是原始工作者上下文到综合中？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Supervisor | "Lead agent" | An orchestrator agent that plans, delegates, and synthesizes. Does not do the work itself. |
-| Worker | "Subagent" | A focused agent invoked by the supervisor with narrow scope and its own context window. |
-| Orchestrator-worker | "Supervisor pattern" | Same thing, different name. The 2026 literature uses both. |
-| Fresh context | "Clean window" | A worker's context starts from its system prompt and assigned question, not the lead's history. |
-| Rainbow deployment | "Gradual rollout" | Long-running stateful agents need versioned drain-and-replace, not blue-green. |
-| Token dominance | "Context is the variable" | 80% of research-eval variance comes from total tokens used, not model choice, per Anthropic. |
-| Scale effort | "Match agent count to complexity" | Lead estimates query difficulty, spawns 1 vs 10+ workers accordingly. |
-| Synthesis conflict | "Workers disagree" | Two workers return contradictory facts; the lead must surface disagreement, not silently pick one. |
+| 监督者（Supervisor） | "主导智能体" | 规划、委托和综合的编排器智能体。它自己不干活。 |
+| 工作器（Worker） | "子智能体" | 由监督者调用的专注智能体，作用域狭窄，有自己的上下文窗口。 |
+| 编排器-工作者（Orchestrator-worker） | "监督者模式" | 同一个东西的不同名称。2026 年文献两者都用。 |
+| 新建上下文（Fresh context） | "干净的窗口" | 工作者的上下文从其系统提示词和分配的问题开始，而不是主导的历史。 |
+| 彩虹部署（Rainbow deployment） | "渐进式推出" | 长期运行的有状态智能体需要版本化的排出和替换，而不是蓝绿。 |
+| Token 占主导（Token dominance） | "上下文是变量" | 根据 Anthropic 的数据，80% 的研究评估方差来自使用的总 token，而不是模型选择。 |
+| 扩展工作量（Scale effort） | "根据复杂度匹配智能体数量" | 主导估计查询难度，相应地生成 1 vs 10+ 个工作者。 |
+| 综合冲突（Synthesis conflict） | "工作者不同意" | 两个工作者返回矛盾的事实；主导必须暴露分歧，而不是静默选择一方。 |
 
-## Further Reading
+## 进一步阅读
 
-- [Anthropic engineering — How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) — the production reference for supervisor pattern
-- [LangGraph workflows and agents](https://docs.langchain.com/oss/python/langgraph/workflows-agents) — tool-calling supervisor is now the recommended form
-- [LangGraph supervisor reference](https://reference.langchain.com/python/langgraph-supervisor) — the legacy helper, still used in 2026 production
-- [OpenAI cookbook — Orchestrating Agents: Routines and Handoffs](https://developers.openai.com/cookbook/examples/orchestrating_agents) — handoff-based supervisor variant
+- [Anthropic 工程——我们如何构建多智能体研究系统](https://www.anthropic.com/engineering/multi-agent-research-system)——监督者模式的生产参考
+- [LangGraph 工作流和智能体](https://docs.langchain.com/oss/python/langgraph/workflows-agents)——工具调用监督者是现在的推荐形式
+- [LangGraph 监督者参考](https://reference.langchain.com/python/langgraph-supervisor)——遗留辅助函数，在 2026 年生产中仍在使用
+- [OpenAI cookbook——编排智能体：例程和交接](https://developers.openai.com/cookbook/examples/orchestrating_agents)——基于交接的监督者变体
