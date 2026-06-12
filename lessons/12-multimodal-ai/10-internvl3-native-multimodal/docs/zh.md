@@ -1,137 +1,137 @@
-# InternVL3: Native Multimodal Pretraining
+# InternVL3：原生多模态预训练
 
-> Every open VLM before InternVL3 followed the same three-step recipe: take a text LLM trained on trillions of text tokens, bolt on a vision encoder, then fine-tune the seams. This works but has alignment debt — the text LLM has spent its full pretraining budget on pure text and does not natively understand visual tokens. When you add vision post-hoc, the LLM has to re-learn how to relate visual input to its text reasoning without forgetting the text. InternVL3 (Zhu et al., April 2025) rejects the post-hoc approach: one pretraining run, text and multimodal interleaved from step one. The result matches Gemini 2.5 Pro on MMMU-Pro at 78B params open. This lesson reads the case for native pretraining and what changes when you make it.
+> 在 InternVL3 之前，每一款开源 VLM 都遵循同样的三步配方：取一个用数万亿文本 token 预训练的纯文本 LLM，接上一个视觉编码器，然后微调各层接口。这能跑，但存在对齐债——文本 LLM 已将全部预训练预算花在了纯文本上，并不原生理解视觉 token。当你在事后加上视觉时，LLM 必须重新学习如何将视觉输入与文本推理关联起来，同时不能遗忘文本。InternVL3（Zhu 等，2025 年 4 月）拒绝了这种事后加视觉的做法：一次预训练，从第 1 步起就将文本和多模态交织在一起。结果：78B 参数下在 MMMU-Pro 上与 Gemini 2.5 Pro 持平。本课解读原生预训练的论据，以及当你采用它时会发生什么变化。
 
-**Type:** Learn
-**Languages:** Python (stdlib, training-corpus mixer)
-**Prerequisites:** Phase 12 · 05, Phase 12 · 07 (recipes)
-**Time:** ~120 minutes
+**类型：** 学习型
+**语言：** Python（标准库、训练语料混合器）
+**前置条件：** 阶段 12 · 05、阶段 12 · 07（配方）
+**时间：** 约 120 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain why post-hoc VLM training accumulates alignment debt, citing the three measurable symptoms (catastrophic forgetting, answer drift, visual-text inconsistency).
-- Describe InternVL3's native pretraining corpus mix and why the ratio of text : interleaved : caption matters.
-- Compare V2PE (variable visual position encoding) to Qwen2-VL's M-RoPE.
-- Name the Visual Resolution Router (ViR) and Decoupled Vision-Language (DvD) deployment optimizations.
+- 解释事后 VLM 训练如何积累对齐债，引用三个可量化的症状（灾难性遗忘、答案漂移、视觉-文本不一致）。
+- 描述 InternVL3 的原生预训练语料配比，以及文本 : 交错的 : 标题为何是这个比例。
+- 比较 V2PE（可变视觉位置编码）与 Qwen2-VL 的 M-RoPE。
+- 说出视觉分辨率路由器（ViR）和解耦视觉-语言（DvD）部署优化。
 
-## The Problem
+## 问题
 
-Post-hoc VLM training is the default. LLaVA, BLIP-2, Qwen-VL, Idefics — all take an already-pretrained LLM (Llama, Vicuna, Qwen, Mistral) and add vision. The training stages typically look like:
+事后 VLM 训练是默认方案。LLaVA、BLIP-2、Qwen-VL、Idefics——都采用一个已经预训练好的 LLM（Llama、Vicuna、Qwen、Mistral）然后加上视觉。训练阶段通常如下：
 
-1. Frozen LLM + frozen vision encoder + trainable projector, trained on caption pairs to align embeddings.
-2. Unfreeze LLM, train on instruction data (LLaVA-Instruct, ShareGPT4V).
-3. Optional task-specific fine-tune.
+1. 冻结 LLM + 冻结视觉编码器 + 可训练投影器，在caption对上进行训练以对齐 embedding。
+2. 解冻 LLM，在指令数据上训练（LLaVA-Instruct、ShareGPT4V）。
+3. 可选的特定任务微调。
 
-Three symptoms of alignment debt show up:
+对齐债的三个症状会出现：
 
-- Catastrophic forgetting. The post-hoc VLM forgets text-only skills. GSM8K scores drop 5-10 points. Hellaswag scores drop. Pure-text agents regress.
-- Answer drift. Small phrasings of the same visual question get different answers. The vision encoder connects to the LLM with weaker bindings than the LLM's own tokens.
-- Visual-text inconsistency. The VLM can describe an image correctly and then answer a question contradicting its own description. Visual tokens do not participate in the LLM's internal consistency checks the same way text does.
+- 灾难性遗忘。事后 VLM 遗忘纯文本技能。GSM8K 分数下降 5-10 分。Hellaswag 分数下降。纯文本 agent 退化。
+- 答案漂移。同一个视觉问题的微小措辞变化会得到不同答案。视觉编码器与 LLM 的连接比 LLM 自己 token 之间的连接更弱。
+- 视觉-文本不一致。VLM 能正确描述一张图，然后回答一个与自身描述矛盾的问题。视觉 token 不以文本那样的方式参与 LLM 的内部一致性检查。
 
-These symptoms are well-documented. MM1.5 Section 4 quantifies them. LLaVA-OneVision's ablations hint at them. Native pretraining is the answer.
+这些症状有充分记录。MM1.5 第 4 节对其进行了量化。LLaVA-OneVision 的消融实验暗示了它们的存在。原生预训练是答案。
 
-## The Concept
+## 概念
 
-### Native multimodal pretraining
+### 原生多模态预训练
 
-InternVL3 trains from scratch on a corpus that is native multimodal from step one. The mix is:
+InternVL3 从第 1 步起就在一个原生多模态语料上从头训练。配比为：
 
-- 40% text-only data (FineWeb, Proof-Pile-2, etc.)
-- 35% interleaved image-text data (OBELICS, MMC4-style)
-- 20% paired image-caption data
-- 5% video-text data
+- 40% 纯文本数据（FineWeb、Proof-Pile-2 等）
+- 35% 交错的图像-文本数据（OBELICS、MMC4 风格）
+- 20% 成对的图像-caption 数据
+- 5% 视频-文本数据
 
-Vision tokens, text tokens, and cross-modal interactions all participate in the same loss from the first gradient step. No alignment pretraining, no projector freezing stage, no catastrophic forgetting to recover from.
+从第一个梯度步骤起，视觉 token、文本 token 和跨模态交互都参与同一个 loss。没有对齐预训练，没有投影器冻结阶段，没有需要从中恢复的灾难性遗忘。
 
-Training is a single stage for the base model. Instruction tuning follows, but the base model already understands visual tokens as first-class citizens.
+基础模型的训练是一个单一阶段。指令微调跟在后面，但基础模型已经从一开始就理解视觉 token 为一等公民。
 
-### V2PE (variable visual position encoding)
+### V2PE（可变视觉位置编码）
 
-Qwen2-VL uses M-RoPE with fixed axis allocation. InternVL3 introduces V2PE: the position encoding varies per modality type (text, image, video) with learnable scaling. In practice:
+Qwen2-VL 使用固定轴分配的 M-RoPE。InternVL3 引入 V2PE：位置编码随模态类型（文本、图像、视频）而变化，带有可学习缩放。在实践中：
 
-- Text tokens get 1D position (text index).
-- Image patches get 2D position (row, col).
-- Video frames get 3D position (time, row, col).
+- 文本 token 获得 1D 位置（文本索引）。
+- 图像 patch 获得 2D 位置（行，列）。
+- 视频帧获得 3D 位置（时间，行，列）。
 
-The three share the same RoPE frequency base, but the hidden-dim allocation per band is a learned parameter rather than a fixed split. Freedom to trade off temporal vs spatial frequency resolution during pretraining.
+三者共享同一个 RoPE 频率基，但每个频段的隐藏维分配是可学习参数而非固定分割。在预训练期间可以自由权衡时间与空间频率分辨率。
 
-V2PE's ablation claim: 1-2 points on video benchmarks over M-RoPE at the same compute. Not a revolution, but cleaner.
+V2PE 的消融声称：在相同计算量下比 M-RoPE 在视频基准上高 1-2 分。不是革命性突破，但更干净。
 
-### Visual Resolution Router (ViR)
+### 视觉分辨率路由器（ViR）
 
-Deployment optimization. Not all images need full-resolution encoding. A photo with one object at low detail wastes tokens when encoded at 1280px native. ViR is a small classifier that predicts the minimum resolution needed to answer the question, before encoding.
+部署优化。并非所有图像都需要全分辨率编码。一张低细节单物体照片在 1280px 原生分辨率编码时浪费 token。ViR 是一个小型分类器，在编码前预测回答问题所需的最低分辨率。
 
-The routing has three tiers: low-res (256 tokens), medium (576), high (2048+). For 60% of queries in production traffic, low or medium is sufficient. Net effect: 2-3x throughput at equal quality.
+路由有三档：低分辨率（256 token）、中分辨率（576）、高分辨率（2048+）。在生产流量中，60% 的查询低或中等分辨率就够用了。净效果：同等质量下吞吐量提升 2-3 倍。
 
-### Decoupled Vision-Language deployment (DvD)
+### 解耦视觉-语言部署（DvD）
 
-When you serve a large VLM, the vision encoder runs once per image but the LLM runs autoregressively for every output token. The two components have different bottlenecks (vision = GPU memory bandwidth for conv + attention; LLM = KV cache). DvD splits them onto separate GPUs with streaming between.
+当服务大型 VLM 时，视觉编码器每张图像运行一次，但 LLM 每个输出 token 都自回归运行。两个组件有不同的瓶颈（视觉 = GPU 内存带宽用于 conv + attention；LLM = KV 缓存）。DvD 将它们拆分到不同 GPU 上并在其间流式传输。
 
-For an 8B + 400M encoder model, DvD roughly doubles per-node throughput vs co-located.
+对于 8B + 400M 编码器模型，DvD 相比共置使每节点吞吐量大约翻倍。
 
-### Single-stage vs multi-stage quality
+### 单阶段 vs 多阶段质量
 
-InternVL3's primary benchmark claim: at 78B params, match Gemini 2.5 Pro's MMMU-Pro. At 38B, match GPT-4o. At 8B, lead the open-8B leaderboard. All on a single-stage pretrain + instruction-tune recipe.
+InternVL3 的主要基准声称：78B 参数下与 Gemini 2.5 Pro 的 MMMU-Pro 持平。38B 下与 GPT-4o 持平。8B 下在 open-8B 排行榜上领先。全部使用单阶段预训练 + 指令微调配方。
 
-The alignment-debt hypothesis is measurable: InternVL3-8B loses fewer text-benchmark points (MMLU, GSM8K) than Qwen2.5-VL-7B per unit of vision-benchmark gain. The model is more of a generalist because training was one piece, not two.
+对齐债假说是可衡量的：InternVL3-8B 损失的文本基准分数（MMLU、GSM8K）比 Qwen2.5-VL-7B 在每单位视觉基准收益上更少。该模型更接近通才，因为训练是一体的，而非两体的。
 
-### InternVL3.5 and InternVL-U
+### InternVL3.5 和 InternVL-U
 
-InternVL3.5 (August 2025) scales the recipe. Same native-pretrain approach, more data, more params. MMMU improvements are incremental.
+InternVL3.5（2025 年 8 月）扩展了配方。同样的原生预训练方法，更多数据，更多参数。MMMU 改进是递增的。
 
-InternVL-U (2026) adds unified generation — image output via MMDiT heads on top of the same backbone. The "U" stands for "Understanding + generation," chasing Transfusion-style unified models (Lesson 12.13). The same native-pretrain backbone supports both understanding and generation heads.
+InternVL-U（2026 年）增加了统一生成——通过 MMDiT 头部在相同骨干网上输出图像。"U" 代表"理解 + 生成"，追逐 Transfusion 风格的统一模型（第 12.13 课）。同样的原生预训练骨干网支持理解和生成两种头部。
 
-### Trade-offs of native pretraining
+### 原生预训练的权衡
 
-Native pretraining is not free:
+原生预训练不是免费的：
 
-- Compute. Training a new VLM from scratch costs the same as training a text LLM — millions of GPU-hours. Post-hoc adaptation reuses existing LLM weights, saves most of the cost.
-- Data. Interleaved image-text corpora at scale are rare. OBELICS is 141M documents; MMC4 is 571M. Text alone ships at 15T tokens. Multimodal pretraining data scarcity is a hard constraint.
-- Base-LLM reuse. Native pretraining gives up the option to drop in a new LLM later. Post-hoc lets you swap Llama-3.1 for Llama-4 by retraining only the adapter.
+- 计算。从头训练一个新 VLM 的成本与训练一个文本 LLM 相同——数百万 GPU 小时。事后适配重用现有 LLM 权重，节省大部分成本。
+- 数据。大规模交错的图像-文本语料很稀少。OBELICS 有 1.41 亿文档；MMC4 有 5.71 亿。纯文本达到 15T token。 多模态预训练数据稀缺是一个硬约束。
+- 基础 LLM 重用。原生预训练放弃了以后插入新 LLM 的选项。事后允许你通过仅重训练适配器将 Llama-3.1 换成 Llama-4。
 
-The bet InternVL3 makes: the alignment debt is worse than the reuse loss. The benchmarks back the claim. The cost-to-produce bars future labs from cheaply replicating. Post-hoc VLMs will keep existing because they remain cheaper for most projects.
+InternVL3 赌的是：对齐债比重用损失更糟糕。基准数据支持这一说法。生产成本 bars 未来的 lab 无法廉价复制。事后 VLM 将继续存在，因为对大多数项目来说它们更便宜。
 
-## Use It
+## 使用它
 
-`code/main.py` is a training-corpus mixer and ViR router simulator. It:
+`code/main.py` 是一个训练语料混合器和 ViR 路由器模拟器。它：
 
-- Takes a target corpus mix (%text, %interleaved, %caption, %video) and computes expected steps per modality.
-- Simulates ViR routing on a batch of queries (distribution: 50% low-detail, 30% medium, 20% high-detail) and reports average token count.
-- Reports DvD throughput estimates given encoder vs LLM FLOPs.
-- Prints a side-by-side of post-hoc vs native pretraining in params, compute, data, and expected alignment-debt symptoms.
+- 获取目标语料配比（%文本、%交错的、%caption、%视频）并计算每种模态的预期步数。
+- 在一批查询上模拟 ViR 路由（分布：50% 低细节、30% 中等、20% 高细节）并报告平均 token 数。
+- 给出给定编码器 vs LLM FLOPs 下的 DvD 吞吐量估计。
+- 打印事后 vs 原生预训练的并列对比：参数、计算、数据和对齐债预期症状。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-native-vs-posthoc-auditor.md`. Given a proposed VLM training plan, it audits whether to go native or post-hoc, flags alignment-debt risk, and recommends a corpus mix. Use it when you are sizing a new open-VLM project and need to pick the training strategy.
+本课产出 `outputs/skill-native-vs-posthoc-auditor.md`。给定一个提议的 VLM 训练计划，它审计是否走原生或事后路线，标记对齐债风险，并推荐语料配比。当你在为一个新的 open-VLM 项目定规模并需要选择训练策略时使用它。
 
-## Exercises
+## 练习
 
-1. Estimate the compute delta between InternVL3-8B (native pretrain) and LLaVA-OneVision-7B (post-hoc). Ratio of GPU-hours approximately? What explains the gap?
+1. 估算 InternVL3-8B（原生预训练）与 LLaVA-OneVision-7B（事后）之间的计算差值。GPU 小时的大致比率是多少？差距说明了什么？
 
-2. InternVL3 reports 40% text / 35% interleaved / 20% caption / 5% video. If your target task is video-heavy, propose a new ratio and argue why the base model still needs substantial text and caption data.
+2. InternVL3 报告 40% 文本 / 35% 交错的 / 20% caption / 5% 视频。如果你的目标任务是视频密集型的，提出一个新的配比，并论证为什么基础模型仍然需要大量文本和 caption 数据。
 
-3. Read MM1.5 Section 4 on forgetting. Name the exact benchmark where post-hoc training showed the largest regression. How much did the regression cost?
+3. 阅读 MM1.5 第 4 节关于遗忘的内容。说出事后训练显示最大退化的确切基准。退化代价是多少？
 
-4. ViR routes 60% of traffic to low-resolution encoding. What kinds of queries does it misroute (sends to low-res when high-res was needed)? Propose three router-failure modes.
+4. ViR 将 60% 的流量路由到低分辨率编码。什么样的查询会被它错误路由（需要高分辨率时却发送到了低分辨率）？提出三种路由器失败模式。
 
-5. DvD splits vision and LLM onto separate GPUs. Under what traffic pattern does DvD hurt throughput instead of helping?
+5. DvD 将视觉和 LLM 拆分到不同 GPU。在什么流量模式下 DvD 会损害吞吐量而非帮助？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|------------------------|
-| Native multimodal pretraining | "From scratch together" | Text + image + video tokens participate in the loss from step 1, not bolted on later |
-| Alignment debt | "Post-hoc penalty" | Measurable regression in text skills and answer consistency that comes from bolting vision onto a frozen LLM |
-| V2PE | "Variable visual pos encoding" | Per-modality learnable position encoding allocation; InternVL3's M-RoPE successor |
-| ViR | "Resolution router" | Small classifier that picks minimum resolution needed per query before encoding, saving inference tokens |
-| DvD | "Decoupled deployment" | Vision encoder on one GPU, LLM on another, with stream handoff; doubles throughput for large VLMs |
-| InternVL-U | "Unified understanding + generation" | 2026 follow-up that adds image-generation heads to the native-pretrain backbone |
-| Interleaved corpus | "OBELICS / MMC4" | Documents with text and images in natural reading order; the raw material for native pretraining |
+| 原生多模态预训练 | "从头一起" | 文本 + 图像 + 视频 token 从第 1 步起就参与 loss，而非事后接上 |
+| 对齐债 | "事后惩罚" | 将视觉 bolt 到冻结 LLM 上导致的文本技能和答案一致性的可衡量退化 |
+| V2PE | "可变视觉位置编码" | 每模态可学习的位置编码分配；InternVL3 的 M-RoPE 后继者 |
+| ViR | "分辨率路由器" | 在编码前为每个查询预测所需最低分辨率的小型分类器，节省推理 token |
+| DvD | "解耦部署" | 视觉编码器在一个 GPU 上，LLM 在另一个上，带流式交接；大型 VLM 吞吐量翻倍 |
+| InternVL-U | "统一理解 + 生成" | 2026 年后续，在原生预训练骨干网上增加图像生成头部 |
+| 交错语料 | "OBELICS / MMC4" | 以自然阅读顺序包含文本和图像的文档；原生预训练的原材料 |
 
-## Further Reading
+## 延伸阅读
 
-- [Chen et al. — InternVL 1 (arXiv:2312.14238)](https://arxiv.org/abs/2312.14238)
-- [Zhu et al. — InternVL3 (arXiv:2504.10479)](https://arxiv.org/abs/2504.10479)
+- [Chen 等 — InternVL 1 (arXiv:2312.14238)](https://arxiv.org/abs/2312.14238)
+- [Zhu 等 — InternVL3 (arXiv:2504.10479)](https://arxiv.org/abs/2504.10479)
 - [InternVL3.5 (arXiv:2508.18265)](https://arxiv.org/abs/2508.18265)
 - [InternVL-U (arXiv:2603.09877)](https://arxiv.org/abs/2603.09877)
-- [Zhang et al. — MM1.5 (arXiv:2409.20566)](https://arxiv.org/abs/2409.20566)
+- [Zhang 等 — MM1.5 (arXiv:2409.20566)](https://arxiv.org/abs/2409.20566)

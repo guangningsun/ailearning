@@ -1,42 +1,42 @@
-# MIO and Any-to-Any Streaming Multimodal Models
+# MIO 与任意到任意流式多模态模型
 
-> GPT-4o ships a product most open models cannot replicate: an agent that hears voice, sees video, and speaks back in real time. The open-ecosystem answer by late 2024 was MIO (Wang et al., September 2024). MIO tokenizes text, image, speech, and music, trains one causal transformer over the interleaved sequences, and generates any modality to any modality. AnyGPT (Zhan et al., February 2024) was the proof of concept; MIO is the scale-up; Unified-IO 2 (Allen AI, December 2023) is the cousin with vision + action grounding. This lesson reads the any-to-any pattern — four tokenizers, one transformer, streaming-friendly decode.
+> GPT-4o 交付了一款大多数开源模型无法复现的产品：一个能实时听、看、说的智能体。到 2024 年底，开源生态的答案是 MIO（Wang 等，2024 年 9 月）。MIO 对文本、图像、语音和音乐进行分词（tokenize），在一个因果 Transformer 上训练交错序列，并生成任意模态到任意模态的输出。AnyGPT（Zhan 等，2024 年 2 月）是概念验证；MIO 是规模化版本；Unified-IO 2（Allen AI，2023 年 12 月）则是带有视觉+动作接地（grounding）的近亲。本节课解读任意到任意模式——四个分词器、一个 Transformer、支持流式解码。
 
-**Type:** Learn
-**Languages:** Python (stdlib, four-modality token allocator + streaming decode loop)
-**Prerequisites:** Phase 12 · 11 (Chameleon), Phase 6 (Speech and Audio)
-**Time:** ~120 minutes
+**类型：** 学习型
+**语言：** Python（标准库，四模态分词分配器 + 流式解码循环）
+**前置条件：** 阶段 12 · 11（Chameleon），阶段 6（语音与音频）
+**时间：** 约 120 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Design a shared vocabulary that hosts text, image, speech, and music tokens without collisions.
-- Compare SEED-Tokenizer (images) and SpeechTokenizer residual-VQ (speech) on compression + reconstruction trade-offs.
-- Explain the four-stage curriculum that builds up any-to-any generation.
-- Name the three open any-to-any recipes and their main trade-offs: MIO, AnyGPT, Unified-IO 2.
+- 设计一个容纳文本、图像、语音和音乐 token 且无冲突的共享词表。
+- 对比 SEED-Tokenizer（图像）和 SpeechTokenizer 残差-VQ（语音）在压缩+重建权衡上的差异。
+- 解释构建任意到任意生成的四阶段课程（curriculum）。
+- 说出三个开源任意到任意方案及其主要权衡：MIO、AnyGPT、Unified-IO 2。
 
-## The Problem
+## 问题
 
-A unified multimodal model is easy to claim and hard to build at scale. Most "any-to-any" systems until 2024 were pipelined: vision model → text representation → speech model → audio. Each hop loses information, adds latency, and complicates training. GPT-4o's demo video showed a single-model alternative with subsecond response; open systems trailed by months.
+一个统一的多模态模型说起来容易，真正大规模构建却很难。2024 年之前的大多数"任意到任意"系统都是流水线式的：视觉模型 → 文本表示 → 语音模型 → 音频。每一次跳转都会丢失信息、增加延迟，并使训练复杂化。GPT-4o 的演示视频展示了一种单模型替代方案，响应时间低于一秒；开源系统则落后了数月。
 
-The engineering challenges:
+工程挑战：
 
-- Tokenizers must exist for every modality, compress losslessly-enough for reconstruction, and produce tokens at rates the transformer can consume.
-- A single vocabulary must allocate space for text (32k+), image (16k+), speech (4k+), music (8k+). Forty-thousand-plus entries minimum.
-- Training data must cover every input-output pair (text→image, image→speech, speech→image, etc.) or the model must compose.
-- Inference must stream output tokens fast enough for conversational latency (<500ms time-to-first-audio-byte).
+- 分词器必须为每种模态存在，将内容压缩至足够无损以供重建，并按 Transformer 可消费的速率产生 token。
+- 单一词表必须为文本（32k+）、图像（16k+）、语音（4k+）、音乐（8k+）分配空间。至少四万条目。
+- 训练数据必须覆盖每一种输入-输出对（文本→图像、图像→语音、语音→图像等），否则模型必须具备组合能力。
+- 推理必须足够快地流式输出 token，以满足对话延迟要求（首次音频字节的 TTFB < 500ms）。
 
-## The Concept
+## 概念
 
-### Four tokenizers for four modalities
+### 四个模态的分词器
 
-MIO's tokenizer stack:
+MIO 的分词器栈：
 
-- Text: standard BPE, vocab ~32000.
-- Image: SEED-Tokenizer (2023) — quantized VAE with discrete codebook, 4096 entries, 32x32 tokens per image.
-- Speech: SpeechTokenizer residual-VQ (2023) — encodes 16kHz waveform into 8 hierarchical codebooks; first level is coarse content, later levels add prosody and speaker identity.
-- Music: similar residual-VQ (Meta's MusicGen / Encodec family), 4-8 codebooks.
+- 文本：标准 BPE，词表约 32000。
+- 图像：SEED-Tokenizer（2023）—— 带离散码本（codebook）的量化 VAE，4096 个条目，每张图像 32x32 个 token。
+- 语音：SpeechTokenizer 残差-VQ（2023）—— 将 16kHz 波形编码为 8 个层次化码本；第一层是粗糙内容，后续层增加韵律和说话人身份。
+- 音乐：类似的残差-VQ（Meta 的 MusicGen / Encodec 系列），4-8 个码本。
 
-Each modality produces integer tokens. The tokens get disjoint ID ranges in the shared vocabulary:
+每种模态产生整数 token。这些 token 在共享词表中获得不相交的 ID 范围：
 
 ```
 text:   0..31999
@@ -46,111 +46,107 @@ music:  40192..48383  (8192 music tokens)
 sep:    48384..48390  (<image>, <speech>, <music>, </...>, etc.)
 ```
 
-Total: ~48k vocabulary. The input embedding and output projection span all of it.
+总计：约 48k 词表。输入 embedding 和输出投影覆盖全部范围。
 
-### Streaming decode
+### 流式解码
 
-Speech generation uses residual-VQ. The transformer predicts the base (layer 0) speech tokens; a parallel-decoded residual quantizer predicts the subsequent layers. Each layer 0 token is roughly 50ms of audio at 16kHz.
+语音生成使用残差-VQ。Transformer 预测基础层（第 0 层）语音 token；并行解码的残差量化器预测后续层。每一层 0 token 约对应 16kHz 下 50ms 的音频。
 
-The streaming pattern:
+流式模式：
 
-1. User speaks into mic; real-time audio tokenizer emits speech tokens every 50ms.
-2. MIO consumes tokens as they arrive (prompt prefill + incremental forward).
-3. Output tokens stream out as generated; a parallel speech decoder converts them to audio samples with ~50-150ms latency.
-4. Time-to-first-audio-byte: ~300-500ms in MIO paper, approaching GPT-4o's ~250ms.
+1. 用户对着麦克风说话；实时音频分词器每 50ms 发出语音 token。
+2. MIO 消费到达的 token（提示词预填充 + 增量前向传播）。
+3. 输出 token 按生成顺序流出；并行语音解码器将其转换为音频样本，延迟约 50-150ms。
+4. 首次音频字节时间：MIO 论文中约 300-500ms，逼近 GPT-4o 的约 250ms。
 
-Mini-Omni (arXiv:2408.16725), GLM-4-Voice (arXiv:2412.02612), and Moshi (arXiv:2410.00037) are complementary streaming speech-LLM designs. Moshi in particular achieves 160ms round-trip on a single GPU.
+Mini-Omni（arXiv:2408.16725）、GLM-4-Voice（arXiv:2412.02612）和 Moshi（arXiv:2410.00037）是互补的流式语音 LLM 设计。Moshi 尤其实现了在单 GPU 上 160ms 的往返延迟。
 
-### Four-stage curriculum
+### 四阶段课程
 
-MIO's training curriculum:
+MIO 的训练课程：
 
-1. Stage 1 — alignment. Large-scale modality-pair corpora: text-image, text-speech, text-music. Each pair uses its own token vocabulary segment. Trains the shared vocabulary.
-2. Stage 2 — interleaved. Multi-modality interleaved documents (blogs with images + video, podcasts with transcripts, etc.). Trains cross-modality context.
-3. Stage 3 — speech-enhanced. Extra audio data to lift speech quality without losing text capability.
-4. Stage 4 — SFT. Instruction tuning across modalities: VQA, captioning, narration, speech-to-speech dialogue.
+1. 第一阶段——对齐。大规模模态对语料：文本-图像、文本-语音、文本-音乐。每一对使用各自独立的 token 词表段。训练共享词表。
+2. 第二阶段——交错。多模态交错文档（带图像+视频的博客、带转录稿的播客等）。训练跨模态上下文。
+3. 第三阶段——语音增强。额外音频数据提升语音质量，同时不丧失文本能力。
+4. 第四阶段——SFT。跨模态指令微调：VQA、描述、旁白、语音到语音对话。
 
-Missing a stage degrades specific capabilities: skip stage 2 and the model loses cross-modality context; skip stage 3 and speech is poor.
+缺少某一阶段会削弱特定能力：跳过第二阶段会导致模型失去跨模态上下文；跳过第三阶段则语音质量很差。
 
-### Chain-of-visual-thought
+### 视觉思维链
 
-MIO introduces chain-of-visual-thought: the model emits intermediate image tokens as a reasoning step. For "is the cat climbing a tree?" the model:
+MIO 引入了视觉思维链：模型将中间图像 token 作为推理步骤输出。对于"这只猫在爬树吗？"这个问题，模型：
 
-1. Emits `<image>` tokens rendering the scene (from the input image or a sketch).
-2. Emits text analyzing the sketch.
-3. Emits the final answer.
+1. 输出 `<image>` token，从输入图像或草图渲染场景。
+2. 输出文本分析该草图。
+3. 输出最终答案。
 
-The rendered intermediate image serves as a scratchpad. Benchmarks improve on spatial-reasoning tasks. The idea mirrors chain-of-thought for text reasoning.
+渲染出的中间图像充当草稿本。基准测试在空间推理任务上有所提升。这个想法类似于文本推理中的思维链。
 
-### Competitors in any-to-any
+### 任意到任意的竞争者
 
-- AnyGPT (arXiv:2402.12226): 4 modalities (text, image, speech, music), similar design.
-- Unified-IO 2 (arXiv:2312.17172): adds vision action outputs, depth, normals. More task diversity, smaller scale.
-- NExT-GPT (arXiv:2309.05519): LLM + modality-specific diffusion decoders. Not a single-model approach.
-- CoDi (arXiv:2305.11846): composable diffusion; any-to-any via shared latent.
+- AnyGPT（arXiv:2402.12226）：4 个模态（文本、图像、语音、音乐），类似设计。
+- Unified-IO 2（arXiv:2312.17172）：增加了视觉动作输出、深度、法线。任务多样性更多，规模更小。
+- NExT-GPT（arXiv:2309.05519）：LLM + 模态特定扩散解码器。不是单一模型方案。
+- CoDi（arXiv:2305.11846）：可组合扩散；通过共享潜空间实现任意到任意。
 
-MIO is the closest to pure-token any-to-any. AnyGPT is its conceptual ancestor.
+MIO 最接近纯 token 的任意到任意。AnyGPT 是它的概念先驱。
 
-### Latency budget
+### 延迟预算
 
-For a conversational product, every component's latency matters:
+对于对话产品，每个组件的延迟都很重要：
 
-- Mic to audio tokens: ~50ms.
-- Prefill (audio tokens + history): ~100ms on an 8B model.
-- First output token: ~50ms.
-- Parallel residual-VQ + speech decoder: ~100-150ms.
+- 麦克风到音频 token：约 50ms。
+- 预填充（音频 token + 历史）：约 100ms（8B 模型）。
+- 第一个输出 token：约 50ms。
+- 并行残差-VQ + 语音解码器：约 100-150ms。
 
-Total time-to-first-audio-byte: ~300ms minimum. GPT-4o claims ~250ms. Moshi claims 160ms. MIO/AnyGPT are in the 400-600ms range per public benchmarks.
+首次音频字节总时间：至少约 300ms。GPT-4o 声称约 250ms。Moshi 声称 160ms。MIO/AnyGPT 在公开基准测试中处于 400-600ms 范围。
 
-### Why any-to-any stays hard
+### 为什么任意到任意仍然困难
 
-Even in 2026, open any-to-any models trail closed ones on two axes:
+即使在 2026 年，开源任意到任意模型在两个维度上仍落后于闭源模型：
 
-- Speech quality. The residual-VQ tokenizer is lossy; conversational speech sounds robotic compared to ElevenLabs-class voices.
-- Cross-modality reasoning. Asking the model "sing about what you see" still fails more often than pure-vision tasks.
+- 语音质量。残差-VQ 分词器是有损的；对话语音听起来比 ElevenLabs 级语音更机器人化。
+- 跨模态推理。问模型"唱出你看到的东西"仍然比纯视觉任务失败得多。
 
-These are open research problems. Qwen3-Omni (Lesson 12.20) is the most advanced open attempt in 2025.
+这些都是开放的研究问题。Qwen3-Omni（第 12.20 课）是 2025 年最前沿的开源尝试。
 
-## Use It
+## 使用它
 
-`code/main.py`:
+`code/main.py`：
 
-- Defines the four-modality vocabulary allocation and prints it.
-- Routes a list of multimodal inputs (text, image, audio-clip, music) through the tokenizer router.
-- Simulates streaming decode for a text-to-speech response with latency counting.
-- Computes the expected time-to-first-audio-byte given encoder, prefill, and decoder latencies.
+- 定义四模态词表分配并打印出来。
+- 将多模态输入列表（文本、图像、音频片段、音乐）通过分词器路由器路由。
+- 模拟文本到语音响应的流式解码，并计算延迟。
+- 根据编码器、预填充和解码器延迟计算预期的首次音频字节时间。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-any-to-any-pipeline-auditor.md`. Given a conversational product spec (modalities in, modalities out, latency target), it audits the MIO-family design choices and computes the latency budget.
+本节课产出 `outputs/skill-any-to-any-pipeline-auditor.md`。给定一个对话产品规范（输入模态、输出模态、延迟目标），它审查 MIO 系列的设计选择并计算延迟预算。
 
-## Exercises
+## 练习
 
-1. Your product accepts speech input and returns speech output. What's the end-to-end latency budget target? List the components that spend time.
+1. 你的产品接受语音输入并返回语音输出。端到端延迟目标是多少？列出每个花时间的组件。
+2. SpeechTokenizer 残差-VQ 使用 8 个码本。说明为什么并行解码残差层是必要的（相对于串行），以及它带来了什么延迟节省。
+3. 你的词表有 32k 文本 + 4k 图像 + 4k 语音。加上 8k 音乐和约 10 个分隔符。在隐藏维度 4096 下，embedding 矩阵的参数成本是多少？
+4. 视觉思维链输出一个中间图像。什么样的问题从中受益？什么样的问题因额外 token 而受损？
+5. 阅读 Moshi（arXiv:2410.00037）。描述其"内心独白"技术，并与 MIO 的视觉思维链进行比较。
 
-2. SpeechTokenizer residual-VQ uses 8 codebooks. Propose why parallel-decoding the residual levels is necessary (vs sequential) and what latency savings it brings.
+## 关键术语
 
-3. Your vocabulary has 32k text + 4k image + 4k speech. Add 8k music and ~10 separators. What is the embedding-matrix parameter cost at hidden dim 4096?
-
-4. Chain-of-visual-thought emits an intermediate image. What kinds of questions benefit? What kinds are hurt by the extra tokens?
-
-5. Read Moshi (arXiv:2410.00037). Describe its "inner monologue" technique and compare to MIO's chain-of-visual-thought.
-
-## Key Terms
-
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|------------------------|
-| Any-to-any | "Multimodal in/out" | A single model that accepts and emits text, image, speech, and music in any direction |
-| Residual-VQ | "Speech tokenizer stack" | Multi-codebook tokenization where each layer adds information; base layer is content, later layers are prosody |
-| SEED-Tokenizer | "Image codes" | Discrete image tokenizer with 4096-entry codebook used by MIO |
-| Chain-of-visual-thought | "Visual scratchpad" | The model generates an intermediate image as a reasoning step before its final answer |
-| Time-to-first-audio-byte | "TTFAB" | Latency from user voice to first audio output; <500ms for conversational feel |
-| Four-stage curriculum | "Training recipe" | Alignment -> interleaved -> speech-enhanced -> SFT, in that order |
+| 任意到任意 | "多模态输入/输出" | 一个能以任意方向接受和输出文本、图像、语音和音乐的单模型 |
+| 残差-VQ | "语音分词器栈" | 多码本分词，每一层增加信息；基础层是内容，后续层是韵律 |
+| SEED-Tokenizer | "图像码" | MIO 使用的 4096 条目离散图像分词器 |
+| 视觉思维链 | "视觉草稿本" | 模型在最终答案之前生成一个中间图像作为推理步骤 |
+| 首次音频字节时间 | "TTFAB" | 从用户说话到第一个音频输出的延迟；< 500ms 才有对话感 |
+| 四阶段课程 | "训练配方" | 按顺序的对齐 → 交错 → 语音增强 → SFT |
 
-## Further Reading
+## 延伸阅读
 
-- [Wang et al. — MIO (arXiv:2409.17692)](https://arxiv.org/abs/2409.17692)
-- [Zhan et al. — AnyGPT (arXiv:2402.12226)](https://arxiv.org/abs/2402.12226)
-- [Lu et al. — Unified-IO 2 (arXiv:2312.17172)](https://arxiv.org/abs/2312.17172)
-- [Wu et al. — NExT-GPT (arXiv:2309.05519)](https://arxiv.org/abs/2309.05519)
-- [Tang et al. — CoDi (arXiv:2305.11846)](https://arxiv.org/abs/2305.11846)
+- [Wang 等——MIO（arXiv:2409.17692）](https://arxiv.org/abs/2409.17692)
+- [Zhan 等——AnyGPT（arXiv:2402.12226）](https://arxiv.org/abs/2402.12226)
+- [Lu 等——Unified-IO 2（arXiv:2312.17172）](https://arxiv.org/abs/2312.17172)
+- [Wu 等——NExT-GPT（arXiv:2309.05519）](https://arxiv.org/abs/2309.05519)
+- [Tang 等——CoDi（arXiv:2305.11846）](https://arxiv.org/abs/2305.11846)

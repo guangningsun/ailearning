@@ -1,156 +1,156 @@
-# Multimodal RAG and Cross-Modal Retrieval
+# 多模态 RAG 与跨模态检索
 
-> Vision-native document RAG is one slice. Production multimodal RAG goes wider — retrieving across text, images, audio, and video for workflows like trip planning ("find me a quiet vegan brunch with natural light"), medical triage ("what injury matches this photo + these notes"), e-commerce ("outfits similar to this selfie, in my size"), and field service ("diagnose this engine sound plus photo of the part"). Three 2025 surveys — Abootorabi et al., Mei et al., Zhao et al. — codified the sub-problems: cross-modal retrieval, retrieval fusion, generation grounding, multimodal evaluation. This lesson reads the surveys and designs a production pipeline.
+> 视觉原生文档 RAG 只是一部分。生产级多模态 RAG 更广泛——跨文本、图像、音频和视频检索，用于旅行规划（"给我找一家安静的自然光素食早午餐"）、医疗分诊（"什么伤口与这张照片 + 这些笔记匹配"）、电子商务（"与我这张自拍相似的 outfit，按我的尺码"）和现场服务（"根据这个引擎声音 + 零件照片诊断"）等工作流。三份 2025 年调查——Abootorabi 等、Mei 等、赵等——将子问题编纂成典：跨模态检索、检索融合、生成接地、多模态评估。本课解读这些调查并设计一个生产流水线。
 
-**Type:** Build
-**Languages:** Python (stdlib, cross-modal retriever with fusion + grounded generator)
-**Prerequisites:** Phase 12 · 23 (ColPali), Phase 11 (RAG basics)
-**Time:** ~180 minutes
+**类型：** 构建型
+**语言：** Python（标准库，跨模态检索器 + 融合 + 接地元生成器）
+**前置条件：** 阶段 12 · 23（ColPali）、阶段 11（RAG 基础）
+**时间：** 约 180 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Design cross-modal retrieval: text → image, image → text, audio → video, etc.
-- Compare three fusion strategies: score fusion, attention-based fusion, MoE fusion.
-- Explain generation grounding: what "cite your sources" looks like when sources are a mix of modalities.
-- Name the three canonical multimodal RAG surveys of 2025 and their sub-problem taxonomy.
+- 设计跨模态检索：文本→图像、图像→文本、音频→视频等。
+- 比较三种融合策略：分数融合、注意力融合、MoE 融合。
+- 解释生成接地：当源是多种模态时，"引用你的来源"是什么样子。
+- 说出 2025 年的三份经典多模态 RAG 调查及其子问题分类法。
 
-## The Problem
+## 问题
 
-Single-modality RAG is a solved pattern: embed query, embed chunks, retrieve, stuff into LLM. Multimodal RAG requires:
+单模态 RAG 是一个已解决的模式：嵌入查询、嵌入块、检索、塞入 LLM。多模态 RAG 需要：
 
-1. Multiple retrieval heads (each modality needs embeddings in a compatible space).
-2. Fusion of retrieval results across modalities.
-3. Generation grounding that cites sources across modalities.
-4. Evaluation metrics that cover cross-modal signal.
+1. 多个检索头（每种模态需要在兼容空间中的嵌入）。
+2. 跨模态的检索结果融合。
+3. 跨模态引用源的生成接地。
+4. 覆盖跨模态信号的评估指标。
 
-The 2025 surveys all arrive at the same taxonomy.
+2025 年的调查都得出了相同的分类法。
 
-## The Concept
+## 概念
 
-### Cross-modal retrieval
+### 跨模态检索
 
-Retrieve documents of modality B given a query of modality A. Three patterns:
+给定 A 模态的查询，检索 B 模态的文档。三种模式：
 
-1. Shared embedding space. CLIP and CLAP produce text + image / text + audio embeddings in a shared space. Cosine similarity across modalities works directly. Limited to CLIP-trained pairs.
+1. 共享嵌入空间。CLIP 和 CLAP 在共享空间中产生文本 + 图像 / 文本 + 音频嵌入。跨模态余弦相似度直接工作。仅限于 CLIP 训练的配对。
 
-2. Per-modality encoder + translation. Text encoder + image encoder + a small translator module mapping between spaces. Sen2Sen by Gupta et al. and other 2024 designs. Flexible but adds complexity.
+2. 每模态编码器 + 翻译。文本编码器 + 图像编码器 + 一个小型翻译模块映射空间。Gupta 等人的 Sen2Sen 和其他 2024 年设计。灵活但增加复杂性。
 
-3. VLM as encoder. Use a VLM's hidden states as the retrieval representation. Any modality the VLM supports works. Higher quality, more expensive.
+3. VLM 作为编码器。使用 VLM 的隐藏状态作为检索表示。VLM 支持的任何模态都可以工作。更高质量，更昂贵。
 
-Choice: CLIP / SigLIP 2 for text+image; CLAP for text+audio; VLM-hidden-states for cross-modal at frontier quality.
+选择：CLIP / SigLIP 2 用于文本+图像；CLAP 用于文本+音频；VLM 隐藏状态用于前沿质量跨模态。
 
-### Fusion strategies
+### 融合策略
 
-You retrieved 10 results: 5 images, 3 text passages, 2 audio clips. How do you merge?
+你检索到 10 个结果：5 张图像、3 段文本、2 个音频片段。你如何合并？
 
-Score fusion (cheapest). Each modality has its own retriever, each returns scores. Normalize scores within-modality then sum. Simple, often works.
+分数融合（最便宜）。每种模态有自己的检索器，每个返回分数。然后在模态内归一化分数再求和。简单，通常有效。
 
-Attention-based fusion. Concatenate all retrieved items, let a small attention network weight them. Needs training.
+基于注意力的融合。连接所有检索到的项，让小型注意力网络对它们加权。需要训练。
 
-MoE fusion. Gating network routes to modality-specific experts. Different query types route differently — a visual question weights images higher.
+MoE 融合。门控网络路由到模态特定的专家。不同查询类型路由不同——视觉问题给图像更高权重。
 
-Production default: score fusion with a slight bias toward the query's dominant modality. Upgrade to MoE if A/B shows clear wins on your domain.
+生产默认：分数融合，稍微偏向查询的主导模态。如果 A/B 显示在你的领域明确胜出，升级到 MoE。
 
-### Generation grounding
+### 生成接地
 
-The LLM should cite which retrieved item drove each claim. For multi-modal:
+LLM 应该引用每个声明是由哪个检索项驱动的。对于多模态：
 
-- Text source: standard citation `[1]`.
-- Image source: `[img 3]` with a short caption.
-- Audio: `[audio 2 at 0:34]`.
+- 文本来源：标准引用 `[1]`。
+- 图像来源：带有简短标题的 `[img 3]`。
+- 音频：`[audio 2 at 0:34]`。
 
-Train the generator with grounding-aware data: each claim in the training target is tagged with the source index. At inference, the model naturally emits citations.
+用接地感知数据训练生成器：训练目标中的每个声明都标有源索引。在推理时，模型自然地发出引用。
 
-### The 2025 surveys
+### 2025 年调查
 
-Abootorabi et al. (arXiv:2502.08826, "Ask in Any Modality"): taxonomy for multimodal RAG. Covers retrieval, fusion, generation. Broadest coverage.
+Abootorabi 等（arXiv:2502.08826，"Ask in Any Modality"）：多模态 RAG 分类法。涵盖检索、融合、生成。覆盖最广。
 
-Mei et al. (arXiv:2504.08748, "A Survey of Multimodal RAG"): focuses on sub-task benchmarks and failure modes. Useful for evaluation design.
+Mei 等（arXiv:2504.08748，"A Survey of Multimodal RAG"）：专注于子任务基准和失败模式。对评估设计有用。
 
-Zhao et al. (arXiv:2503.18016): vision-focused survey. Strong on ColPali-family work.
+赵等（arXiv:2503.18016）：专注于视觉的调查。在 ColPali 系列工作中很强。
 
-Reading all three gives you the state of the art as of spring 2025. Most of the sub-problems are still open.
+阅读全部三份可以了解截至 2025 年春季的最新技术。大多数子问题仍然开放。
 
-### MuRAG — the foundational paper
+### MuRAG — 基础论文
 
-MuRAG (Chen et al., 2022) was the first multimodal RAG. Retrieved image + text from a multimodal KB, generated answers. Showed feasibility before the VLM wave. Modern systems (REACT, VisRAG, M3DocRAG) build on it.
+MuRAG（Chen 等，2022）是第一个多模态 RAG。从多模态知识库中检索图像 + 文本，生成答案。在 VLM 浪潮之前展示了可行性。现代系统（REACT、VisRAG、M3DocRAG）在此基础上构建。
 
-### A production trip-planner example
+### 生产旅行规划师示例
 
-Query: "find me a quiet vegan brunch with natural light."
+查询："给我找一家安静的自然光素食早午餐。"
 
-Pipeline:
+流水线：
 
-1. Decompose query. "quiet" → audio/review keyword; "vegan brunch" → menu item; "natural light" → image feature.
-2. Retrieve per modality:
-   - Text retrieval on reviews: "vegan brunch, quiet ambiance."
-   - Image retrieval on restaurant photos: "natural light, airy."
-   - Audio retrieval on ambient-sound clips: "low decibel, no music."
-3. Fuse scores. Each restaurant has a composite score.
-4. Top-k restaurants → VLM generator with all evidence → answer with citations.
+1. 分解查询。"安静" → 音频/评论关键词；"素食早午餐" → 菜单项；"自然光" → 图像特征。
+2. 每模态检索：
+   - 文本检索评论："素食早午餐，安静氛围。"
+   - 图像检索餐厅照片："自然光，通风。"
+   - 音频检索环境音片段："低分贝，无音乐。"
+3. 融合分数。每个餐厅有一个综合分数。
+4. Top-k 餐厅 → 带所有证据的 VLM 生成器 → 带引用的答案。
 
-This is well beyond text-RAG. Each modality adds signal that text alone misses.
+这远远超出了文本 RAG。每种模态都添加了文本单独会错过的信号。
 
-### Agentic multimodal RAG
+### 代理式多模态 RAG
 
-Multi-hop: if the first retrieval does not return high-confidence answers, the LLM reformulates and retrieves again. Agentic RAG patterns from Phase 14 apply here. Examples:
+多跳：如果第一次检索没有返回高置信度答案，LLM 重新表述并再次检索。阶段 14 的代理式 RAG 模式在这里适用。例如：
 
-- Retrieve initial top-10 → LLM asks "too noisy, filter for <40 dB" → re-retrieve.
-- Retrieve images → LLM sees one has a menu → retrieve the menu text → answer.
+- 检索初始 top-10 → LLM 问"太吵了，过滤 <40 dB" → 重新检索。
+- 检索图像 → LLM 看到其中一个有菜单 → 检索菜单文本 → 回答。
 
-Adds complexity but handles queries that single-shot retrieval cannot.
+增加了复杂性，但处理单次检索无法处理的查询。
 
-### Evaluation
+### 评估
 
-Cross-modal evaluation is still immature. Common proxies:
+跨模态评估仍然不成熟。常用代理：
 
-- Recall@k per modality.
-- Fused top-k accuracy.
-- Human-judged end-to-end satisfaction.
-- Task-specific (bookings completed, purchases made).
+- 每模态的 Recall@k。
+- 融合 top-k 准确率。
+- 人工评判的端到端满意度。
+- 任务特定（完成的预订、进行的购买）。
 
-No standard benchmark spans all modalities. Most papers evaluate on domain-specific tasks.
+没有标准基准涵盖所有模态。大多数论文在特定领域任务上评估。
 
-## Use It
+## 使用它
 
-`code/main.py`:
+`code/main.py`：
 
-- Three mock retrievers (text, image, audio) operating on a shared corpus of restaurants.
-- Score fusion that combines modality scores with configurable weights.
-- A generator stub that emits a final answer with citations.
-- A simple agentic loop that reformulates the query if confidence is low.
+- 三个模拟检索器（文本、图像、音频）在共享餐厅语料库上操作。
+- 分数融合，以可配置权重组合模态分数。
+- 一个生成器存根，发出带引用的最终答案。
+- 一个简单的代理循环，在置信度低时重新表述查询。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-multimodal-rag-designer.md`. Given a product spec with a multimodal query flow, designs retrievers, fusion, generator, and evaluation.
+本课产出 `outputs/skill-multimodal-rag-designer.md`。给定带有模态查询流的产品规格，设计检索器、融合、生成器和评估。
 
-## Exercises
+## 练习
 
-1. Propose a medical-triage multimodal RAG: query = photo of injury + text symptoms. What modalities retrieve from what KB?
+1. 提出一个医疗分诊多模态 RAG：查询 = 伤口照片 + 文本症状。从什么知识库检索哪些模态？
 
-2. Score fusion is a simple weighted sum. What failure mode does it have that MoE fusion avoids?
+2. 分数融合是简单的加权和。它有什么 MoE 融合避免的失败模式？
 
-3. Read Abootorabi et al.'s taxonomy (Section 3). What are the three canonical sub-problems and how do they map to your chosen product?
+3. 阅读 Abootorabi 等人的分类法（第 3 节）。三个经典子问题是什么，它们如何映射到你选择的产品？
 
-4. Design an eval spec for a trip-planner multimodal RAG. What metrics cover image recall, audio recall, and composite correctness?
+4. 为旅行规划师多模态 RAG 设计一个评估规范。哪些指标涵盖图像召回、音频召回和综合正确性？
 
-5. Agentic multi-hop RAG has a latency tax per round-trip. At what query difficulty does the accuracy gain justify the latency?
+5. 代理式多跳 RAG 每次往返都有延迟税。在什么查询复杂度下准确率提升足以证明延迟成本合理？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 人们怎么说 | 实际含义 |
 |------|-----------------|------------------------|
-| Cross-modal retrieval | "Query one modality, retrieve another" | Text query retrieves images; image query retrieves text; requires a shared space or translator |
-| Score fusion | "Combine scores" | Weighted sum of per-modality retrieval scores; simplest fusion |
-| MoE fusion | "Modality-routed experts" | Gating network picks which modality's scores to trust per query |
-| Grounded generation | "Cite your sources" | Each claim in the answer tagged with the source index |
-| MuRAG | "First multimodal RAG" | 2022 paper that established the multimodal RAG pattern |
-| Agentic multi-hop | "Reformulate and retry" | LLM re-queries retrievers when first-pass confidence is low |
+| 跨模态检索 | "查询一种模态，检索另一种" | 文本查询检索图像；图像查询检索文本；需要共享空间或翻译器 |
+| 分数融合 | "组合分数" | 每模态检索分数的加权和；最简单的融合 |
+| MoE 融合 | "模态路由专家" | 门控网络在每个查询中选择信任哪个模态的分数 |
+| 接地生成 | "引用你的来源" | 答案中的每个声明都标有源索引 |
+| MuRAG | "第一个多模态 RAG" | 2022 年论文，确立了多模态 RAG 模式 |
+| 代理式多跳 | "重新表述并重试" | 当第一遍置信度低时，LLM 重新查询检索器 |
 
-## Further Reading
+## 进一步阅读
 
-- [Abootorabi et al. — Ask in Any Modality (arXiv:2502.08826)](https://arxiv.org/abs/2502.08826)
-- [Mei et al. — A Survey of Multimodal RAG (arXiv:2504.08748)](https://arxiv.org/abs/2504.08748)
-- [Zhao et al. — Vision RAG Survey (arXiv:2503.18016)](https://arxiv.org/abs/2503.18016)
-- [Chen et al. — MuRAG (arXiv:2210.02928)](https://arxiv.org/abs/2210.02928)
-- [Liu et al. — REACT (arXiv:2301.10382)](https://arxiv.org/abs/2301.10382)
+- [Abootorabi 等 — Ask in Any Modality（arXiv:2502.08826）](https://arxiv.org/abs/2502.08826)
+- [Mei 等 — A Survey of Multimodal RAG（arXiv:2504.08748）](https://arxiv.org/abs/2504.08748)
+- [赵等 — Vision RAG Survey（arXiv:2503.18016）](https://arxiv.org/abs/2503.18016)
+- [Chen 等 — MuRAG（arXiv:2210.02928）](https://arxiv.org/abs/2210.02928)
+- [Liu 等 — REACT（arXiv:2301.10382）](https://arxiv.org/abs/2301.10382)

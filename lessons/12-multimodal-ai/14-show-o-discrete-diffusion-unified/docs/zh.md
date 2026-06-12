@@ -1,137 +1,137 @@
-# Show-o and Discrete-Diffusion Unified Models
+# Show-o 与离散扩散统一模型
 
-> Transfusion mixes continuous and discrete representations. Show-o (Xie et al., August 2024) goes the other way: text tokens use causal next-token prediction, image tokens use masked discrete diffusion in the spirit of MaskGIT. Both sit inside one transformer with a hybrid attention mask. The result unifies VQA, text-to-image, inpainting, and mixed-modality generation on one backbone, one tokenizer per modality, one loss formulation (next-token extended to masked prediction). This lesson walks the Show-o design — why masked discrete diffusion is a parallel, few-step image generator — and contrasts with Transfusion and Emu3.
+> Transfusion 混合了连续和离散表示。Show-o（Xie 等，2024年8月）则走另一条路：文本 Token 用因果下一个 Token 预测，图像 Token 用掩码离散扩散（遵循 MaskGIT 的精神）。两者都放在一个 transformer 里，配以混合注意力掩码。结果是在一个主干网络、每种模态一个分词器、一个损失公式（下一个 Token 扩展到掩码预测）上统一了 VQA、文本到图像、修复和混合模态生成。本文将走一遍 Show-o 设计——为什么掩码离散扩散是并行的、少步的图像生成器——并与 Transfusion 和 Emu3 对比。
 
-**Type:** Learn
-**Languages:** Python (stdlib, masked-discrete-diffusion sampler)
-**Prerequisites:** Phase 12 · 13 (Transfusion)
-**Time:** ~120 minutes
+**类型：** 学习型
+**语言：** Python（标准库，掩码离散扩散采样器）
+**前置条件：** 阶段 12 · 13（Transfusion）
+**时间：** 约 120 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain masked discrete diffusion: the schedule that masks tokens uniformly then asks the transformer to recover them.
-- Compare parallel image decoding (Show-o, MaskGIT) to autoregressive image decoding (Chameleon, Emu3) on speed and quality.
-- Name the three tasks Show-o handles in one checkpoint: T2I, VQA, image inpainting.
-- Pick a masking schedule (cosine, linear, truncated) and reason about its effect on sample quality.
+- 解释掩码离散扩散：以统一方式掩码 Token 然后要求 transformer 恢复它们的调度。
+- 对比并行图像解码（Show-o、MaskGIT）与自回归图像解码（Chameleon、Emu3）的速度和质量。
+- 说出 Show-o 在一个检查点中处理的三个任务：T2I、VQA、图像修复。
+- 选择一种掩码调度（余弦、线性、截断）并推理其对样本质量的影响。
 
-## The Problem
+## 问题
 
-Transfusion's two-loss training works but has trickier dynamics — the continuous diffusion loss lives on a different numerical scale from the discrete NTP loss. Balancing loss weights is a hyperparameter search. The architecture is effective but complex.
+Transfusion 的双损失训练有效，但动态更复杂——连续扩散损失与离散 NTP 损失处于不同的数值尺度上。平衡损失权重是一次超参数搜索。架构有效但复杂。
 
-Show-o's answer: keep both modalities discrete (like Chameleon), but generate images in parallel via masked discrete diffusion instead of sequentially. The training objective becomes a single masked-token-prediction that generalizes next-token-prediction naturally.
+Show-o 的回答：保持两种模态都离散（像 Chameleon），但通过掩码离散扩散并行生成图像，而非顺序生成。训练目标变成了单一的掩码 Token 预测，自然地泛化了下一个 Token 预测。
 
-## The Concept
+## 概念
 
-### Masked discrete diffusion (MaskGIT)
+### 掩码离散扩散（MaskGIT）
 
-The original Chang et al. (2022) MaskGIT trick is elegant. Start from a fully-masked image (every token is the special `<MASK>` id). At each step, predict all masked tokens in parallel, then keep the top-K most confident predictions and re-mask the rest. After ~8-16 iterations, all tokens are filled in. The schedule of how many tokens to unmask per step is tuned — cosine schedules work well.
+原始的 Chang 等（2022）MaskGIT 技巧很优雅。从一个全掩码图像开始（每个 Token 都是特殊的 `<MASK>` id）。在每一步，并行预测所有被掩码的 Token，然后保留 top-K 最自信的预测，其余重新掩码。经过约 8-16 次迭代，所有 Token 都填充完毕。每步掩码多少 Token 的调度是调优的——余弦调度效果很好。
 
-Training is simple: sample a masking ratio uniformly from [0, 1], apply it to the image's VQ tokens, train the transformer to recover the masked ones. Exactly what BERT did for text, scaled to image generation.
+训练很简单：从 [0, 1] 均匀采样一个掩码比例，应用到图像的 VQ Token 上，训练 transformer 恢复被掩码的部分。正是 BERT 对文本做的事，扩展到图像生成。
 
-### Show-o: one transformer, hybrid mask
+### Show-o：一个 transformer，混合掩码
 
-Show-o puts MaskGIT inside a causal-language-model transformer. The attention mask is:
+Show-o 将 MaskGIT 放入因果语言模型 transformer。注意力掩码：
 
-- Text tokens: causal (standard LLM).
-- Image tokens: full bidirectional within the image block (so the masked tokens can see every other image token during prediction).
-- Text-to-image: text attends to prior images, image attends to prior text.
+- 文本 Token：因果的（标准 LLM）。
+- 图像 Token：在图像块内完全双向（这样被掩码的 Token 在预测时可以看见每个其他图像 Token）。
+- 文本到图像：文本 attend 到前面的图像，图像 attend 到前面的文本。
 
-Training alternates between:
-1. Standard NTP on text sequences.
-2. T2I samples: text → image with masked image tokens, masked-token-prediction loss.
-3. VQA samples: image → text with masked text tokens (really just NTP).
+训练交替进行：
+1. 文本序列上的标准 NTP。
+2. T2I 样本：文本 → 图像，有掩码图像 Token，掩码 Token 预测损失。
+3. VQA 样本：图像 → 文本，有掩码文本 Token（其实就是 NTP）。
 
-The unified loss is cross-entropy on `<MASK>` tokens, which covers both text NTP (only the last token is "masked") and image masked-diffusion (random subset is masked).
+统一损失是对 `<MASK>` Token 的交叉熵，覆盖了文本 NTP（只有最后一个 Token 是"掩码的"）和图像掩码扩散（随机子集被掩码）。
 
-### Parallel sampling
+### 并行采样
 
-Show-o generates an image in ~16 steps instead of ~1000 (autoregressive per token) or ~20 (diffusion). At each step, predict all masked tokens in parallel; commit the top-K confident; repeat.
+Show-o 生成一张图像约需 16 步，而非约 1000 步（逐 Token 自回归）或约 20 步（扩散）。每一步，并行预测所有被掩码的 Token；提交 top-K 自信的；重复。
 
-Compare:
-- Chameleon / Emu3 (autoregressive over tokens): N_tokens forward passes, typically 1024-4096 per image.
-- Transfusion (continuous diffusion): ~20 steps, each a full transformer pass.
-- Show-o (masked discrete diffusion): ~16 steps, each a full transformer pass.
+对比：
+- Chameleon / Emu3（逐 Token 自回归）：N_tokens 次前向传播，通常每张图像 1024-4096 次。
+- Transfusion（连续扩散）：约 20 步，每步一次完整 transformer 传播。
+- Show-o（掩码离散扩散）：约 16 步，每步一次完整 transformer 传播。
 
-Show-o is faster than Chameleon at similar-scale models, roughly matches Transfusion step count with lower per-step cost (discrete vocab logits vs continuous MSE loss).
+Show-o 在类似规模模型上比 Chameleon 更快，与 Transfusion 步数大致相当，但每步成本更低（离散词表 logits vs 连续 MSE 损失）。
 
-### Tasks in one checkpoint
+### 一个检查点中的任务
 
-Show-o supports four tasks at inference, selected by prompt format:
+Show-o 在推理时支持四种任务，由提示格式选择：
 
-- Text generation: standard autoregressive text output.
-- VQA: image in, text out.
-- T2I: text in, image out via masked discrete diffusion.
-- Inpainting: image with some tokens masked, fill in.
+- 文本生成：标准自回归文本输出。
+- VQA：图像输入，文本输出。
+- T2I：文本输入，通过掩码离散扩散输出图像。
+- 修复：有些 Token 被掩码的图像，填入。
 
-The inpainting capability comes for free from the masked-prediction training. Mask a region of the VQ-token grid, feed the rest plus a text prompt, predict the masked tokens.
+修复能力来自掩码预测训练的免费附赠。在 VQ Token 网格中掩码一个区域，输入其余部分加文本提示符，预测被掩码的 Token。
 
-### Masking schedule
+### 掩码调度
 
-The schedule of how many tokens to unmask per step shapes quality. Show-o recommends cosine:
+每步掩码多少 Token 的调度影响质量。Show-o 推荐余弦：
 
 ```
 mask_ratio(t) = cos(pi * t / (2 * T))   # t = 0..T
 ```
 
-At step 0, all tokens masked (ratio 1.0). At step T, none masked. Cosine concentrates mass on mid-range ratios where prediction is most informative. Linear schedules also work but plateau faster.
+在第 0 步，所有 Token 被掩码（比例 1.0）。在第 T 步，没有掩码。余弦将质量集中在中段比例，此时预测信息量最大。线性调度也能工作但更快达到 plateau。
 
 ### Show-o2
 
-Show-o2 (2025 follow-up, arXiv 2506.15564) scales Show-o: larger LLM base, better tokenizer, improved mask schedule. Same architectural pattern.
+Show-o2（2025 年后续，arXiv 2506.15564）扩展 Show-o：更大的 LLM 基座、更好的分词器、改进了掩码调度。架构模式相同。
 
-### Where Show-o sits
+### Show-o 处于什么位置
 
-In the 2026 taxonomy:
+在 2026 年分类学中：
 
-- Discrete tokens + NTP: Chameleon, Emu3. Simple but slow inference.
-- Discrete tokens + masked diffusion: Show-o, MaskGIT, LlamaGen, Muse. Parallel sampling, still lossy by tokenizer.
-- Continuous + diffusion: Transfusion, MMDiT, DiT. Highest quality, more complex training.
-- Continuous + flow matching in a VLM: JanusFlow, InternVL-U. Newest.
+- 离散 Token + NTP：Chameleon、Emu3。简单但推理慢。
+- 离散 Token + 掩码扩散：Show-o、MaskGIT、LlamaGen、Muse。并行采样，但通过分词器仍有损失。
+- 连续 + 扩散：Transfusion、MMDiT、DiT。最高质量，训练更复杂。
+- VLM 中的连续 + 流匹配：JanusFlow、InternVL-U。最新。
 
-Pick by task: Show-o when you want T2I + inpainting + VQA in one open model with reasonable speed; Transfusion when quality is paramount and you can afford the two-loss plumbing.
+按任务选择：当你想在一个开放权重模型中获得 T2I + 修复 + VQA 且速度合理时选 Show-o；当质量至上且能承受双损失管道时选 Transfusion。
 
-## Use It
+## 使用它
 
-`code/main.py` simulates Show-o sampling:
+`code/main.py` 模拟 Show-o 采样：
 
-- A toy grid of 16 VQ tokens.
-- A mock "transformer" that predicts logits based on a prompt and the currently-unmasked tokens.
-- Parallel masked sampling over 8 steps with cosine schedule.
-- Prints the intermediate states (mask pattern evolution) and the final tokens.
+- 16 个 VQ Token 的玩具网格。
+- 一个模拟"transformer"，基于提示符和当前未掩码的 Token 预测 logits。
+- 8 步余弦调度的并行掩码采样。
+- 打印中间状态（掩码模式演变）和最终 Token。
 
-Run it, watch the mask dissolve step by step.
+运行它，观察掩码一步一步消融。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-unified-gen-model-picker.md`. Given a product that needs both understanding (VQA, captioning) and generation (T2I, inpainting) with an open-weights constraint, picks between Show-o family, Transfusion/MMDiT family, and Emu3 / Chameleon family with concrete trade-offs.
+本课产出 `outputs/skill-unified-gen-model-picker.md`。给定一个产品需要同时具备理解（VQA、图像描述）和生成（T2I、修复）能力，并有开放权重约束，在 Show-o 家族、Transfusion/MMDiT 家族和 Emu3/Chameleon 家族之间选择，并给出具体权衡。
 
-## Exercises
+## 练习
 
-1. Masked discrete diffusion samples in ~16 steps. Why not 1? What breaks if you unmask everything at step 0?
+1. 掩码离散扩散采样约 16 步。为什么不是 1 步？如果在第 0 步全不掩码，会发生什么？
 
-2. Inpainting is free with masked diffusion. Propose a product use case (real or hypothetical) where Show-o's inpainting beats a specialist model.
+2. 掩码扩散的修复是免费的。提出一个产品用例（真实的或假设的），其中 Show-o 的修复胜过专用模型。
 
-3. Cosine schedule vs linear schedule: trace the number of unmasked tokens per step for T=8. Which is more balanced?
+3. 余弦调度 vs 线性调度：追踪 T=8 时每步未掩码 Token 的数量。哪个更均衡？
 
-4. A 512x512 Show-o image is 1024 tokens. At vocab K=16384, the model emits 1024 * log2(16384) = 14,336 bits (~1.75 KiB) of data. Stable Diffusion outputs 512*512*24 bits = 6,291,456 bits (~768 KiB) of raw pixels. What is the compression ratio and what quality does it buy?
+4. 512×512 的 Show-o 图像是 1024 个 Token。在词表 K=16384 下，模型发出 1024 * log2(16384) = 14,336 比特（约 1.75 KiB）的数据。Stable Diffusion 输出 512*512*24 比特 = 6,291,456 比特（约 768 KiB）的原始像素。压缩比是多少，它买了什么质量？
 
-5. Read LlamaGen (arXiv:2406.06525). How is LlamaGen's class-conditional autoregressive image model different from Show-o's masked approach?
+5. 阅读 LlamaGen（arXiv:2406.06525）。LlamaGen 的类别条件自回归图像模型与 Show-o 的掩码方法有什么不同？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|-----------------|------------------------|
-| Masked discrete diffusion | "MaskGIT-style" | Training to predict masked tokens; at inference, iteratively unmask the most-confident predictions |
-| Cosine schedule | "Unmask schedule" | Decay of mask ratio over inference steps; concentrates confidence growth at mid-range |
-| Parallel decoding | "All tokens at once" | Every step predicts the full sequence of masked tokens in one forward pass, then commits top-K |
-| Hybrid attention | "Causal + bidirectional" | Mask that is causal over text tokens and bidirectional within image blocks |
-| Inpainting | "Fill-in generation" | Condition on an image with some tokens masked, predict the missing ones; free from the training objective |
-| Commitment rate | "Top-K per step" | How many tokens are declared "done" per iteration; controls inference vs quality trade-off |
+| 掩码离散扩散 | "MaskGIT 风格" | 训练预测被掩码的 Token；在推理时迭代式地为最自信的预测解除掩码 |
+| 余弦调度 | "解除掩码调度" | 掩码比例在推理步数上的衰减；将置信度增长集中在中段 |
+| 并行解码 | "一次预测所有 Token" | 每一步在一个前向传播中预测完整序列的被掩码 Token，然后提交 top-K |
+| 混合注意力 | "因果 + 双向" | 对文本 Token 因果、对图像块内双向的掩码 |
+| 修复 | "填入生成" | 以某些 Token 被掩码的图像为条件，预测缺失的 Token；这是训练目标的免费附赠 |
+| 提交率 | "每步 top-K" | 每轮迭代宣布多少 Token"完成"；控制推理与质量的权衡 |
 
-## Further Reading
+## 延伸阅读
 
-- [Xie et al. — Show-o (arXiv:2408.12528)](https://arxiv.org/abs/2408.12528)
+- [Xie 等 — Show-o (arXiv:2408.12528)](https://arxiv.org/abs/2408.12528)
 - [Show-o2 (arXiv:2506.15564)](https://arxiv.org/abs/2506.15564)
-- [Chang et al. — MaskGIT (arXiv:2202.04200)](https://arxiv.org/abs/2202.04200)
-- [Sun et al. — LlamaGen (arXiv:2406.06525)](https://arxiv.org/abs/2406.06525)
-- [Chang et al. — Muse (arXiv:2301.00704)](https://arxiv.org/abs/2301.00704)
+- [Chang 等 — MaskGIT (arXiv:2202.04200)](https://arxiv.org/abs/2202.04200)
+- [Sun 等 — LlamaGen (arXiv:2406.06525)](https://arxiv.org/abs/2406.06525)
+- [Chang 等 — Muse (arXiv:2301.00704)](https://arxiv.org/abs/2301.00704)

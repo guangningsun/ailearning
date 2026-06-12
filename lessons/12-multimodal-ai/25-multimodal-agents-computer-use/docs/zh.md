@@ -1,169 +1,169 @@
-# Multimodal Agents and Computer-Use (Capstone)
+# 多模态 Agent 与计算机使用（ capstone）
 
-> The 2026 frontier product is a multimodal agent that reads screenshots, clicks buttons, navigates web UIs, fills forms, and completes workflows end-to-end. SeeClick and CogAgent (2024) proved the GUI-grounding primitive. Ferret-UI added mobile. ChartAgent introduced visual tool-use for charts. VisualWebArena and AgentVista (2026) are the benchmarks the frontier chases — and even Gemini 3 Pro and Claude Opus 4.7 score ~30% on AgentVista's hard tasks. This capstone pulls together every thread of Phase 12: perception (high-res VLM), reasoning (LLM with tool use), grounding (coordinate output), long-horizon memory, and evaluation.
+> 2026 年的前沿产品是一个多模态 agent，它读取屏幕截图、点击按钮、导航 Web UI、填写表单并端到端完成工作流。SeeClick 和 CogAgent（2024）证明了 GUI 接地原语。Ferret-UI 增加了移动端。ChartAgent 引入了图表的视觉工具使用。VisualWebArena 和 AgentVista（2026）是前沿追逐的基准——即使 Gemini 3 Pro 和 Claude Opus 4.7 在 AgentVista 的困难任务上也只得到约 30%。这个 capstone 将阶段 12 的每条线索拉在一起：感知（高分辨率 VLM）、推理（带工具使用的 LLM）、接地（坐标输出）、长期记忆和评估。
 
-**Type:** Capstone
-**Languages:** Python (stdlib, action schema + agent loop skeleton)
-**Prerequisites:** Phase 12 · 05 (LLaVA), Phase 12 · 09 (Qwen-VL JSON), Phase 14 (Agent Engineering)
-**Time:** ~240 minutes
+**类型：** Capstone
+**语言：** Python（标准库，动作模式 + agent 循环骨架）
+**前置条件：** 阶段 12 · 05（LLaVA）、阶段 12 · 09（Qwen-VL JSON）、阶段 14（Agent 工程）
+**时间：** 约 240 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Design a multimodal agent loop: perceive → reason → act → observe → repeat.
-- Build a GUI grounding output schema (click coordinates, type text, scroll, drag) the VLM can emit as JSON.
-- Compare screenshot-only agents vs accessibility-tree agents vs hybrid agents.
-- Set up a multimodal agent benchmark evaluation on a small VisualWebArena slice.
+- 设计一个多模态 agent 循环：感知→推理→行动→观察→重复。
+- 构建一个 GUI 接地输出模式（点击坐标、输入文本、滚动、拖动），VLM 可以作为 JSON 发出。
+- 对比仅截图 agent 与无障碍树 agent 与混合 agent。
+- 在小型 VisualWebArena 切片上设置多模态 agent 基准评估。
 
-## The Problem
+## 问题
 
-A booking-site workflow: "find me a flight to Tokyo for April 15, aisle seat under $800, book it."
+预订网站工作流："给我找 4 月 15 日飞往东京的航班，靠过道座位，800 美元以下，并预订。"
 
-A multimodal agent needs to:
+多模态 agent 需要：
 
-1. Take a screenshot of the browser.
-2. Parse the screenshot + URL + goal into a plan.
-3. Emit a structured action: click (at x,y), type "Tokyo" (at element E), scroll down, select (radio button).
-4. Apply the action to the browser.
-5. Observe the new state (next screenshot).
-6. Repeat until the task is done.
+1. 获取浏览器截图。
+2. 将截图 + URL + 目标解析为计划。
+3. 发出一个结构化动作：点击（在 x,y）、输入"东京"（在元素 E）、向下滚动、选择（单选按钮）。
+4. 将动作应用于浏览器。
+5. 观察新状态（下一张截图）。
+6. 重复直到任务完成。
 
-Each step is a multimodal VLM call. The VLM output must be parseable JSON. Errors compound across steps, so recovery matters.
+每一步都是一个多模态 VLM 调用。VLM 输出必须是可解析的 JSON。错误在步骤间累积，所以恢复很重要。
 
-## The Concept
+## 概念
 
-### GUI grounding — the primitive
+### GUI 接地 — 原语
 
-GUI grounding is: given a screenshot and a natural language instruction, output the (x, y) coordinate to click (or other action).
+GUI 接地是：给定一张截图和一条自然语言指令，输出要点击的 (x, y) 坐标（或其他动作）。
 
-SeeClick (arXiv:2401.10935) was the first open result at scale: fine-tune a VLM on synthetic + real GUI data, output coordinates as plain text tokens. Works.
+SeeClick（arXiv:2401.10935）是第一个大规模开放结果：在合成 + 真实 GUI 数据上微调 VLM，将坐标作为纯文本标记输出。有效。
 
-CogAgent (arXiv:2312.08914) added 1120x1120 high-resolution encoding for dense UIs. Score: ~84% on web navigation.
+CogAgent（arXiv:2312.08914）为密集 UI 添加了 1120x1120 高分辨率编码。分数：Web 导航约 84%。
 
-Ferret-UI (arXiv:2404.05719) focuses on mobile UIs, integrates with iOS accessibility data.
+Ferret-UI（arXiv:2404.05719）专注于移动 UI，与 iOS 无障碍数据集成。
 
-Output format is usually JSON:
+输出格式通常是 JSON：
 
 ```json
-{"action": "click", "x": 384, "y": 220, "element_desc": "Search button"}
+{"action": "click", "x": 384, "y": 220, "element_desc": "搜索按钮"}
 ```
 
-The `element_desc` helps recovery: if coordinates drift between screenshots, the semantic hint lets the system re-ground.
+`element_desc` 帮助恢复：如果截图之间坐标漂移，语义提示让系统可以重新接地。
 
-### Action schemas
+### 动作模式
 
-A typical action schema has 6-10 action types:
+典型的动作模式有 6-10 种动作类型：
 
-- `click`: (x, y)
-- `type`: (text, x?, y?)
-- `scroll`: (direction, amount)
-- `drag`: (x0, y0, x1, y1)
-- `select`: (option_index)
-- `hover`: (x, y)
-- `navigate`: (url)
-- `wait`: (ms)
-- `done`: (success, explanation)
+- `click`：（x, y）
+- `type`：（text, x?, y?）
+- `scroll`：（direction, amount）
+- `drag`：（x0, y0, x1, y1）
+- `select`：（option_index）
+- `hover`：（x, y）
+- `navigate`：（url）
+- `wait`：（ms）
+- `done`：（success, explanation）
 
-The agent emits one action per step. The browser wrapper executes and returns the new state.
+Agent 每步发出一个动作。浏览器包装器执行并返回新状态。
 
-### Screenshot-only vs accessibility-tree
+### 仅截图 vs 无障碍树
 
-Two input modes:
+两种输入模式：
 
-- Screenshot-only: full image, no structural info. Most general; works on any app.
-- Accessibility tree: structured DOM / iOS accessibility info. Much more reliable for grounding; works where the tree is available.
-- Hybrid: both, with the tree as a reliable grounder for atomic actions and the screenshot for semantic context.
+- 仅截图：完整图像，无结构信息。最通用；在任何应用上都有效。
+- 无障碍树：结构化 DOM / iOS 无障碍信息。更可靠的接地；在有树的地方有效。
+- 混合：两者都有，树作为原子动作的可靠接地源，截图用于语义上下文。
 
-Production agents use hybrid when possible. Browser automation (Selenium + accessibility) always has the tree; desktop apps sometimes do.
+生产 agent 在可能时使用混合。浏览器自动化（Selenium + 无障碍）始终有树；桌面应用有时有。
 
-### Long-horizon memory
+### 长期记忆
 
-A 20-step workflow generates 20 screenshots. The VLM's context fills up fast. Three compression strategies:
+20 步工作流生成 20 张截图。VLM 的上下文很快填满。三种压缩策略：
 
-- Summary-chain: after every 5 steps, summarize what has happened, drop old screenshots.
-- Skip-frame: keep the first, last, and every 3rd screenshot.
-- Tool-recorded log: execute actions, keep a text log of what was done; don't re-look at old screenshots.
+- 摘要链：每 5 步后，总结发生了什么，丢弃旧截图。
+- 跳帧：保留第一张、最后一张和每第三张截图。
+- 工具记录日志：执行动作，保留已做事项的文本日志；不再回头看旧截图。
 
-Claude's computer-use API uses the log pattern. Simpler, more reliable.
+Claude 的计算机使用 API 使用日志模式。更简单，更可靠。
 
-### Visual tool use
+### 视觉工具使用
 
-ChartAgent (arXiv:2510.04514) introduces visual tool use for chart understanding: crop, zoom, OCR, call external detection. The agent can output "crop to region (100, 200, 300, 400) then call OCR" as a tool call. The tool returns text; the VLM continues reasoning.
+ChartAgent（arXiv:2510.04514）引入了图表理解的视觉工具使用：裁剪、缩放、OCR、调用外部检测。Agent 可以输出"裁剪到区域 (100, 200, 300, 400) 然后调用 OCR"作为工具调用。工具返回文本；VLM 继续推理。
 
-This pattern generalizes: set-of-mark prompting, region annotation, and external detection tools all fit the same "output a tool call, receive a structured response" schema.
+这个模式可以泛化：set-of-mark 提示、区域注释和外部检测工具都符合相同的"输出工具调用，接收结构化响应"模式。
 
-### The 2026 benchmarks
+### 2026 年基准
 
-- ScreenSpot-Pro. GUI grounding on ~1k web screenshots. Open SOTA Qwen2.5-VL-72B ~85%. Frontier ~90%.
-- VisualWebArena. End-to-end web tasks (shop, forum, classifieds). Open SOTA ~20%. Gemini 3 Pro ~27%.
-- AgentVista (arXiv:2602.23166). The hardest 2026 benchmark. Realistic workflows across 12 domains. Frontier models score 27-40%; open models 10-20%.
-- WebArena / WebShop. Older benchmarks; saturated by frontier.
+- ScreenSpot-Pro。在约 1000 张 Web 截图上的 GUI 接地。开放 SOTA Qwen2.5-VL-72B 约 85%。前沿约 90%。
+- VisualWebArena。端到端 Web 任务（购物、论坛、分类广告）。开放 SOTA 约 20%。Gemini 3 Pro 约 27%。
+- AgentVista（arXiv:2602.23166）。2026 年最难的基准。跨 12 个领域的真实工作流。前沿模型得分 27-40%；开放模型 10-20%。
+- WebArena / WebShop。更老的基准；已被前沿饱和。
 
-### Why it's still hard
+### 为什么仍然困难
 
-Agent performance bottlenecks:
+Agent 性能瓶颈：
 
-1. Visual grounding at fine scale. "Click the small X" fails often at mobile resolution.
-2. Long-horizon planning. After 10 actions, the agent drifts from the goal.
-3. Error recovery. When a click fails (wrong button), detecting + recovering is rarely trained data.
-4. Cross-page context. Jumping between tabs or long forms loses state.
+1. 细粒度视觉接地。"点击小 X" 在移动分辨率下经常失败。
+2. 长期规划。10 个动作后，agent 偏离目标。
+3. 错误恢复。当点击失败（按钮错误）时，检测 + 恢复很少在训练数据中。
+4. 跨页面上下文。在标签页之间跳转或填写长表单时会丢失状态。
 
-Research directions: memory architectures, explicit replanning, multimodal verification (screenshot match for action success).
+研究方向：记忆架构、显式重规划、多模态验证（截图匹配动作成功）。
 
-### The capstone build-it
+### 这个 capstone 构建它
 
-The capstone task: build a computer-use agent that:
+capstone 任务：构建一个计算机使用 agent：
 
-1. Reads the HTML + screenshot of a booking-site mock page.
-2. Plans a multi-step sequence: search → select → fill form → submit.
-3. Emits JSON actions matching the action schema.
-4. Evaluates on a fixed 10-task slice.
+1. 读取预订网站模拟页面的 HTML + 截图。
+2. 规划多步序列：搜索→选择→填写表单→提交。
+3. 发出匹配动作模式的 JSON 动作。
+4. 在固定的 10 任务切片上评估。
 
-The lesson provides scaffold code that is easy to extend into a real browser.
+课程提供脚手架代码，易于扩展为真实浏览器。
 
-## Use It
+## 使用它
 
-`code/main.py` is the capstone scaffold:
+`code/main.py` 是 capstone 脚手架：
 
-- Action schema JSON definition (10 actions).
-- Mock browser state as dict.
-- Agent loop skeleton: receive state, emit action, apply, loop.
-- 10-task mini-benchmark (synthetic pages) to measure end-to-end success rate.
-- Error-recovery hook for when an action fails.
+- 动作模式 JSON 定义（10 个动作）。
+- 作为字典的模拟浏览器状态。
+- Agent 循环骨架：接收状态、发出动作、应用、循环。
+- 10 任务小基准（合成页面）来衡量端到端成功率。
+- 动作失败时的错误恢复钩子。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-multimodal-agent-designer.md`. Given a computer-use product (domain, action set, evaluation target), designs the full agent loop, memory strategy, grounding mode, and expected benchmark score.
+本课产出 `outputs/skill-multimodal-agent-designer.md`。给定一个计算机使用产品（领域、动作集、评估目标），设计完整的 agent 循环、记忆策略、接地模式和相关基准分数。
 
-## Exercises
+## 练习
 
-1. Extend the action schema with a `screenshot_region` tool (crop + zoom). What tasks benefit?
+1. 用 `screenshot_region` 工具扩展动作模式（裁剪 + 缩放）。哪些任务受益？
 
-2. Read AgentVista (arXiv:2602.23166). Describe the hardest task category and why frontier models still fail.
+2. 阅读 AgentVista（arXiv:2602.23166）。描述最难的任务类别以及为什么前沿模型仍然失败。
 
-3. Long-horizon memory compression: design a summary-chain with ≤4 screenshots kept live, any number logged.
+3. 长期记忆压缩：设计一个摘要链，最多保留 4 张截图，任何数量记录在日志中。
 
-4. Build an error-recovery hook: on action failure (button not found), what does the agent do next?
+4. 构建错误恢复钩子：在动作失败时（按钮未找到），agent 接下来做什么？
 
-5. Compare screenshot-only Claude 4.7 to hybrid screenshot + accessibility-tree Qwen2.5-VL on 10 web tasks. Which wins on which tasks?
+5. 在 10 个 Web 任务上比较仅截图 Claude 4.7 与混合截图 + 无障碍树 Qwen2.5-VL。哪个在哪些任务上胜出？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 人们怎么说 | 实际含义 |
 |------|-----------------|------------------------|
-| GUI grounding | "Click coordinates" | Model outputs (x,y) for the target of an instruction on a screenshot |
-| Action schema | "Tool definitions" | JSON description of valid actions (click, type, scroll, drag) |
-| Accessibility tree | "Structured DOM" | Machine-readable UI hierarchy from browser/iOS APIs |
-| Hybrid agent | "Screenshot + tree" | Uses both image and structured info; more reliable than either alone |
-| Visual tool use | "Zoom/crop/detect" | Agent calls external vision tools (OCR, detection) mid-plan |
-| Summary-chain | "Memory compression" | Periodic text summaries replace long screenshot history |
-| VisualWebArena | "E2E web bench" | 2024 benchmark for end-to-end web tasks |
-| AgentVista | "2026 hard bench" | 12-domain realistic workflows; even Gemini 3 Pro scores ~30% |
+| GUI 接地 | "点击坐标" | 模型在截图上输出指令目标的 (x,y) |
+| 动作模式 | "工具定义" | 有效动作（点击、输入、滚动、拖动）的 JSON 描述 |
+| 无障碍树 | "结构化 DOM" | 来自浏览器/iOS API 的机器可读 UI 层级 |
+| 混合 agent | "截图 + 树" | 同时使用图像和结构化信息；比单独使用任一方式更可靠 |
+| 视觉工具使用 | "缩放/裁剪/检测" | Agent 在计划中间调用外部视觉工具（OCR、检测） |
+| 摘要链 | "记忆压缩" | 周期性文本摘要取代长截图历史 |
+| VisualWebArena | "E2E Web 基准" | 2024 年端到端 Web 任务的基准 |
+| AgentVista | "2026 年困难基准" | 12 领域真实工作流；即使 Gemini 3 Pro 得分约 30% |
 
-## Further Reading
+## 进一步阅读
 
-- [Cheng et al. — SeeClick (arXiv:2401.10935)](https://arxiv.org/abs/2401.10935)
-- [Hong et al. — CogAgent (arXiv:2312.08914)](https://arxiv.org/abs/2312.08914)
-- [You et al. — Ferret-UI (arXiv:2404.05719)](https://arxiv.org/abs/2404.05719)
-- [ChartAgent (arXiv:2510.04514)](https://arxiv.org/abs/2510.04514)
-- [Koh et al. — VisualWebArena (arXiv:2401.13649)](https://arxiv.org/abs/2401.13649)
-- [AgentVista (arXiv:2602.23166)](https://arxiv.org/abs/2602.23166)
+- [Cheng 等 — SeeClick（arXiv:2401.10935）](https://arxiv.org/abs/2401.10935)
+- [Hong 等 — CogAgent（arXiv:2312.08914）](https://arxiv.org/abs/2312.08914)
+- [You 等 — Ferret-UI（arXiv:2404.05719）](https://arxiv.org/abs/2404.05719)
+- [ChartAgent（arXiv:2510.04514）](https://arxiv.org/abs/2510.04514)
+- [Koh 等 — VisualWebArena（arXiv:2401.13649）](https://arxiv.org/abs/2401.13649)
+- [AgentVista（arXiv:2602.23166）](https://arxiv.org/abs/2602.23166)

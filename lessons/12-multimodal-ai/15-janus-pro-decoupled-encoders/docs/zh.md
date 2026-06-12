@@ -1,136 +1,136 @@
-# Janus-Pro: Decoupled Encoders for Unified Multimodal Models
+# Janus-Pro：统一多模态模型的解耦编码器
 
-> Unified multimodal models have an unavoidable tension. Understanding wants semantic features — SigLIP or DINOv2 output vectors rich with concept-level information. Generation wants reconstruction-friendly codes — VQ tokens that compose back into crisp pixels. The two goals are not compatible in a single encoder. Janus (DeepSeek, October 2024) and Janus-Pro (DeepSeek, January 2025) argue the fix is to stop trying: decouple the two encoders. Share the transformer body between tasks, but route understanding through SigLIP and generation through a VQ tokenizer. At 7B, Janus-Pro beats DALL-E 3 on GenEval while matching LLaVA on MMMU. This lesson reads why two encoders work where one fails.
+> 统一多模态模型有一个无法回避的张力。理解需要语义特征——SigLIP 或 DINOv2 输出的向量富含概念级信息。生成需要重建友好的编码——VQ Token 可以干净地组合回清晰的像素。这两个目标在单一编码器中是不兼容的。Janus（DeepSeek，2024年10月）和 Janus-Pro（DeepSeek，2025年1月）认为解决办法是停止尝试：解耦两个编码器。在任务间共享 transformer 主干，但理解路由到 SigLIP，生成路由到 VQ 分词器。在 7B 规模下，Janus-Pro 在 GenEval 上击败 DALL-E 3，同时在 MMMU 上匹配 LLaVA。本文将解读为什么两个编码器能在单一编码器失败的地方成功。
 
-**Type:** Build
-**Languages:** Python (stdlib, dual-encoder routing + shared-body signal)
-**Prerequisites:** Phase 12 · 13 (Transfusion), Phase 12 · 14 (Show-o)
-**Time:** ~120 minutes
+**类型：** 构建型
+**语言：** Python（标准库，双编码器路由 + 共享主体信号）
+**前置条件：** 阶段 12 · 13（Transfusion）、阶段 12 · 14（Show-o）
+**时间：** 约 120 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain why a single shared encoder compromises either understanding or generation quality.
-- Describe Janus-Pro's routing: SigLIP features on the input side for understanding, VQ tokens on both input and output for generation.
-- Trace the data-mix scaling that makes Janus-Pro succeed where Janus did not.
-- Compare decoupled (Janus-Pro), coupled-continuous (Transfusion), and coupled-discrete (Show-o) architectures.
+- 解释为什么单一共享编码器会在理解或生成质量上做出妥协。
+- 描述 Janus-Pro 的路由：SigLIP 特征用于输入侧的理解，VQ Token 用于输入和输出的生成。
+- 追踪数据混合的缩放——这使得 Janus-Pro 在 Janus 失败的地方成功。
+- 对比解耦（Janus-Pro）、耦合连续（Transfusion）和耦合离散（Show-o）架构。
 
-## The Problem
+## 问题
 
-Unified models share a transformer body across understanding and generation. Previous attempts (Chameleon, Show-o, Transfusion) all use one visual tokenizer for both directions. The tokenizer is a compromise:
+统一模型在理解和生成之间共享 transformer 主干。此前的尝试（Chameleon、Show-o、Transfusion）都对两个方向使用一个视觉分词器。这个分词器是一种妥协：
 
-- Optimized for reconstruction (generation): VQ-VAE captures fine-grained pixel detail but produces tokens with weak semantic coherence.
-- Optimized for semantics (understanding): SigLIP embeddings group "cat" images near "cat" tokens but do not permit good reconstruction.
+- 针对重建优化（生成）：VQ-VAE 捕获细粒度像素细节，但产生的 Token 语义连贯性弱。
+- 针对语义优化（理解）：SigLIP 嵌入将"猫"图像聚集在"猫"Token 附近，但不允许好的重建。
 
-Show-o and Transfusion pay for this with a visible quality tax on one direction. Janus-Pro asks: why require one tokenizer when the tasks have different needs?
+Show-o 和 Transfusion 为此付出了可见的质量税，一个方向上。Janus-Pro 问：当任务有不同的需求时，为什么非要一个分词器？
 
-## The Concept
+## 概念
 
-### Decoupled visual encoding
+### 解耦视觉编码
 
-Janus-Pro's architecture separates the two encoders:
+Janus-Pro 的架构分离了两个编码器：
 
-- Understanding path. Input image → SigLIP-SO400m → 2-layer MLP → transformer body.
-- Generation path. Input image (if conditioning on an existing image) → VQ tokenizer → token IDs → transformer body.
-- Output generation. Image tokens predicted by the transformer → VQ decoder → pixels.
+- 理解路径。输入图像 → SigLIP-SO400m → 2 层 MLP → transformer 主干。
+- 生成路径。输入图像（如果以现有图像为条件）→ VQ 分词器 → Token ID → transformer 主干。
+- 输出生成。Transformer 预测的图像 Token → VQ 解码器 → 像素。
 
-The transformer body is shared. Everything upstream and downstream of the body is task-specific.
+Transformer 主干是共享的。主干的上游和下游都是任务专属的。
 
-Inputs are disambiguated by prompt format: a `<understand>` tag routes through SigLIP; `<generate>` routes through VQ. Or the routing is implicit from task.
+输入通过提示格式来区分：`<understand>` 标签路由到 SigLIP；`<generate>` 路由到 VQ。或者路由来自任务隐式确定。
 
-### Why this works
+### 为什么这有效
 
-Understanding loss gets SigLIP features, which CLIP-style pretraining has tuned for semantic similarity. The model's perception benchmarks improve over Show-o / Transfusion because the input features are better for the task.
+理解损失获得 SigLIP 特征，这些是 CLIP 风格的预训练调优过的语义相似性。模型的感知基准测试比 Show-o / Transfusion 有所提升，因为输入特征对任务来说更好。
 
-Generation loss gets VQ tokens, which a tokenizer has tuned for reconstruction. Image quality improves over Show-o because VQ codes compose back to pixels cleanly.
+生成损失获得 VQ Token，这些是分词器调优过用于重建的。图像质量比 Show-o 有所提升，因为 VQ 编码可以干净地组合回像素。
 
-The shared transformer body sees two input distributions (SigLIP and VQ) and learns to work with both. The claim: enough data + enough parameters, the body absorbs the switching.
+共享的 transformer 主干看到两种输入分布（SigLIP 和 VQ），并学会与两者一起工作。论点是：足够的数据 + 足够的参数，主干吸收切换。
 
-### Data scaling — Janus vs Janus-Pro
+### 数据缩放——Janus vs Janus-Pro
 
-Janus (original, arXiv 2410.13848) introduced the decoupling but at small scale (1.3B params, limited data). Janus-Pro (arXiv 2501.17811) scaled:
+Janus（原始，arXiv 2410.13848）引入了解耦，但在小规模（1.3B 参数，有限数据）。Janus-Pro（arXiv 2501.17811）做了扩展：
 
-- 7B params (vs 1.3B).
-- 90M image-text pairs for stage 1 (alignment) up from 72M.
-- 72M for stage 2 (unified) up from 26M.
-- Added 200k image-gen instruction samples for stage 3.
+- 7B 参数（对比 1.3B）。
+- 第一阶段（对齐）90M 图像-文本对（对比 72M）。
+- 第二阶段（统一）72M（对比 26M）。
+- 第三阶段增加了 200k 图像生成指令样本。
 
-The upshot: Janus-Pro-7B matches LLaVA on MMMU (60.3 vs ~58) and beats DALL-E 3 on GenEval (0.80 vs 0.67). One open model, competitive on both sides of the unified spectrum.
+结果是：Janus-Pro-7B 在 MMMU 上匹配 LLaVA（60.3 vs ~58），在 GenEval 上击败 DALL-E 3（0.80 vs 0.67）。一个开放模型，在统一光谱的两端都有竞争力。
 
-### JanusFlow — the rectified flow variant
+### JanusFlow——矫正流变体
 
-JanusFlow (arXiv 2411.07975) swaps the VQ generation path for a rectified-flow generation path (continuous). The split becomes SigLIP-for-understanding + rectified-flow-for-generation. Quality ceilings lift further. The architecture remains decoupled-encoders-shared-body.
+JanusFlow（arXiv 2411.07975）将 VQ 生成路径替换为矫正流生成路径（连续的）。分割变成了 SigLIP-理解 + 矫正流-生成。质量天花板进一步提升。架构保持解耦编码器共享主干。
 
-### The shared body's job
+### 共享主干的职责
 
-The transformer body processes a unified sequence but with two input distributions. Its job is to:
+Transformer 主干处理统一序列，但有两种输入分布。它的职责是：
 
-- For understanding: consume SigLIP features + text tokens → emit text autoregressively.
-- For generation: consume text tokens + (optional image VQ tokens) → emit image VQ tokens autoregressively.
+- 对于理解：消费 SigLIP 特征 + 文本 Token → 自回归发出文本。
+- 对于生成：消费文本 Token +（可选图像 VQ Token）→ 自回归发出图像 VQ Token。
 
-The body has no modality-specific weights per block. It is the text-style transformer you'd expect to find inside Qwen or Llama, plus the two input adapters.
+主干在每个 block 没有模态专属权重。它是你期望在 Qwen 或 Llama 中找到的文本风格 transformer，加上两个输入适配器。
 
-Interestingly, this means Janus-Pro's body could be initialized from a pretrained LLM. Janus-Pro does initialize from DeepSeek-MoE-7B. That choice matters: the LLM contributes reasoning ability that pure-from-scratch unified models struggle to reach.
+有趣的是，这意味着 Janus-Pro 的主干可以从预训练 LLM 初始化。Janus-Pro 确实从 DeepSeek-MoE-7B 初始化。那个选择很重要：LLM 贡献了纯从零开始的统一模型难以达到的推理能力。
 
-### Compared to InternVL-U
+### 与 InternVL-U 对比
 
-InternVL-U (Lesson 12.10) is the 2026 follow-up. It combines:
+InternVL-U（第 12.10 课）是 2026 年的后续。它结合了：
 
-- Native multimodal pretraining (InternVL3 backbone).
-- Decoupled-encoder routing (SigLIP in, VQ + diffusion heads out).
-- Unified understanding + generation + editing.
+- 原生多模态预训练（InternVL3 主干）。
+- 解耦编码器路由（SigLIP 输入，VQ + 扩散头输出）。
+- 统一理解 + 生成 + 编辑。
 
-InternVL-U subsumes Janus-Pro's architectural choice into a larger framework. The decoupled-encoder idea is now the default for unified models at scale.
+InternVL-U 将 Janus-Pro 的架构选择吸收到一个更大的框架中。解耦编码器思想现在是大规模统一模型的默认选择。
 
-### Limitations
+### 局限性
 
-Decoupled encoders add architectural complexity. Two tokenizers to train, two input paths to maintain, two sets of fail modes. For products that do not need generation, Janus-Pro is over-engineered — pick a LLaVA-family understanding model.
+解耦编码器增加了架构复杂性。需要训练两个分词器、维护两条输入路径、两套失败模式。对于不需要生成的产品，Janus-Pro 是过度工程——选择 LLaVA 家族的理解模型。
 
-For products that do not need understanding, Janus-Pro is overqualified — pick a Stable Diffusion 3 / Flux model.
+对于不需要理解的产品，Janus-Pro 是大材小用——选择 Stable Diffusion 3 / Flux 模型。
 
-For products that need both, Janus-Pro is now the reference open architecture.
+对于两者都需要的产品，Janus-Pro 现在是参考开放架构。
 
-## Use It
+## 使用它
 
-`code/main.py` simulates Janus-Pro routing:
+`code/main.py` 模拟 Janus-Pro 路由：
 
-- Two mock encoders: SigLIP-like (produces 256-dim semantic vectors) and VQ-like (produces integer codes).
-- A prompt router that picks the encoder based on a task tag.
-- A shared body (stand-in) that processes token sequences regardless of which encoder produced them.
-- A switch from stage 1 (alignment) to stage 3 (instruction tune) weighted-sample schedule.
+- 两个模拟编码器：SigLIP 风格（产生 256 维语义向量）和 VQ 风格（产生整数编码）。
+- 一个提示符路由器，根据任务标签选择编码器。
+- 一个共享主体（替代品），处理 Token 序列，不管它们是由哪个编码器产生的。
+- 从第一阶段（对齐）到第三阶段（指令微调）加权采样调度的切换。
 
-Print the routed paths for 3 examples: image QA, T2I, image editing.
+为三个示例打印路由路径：图像 QA、T2I、图像编辑。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-decoupled-encoder-picker.md`. Given a product that wants unified generation + understanding at frontier-ish quality, it picks Janus-Pro, JanusFlow, or InternVL-U with a concrete data-scale recommendation.
+本课产出 `outputs/skill-decoupled-encoder-picker.md`。给定一个产品需要在前沿附近的质量上实现统一生成 + 理解，它选择 Janus-Pro、JanusFlow 或 InternVL-U，并给出具体的数据规模建议。
 
-## Exercises
+## 练习
 
-1. Janus-Pro-7B beats DALL-E 3 on GenEval. Explain why a 7B open model can match a frontier proprietary model on generation but not on understanding.
+1. Janus-Pro-7B 在 GenEval 上击败 DALL-E 3。解释为什么 7B 开放模型可以在生成上匹配前沿专有模型，但在理解上不行。
 
-2. Implement a router function: given prompt text, classify as `understand` or `generate`. How do you handle ambiguous prompts like "describe and then sketch"?
+2. 实现一个路由器函数：给定提示文本，分类为 `understand` 或 `generate`。如何处理"描述然后画出来"这样的歧义提示？
 
-3. JanusFlow replaces the VQ path with rectified flow. What does the transformer body now output, and what changes in the loss?
+3. JanusFlow 用矫正流替换 VQ 路径。现在 transformer 主干输出什么，损失有什么变化？
 
-4. Propose a fourth task the Janus-Pro architecture could handle with one more decoupled encoder. Examples: image segmentation (DINO-style), depth (MiDaS-style).
+4. 为 Janus-Pro 架构提议第四个任务，只需要再解耦一个编码器。例子：图像分割（DINO 风格）、深度（MiDaS 风格）。
 
-5. Read Janus-Pro Section 4.2 on data scaling. Which data stage contributes most to the T2I quality gain vs Janus?
+5. 阅读 Janus-Pro 第 4.2 节关于数据缩放。哪个数据阶段对 T2I 质量收益贡献最大（对比 Janus）？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|-----------------|------------------------|
-| Decoupled encoding | "Two visual encoders" | Separate tokenizer or encoder per direction: semantic for understanding, reconstruction for generation |
-| Shared body | "One transformer" | Single transformer processes either encoder's output; no modality-specific weights |
-| SigLIP for understanding | "Semantic features" | CLIP-family vision tower providing rich conceptual features but poor reconstruction |
-| VQ for generation | "Reconstruction codes" | Vector-quantized tokens that decode cleanly back to pixels |
-| JanusFlow | "Rectified-flow variant" | Janus-Pro with a continuous flow-matching generation head instead of VQ |
-| Routing tag | "Task tag" | Prompt marker (`<understand>` / `<generate>`) that picks the input encoder |
+| 解耦编码 | "两个视觉编码器" | 每个方向一个单独的分词器或编码器：语义用于理解，重建用于生成 |
+| 共享主体 | "一个 transformer" | 单一 transformer 处理任一编码器的输出；没有模态专属权重 |
+| SigLIP 用于理解 | "语义特征" | CLIP 家族的视觉塔，提供丰富的概念特征但重建能力差 |
+| VQ 用于生成 | "重建编码" | 矢量量化的 Token，可以干净地解码回像素 |
+| JanusFlow | "矫正流变体" | Janus-Pro，用连续流匹配生成头替代 VQ |
+| 路由标签 | "任务标签" | 选择输入编码器的提示标记（`<understand>` / `<generate>`） |
 
-## Further Reading
+## 延伸阅读
 
-- [Wu et al. — Janus (arXiv:2410.13848)](https://arxiv.org/abs/2410.13848)
-- [Chen et al. — Janus-Pro (arXiv:2501.17811)](https://arxiv.org/abs/2501.17811)
-- [Ma et al. — JanusFlow (arXiv:2411.07975)](https://arxiv.org/abs/2411.07975)
+- [Wu 等 — Janus (arXiv:2410.13848)](https://arxiv.org/abs/2410.13848)
+- [Chen 等 — Janus-Pro (arXiv:2501.17811)](https://arxiv.org/abs/2501.17811)
+- [Ma 等 — JanusFlow (arXiv:2411.07975)](https://arxiv.org/abs/2411.07975)
 - [InternVL-U (arXiv:2603.09877)](https://arxiv.org/abs/2603.09877)
-- [Dong et al. — DreamLLM (arXiv:2309.11499)](https://arxiv.org/abs/2309.11499)
+- [Dong 等 — DreamLLM (arXiv:2309.11499)](https://arxiv.org/abs/2309.11499)
