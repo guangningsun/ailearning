@@ -1,195 +1,195 @@
-# Regularization
+# 正则化
 
-> Your model gets 99% on training data and 60% on test data. It memorized instead of learning. Regularization is the tax you impose on complexity to force generalization.
+> 你的模型在训练数据上得到 99%，在测试数据上得到 60%。它记住了而不是学习了。正则化是你对复杂性施加的税，以强制泛化。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Lesson 03.06 (Optimizers)
-**Time:** ~75 minutes
+**类型：** 建构型
+**语言：** Python
+**前置条件：** 第 03.06 课（优化器）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Implement dropout with inverted scaling, L2 weight decay, batch normalization, layer normalization, and RMSNorm from scratch
-- Measure the train-test accuracy gap and diagnose overfitting using regularization experiments
-- Explain why transformers use LayerNorm instead of BatchNorm and why modern LLMs prefer RMSNorm
-- Apply the correct combination of regularization techniques based on the severity of overfitting
+- 从零实现带倒置缩放的 dropout、L2 权重衰减、批归一化、层归一化和 RMSNorm
+- 通过正则化实验测量训练-测试准确率差距并诊断过拟合
+- 解释为什么 Transformer 使用 LayerNorm 而不是 BatchNorm，以及为什么现代 LLM 更喜欢 RMSNorm
+- 根据过拟合的严重程度应用正确的正则化技术组合
 
-## The Problem
+## 问题
 
-A neural network with enough parameters can memorize any dataset. This is not a hypothetical -- Zhang et al. (2017) proved it by training standard networks on ImageNet with random labels. The networks reached near-zero training loss on completely random label assignments. They memorized a million random input-output pairs with no pattern to learn. Training loss was perfect. Test accuracy was zero.
+具有足够参数的神经网络可以记住任何数据集。这不是假设——Zhang 等人（2017）通过在带随机标签的 ImageNet 上训练标准网络证明了这一点。网络在完全随机的标签分配上达到了接近零的训练损失。他们记住了一百万个没有学习模式的随机输入-输出对。训练损失完美。测试准确率为零。
 
-This is the overfitting problem, and it gets worse as models get larger. GPT-3 has 175 billion parameters. The training set has about 500 billion tokens. With that many parameters, the model has enough capacity to memorize significant chunks of the training data verbatim. Without regularization, it would just regurgitate training examples instead of learning generalizable patterns.
+这就是过拟合问题，随着模型变大情况会变糟。GPT-3 有 1750 亿个参数。训练集有大约 5000 亿个 token。有了这么多参数，模型有足够的容量直接记住训练数据的很大一部分。如果没有正则化，它只会反刍训练样本而不是学习可泛化的模式。
 
-The gap between training performance and test performance is the overfitting gap. Every technique in this lesson attacks that gap from a different angle. Dropout forces the network to not rely on any single neuron. Weight decay prevents any single weight from growing too large. Batch normalization smooths the loss landscape so the optimizer finds flatter, more generalizable minima. Layer normalization does the same thing but works where batch normalization fails (small batches, variable-length sequences). RMSNorm does it 10% faster by dropping the mean calculation. Each technique is simple. Together, they're the difference between a model that memorizes and one that generalizes.
+训练表现和测试表现之间的差距就是过拟合差距。本课中的每种技术都从不同角度攻击这个差距。Dropout 强制网络不依赖任何单个神经元。权重衰减防止任何单个权重变得太大。批归一化平滑损失地貌，使优化器找到更平坦、更可泛化的最小值。层归一化做同样的事情，但在批归一化失效的地方工作（小批量、可变长度序列）。RMSNorm 通过丢弃均值计算快了 10%。每种技术都很简单。加在一起，就是记忆模型和泛化模型之间的区别。
 
-## The Concept
+## 概念
 
-### The Overfitting Spectrum
+### 过拟合光谱
 
-Every model sits somewhere on a spectrum from underfitting (too simple to capture the pattern) to overfitting (so complex it captures noise). The sweet spot is in between, and regularization pushes models toward it from the overfit side.
+每个模型都处于从欠拟合（太简单，无法捕捉模式）到过拟合（太复杂，捕捉了噪声）的光谱上的某个位置。最佳点在中间，正则化将模型从过拟合一侧推向它。
 
 ```mermaid
 graph LR
-    Under["Underfitting<br/>Train: 60%<br/>Test: 58%<br/>Model too simple"] --> Good["Good Fit<br/>Train: 95%<br/>Test: 92%<br/>Generalizes well"]
-    Good --> Over["Overfitting<br/>Train: 99.9%<br/>Test: 65%<br/>Memorized noise"]
+    Under["欠拟合<br/>训练：60%<br/>测试：58%<br/>模型太简单"] --> Good["良好拟合<br/>训练：95%<br/>测试：92%<br/>泛化良好"]
+    Good --> Over["过拟合<br/>训练：99.9%<br/>测试：65%<br/>记住了噪声"]
 
-    Dropout["Dropout"] -->|"Pushes left"| Over
-    WD["Weight Decay"] -->|"Pushes left"| Over
-    BN["BatchNorm"] -->|"Pushes left"| Over
-    Aug["Data Augmentation"] -->|"Pushes left"| Over
+    Dropout["Dropout"] -->|"推向左"| Over
+    WD["权重衰减"] -->|"推向左"| Over
+    BN["BatchNorm"] -->|"推向左"| Over
+    Aug["数据增强"] -->|"推向左"| Over
 ```
 
 ### Dropout
 
-The simplest regularization technique with the most elegant interpretation. During training, randomly set each neuron's output to zero with probability p.
+最简单但解释最优雅的正则化技术。在训练期间，随机将每个神经元的输出设置为零，概率为 p。
 
 ```
-output = activation(z) * mask    where mask[i] ~ Bernoulli(1 - p)
+output = activation(z) * mask    其中 mask[i] ~ Bernoulli(1 - p)
 ```
 
-With p = 0.5, half the neurons are zeroed on every forward pass. The network must learn redundant representations because it can't predict which neurons will be available. This prevents co-adaptation -- neurons learning to rely on specific other neurons being present.
+当 p = 0.5 时，一半的神经元在每次前向传播中被置零。网络必须学习冗余表示，因为它无法预测哪些神经元可用。这防止了共适应——神经元学习依赖特定其他神经元存在。
 
-The ensemble interpretation: a network with N neurons and dropout creates 2^N possible subnetworks (every combination of which neurons are on or off). Training with dropout approximately trains all 2^N subnetworks simultaneously, each on different mini-batches. At test time, you use all neurons (no dropout) and scale outputs by (1 - p) to match the expected value during training. This is equivalent to averaging the predictions of 2^N subnetworks -- a massive ensemble from a single model.
+集成解释：具有 N 个神经元和 dropout 的网络创建了 2^N 个可能的子网络（每个神经元的开/关组合）。用 dropout 训练大约同时训练所有 2^N 个子网络，每个子网络在不同的小批量上。在测试时，你使用所有神经元（没有 dropout）并将输出按 (1 - p) 缩放以匹配训练期间的期望值。这等价于平均 2^N 个子网络的预测——一个来自单个模型的大型集成。
 
-In practice, the scaling is applied during training instead of testing (inverted dropout):
+在实践中，缩放在训练期间应用而不是测试期间（倒置 dropout）：
 
 ```
-During training:  output = activation(z) * mask / (1 - p)
-During testing:   output = activation(z)   (no change needed)
+训练期间：  output = activation(z) * mask / (1 - p)
+测试期间：   output = activation(z)   （无需更改）
 ```
 
-This is cleaner because test code doesn't need to know about dropout at all.
+这更干净，因为测试代码不需要知道 dropout 的任何信息。
 
-Default rates: p = 0.1 for transformers, p = 0.5 for MLPs, p = 0.2-0.3 for CNNs. Higher dropout = stronger regularization = more underfitting risk.
+默认比率：Transformer 为 p = 0.1，MLP 为 p = 0.5，CNN 为 p = 0.2-0.3。更高的 dropout = 更强的正则化 = 更大的欠拟合风险。
 
-### Weight Decay (L2 Regularization)
+### 权重衰减 (L2 正则化)
 
-Add the squared magnitude of all weights to the loss:
+将所有权重的平方幅值加入损失：
 
 ```
 total_loss = task_loss + (lambda / 2) * sum(w_i^2)
 ```
 
-The gradient of the regularization term is lambda * w. This means at every step, each weight is shrunk toward zero by a fraction proportional to its magnitude. Large weights get penalized more. The model is pushed toward solutions where no single weight dominates.
+正则化项的梯度是 lambda * w。这意味着在每一步，每个权重按其幅值的比例向零收缩。大权重受到更多惩罚。模型被推向没有单个权重占主导地位的解。
 
-Why this helps generalization: overfit models tend to have large weights that amplify noise in the training data. Weight decay keeps weights small, which limits the model's effective capacity and forces it to rely on robust, generalizable features rather than memorized quirks.
+这为什么帮助泛化：过拟合模型往往有大权重，放大训练数据中的噪声。权重衰减保持权重小，这限制了模型的有效容量，迫使它依赖鲁棒、可泛化的特征而不是记忆的古怪模式。
 
-The lambda hyperparameter controls the strength. Typical values:
+Lambda 超参数控制强度。典型值：
 
-- 0.01 for AdamW on transformers
-- 1e-4 for SGD on CNNs
-- 0.1 for heavily overfit models
+- Transformer 上 AdamW：0.01
+- CNN 上 SGD：1e-4
+- 严重过拟合模型：0.1
 
-As discussed in lesson 06: weight decay and L2 regularization are equivalent in SGD but not in Adam. Always use AdamW (decoupled weight decay) when training with Adam.
+如第 06 课所讨论的：权重衰减和 L2 正则化在 SGD 中等价但在 Adam 中不等价。使用 Adam（解耦权重衰减）训练时始终使用 AdamW。
 
-### Batch Normalization
+### 批归一化
 
-Normalize the output of each layer across the mini-batch before passing it to the next layer.
+在传递给下一层之前，沿小批量对每层的输出进行归一化。
 
-For a mini-batch of activations at some layer:
-
-```
-mu = (1/B) * sum(x_i)           (batch mean)
-sigma^2 = (1/B) * sum((x_i - mu)^2)   (batch variance)
-x_hat = (x_i - mu) / sqrt(sigma^2 + eps)   (normalize)
-y = gamma * x_hat + beta        (scale and shift)
-```
-
-Gamma and beta are learnable parameters that let the network undo the normalization if that's optimal. Without them, you'd be forcing every layer's output to be zero-mean unit-variance, which might not be what the network wants.
-
-**Training vs inference split:** During training, mu and sigma come from the current mini-batch. During inference, you use running averages accumulated during training (exponential moving average with momentum = 0.1, meaning 90% old + 10% new).
-
-Why BatchNorm works is still debated. The original paper claimed it reduces "internal covariate shift" (the distribution of layer inputs changing as earlier layers update). Santurkar et al. (2018) showed this explanation is wrong. The actual reason: BatchNorm makes the loss landscape smoother. The gradients are more predictive, the Lipschitz constants are smaller, and the optimizer can take larger steps safely. This is why BatchNorm lets you use higher learning rates and converge faster.
-
-BatchNorm has a fundamental limitation: it depends on batch statistics. With batch size 1, the mean and variance are meaningless. With small batches (< 32), the statistics are noisy and hurt performance. This matters for tasks like object detection (where memory limits batch size) and language modeling (where sequence lengths vary).
-
-### Layer Normalization
-
-Normalize across features instead of across the batch. For a single sample:
+对于某层激活的小批量：
 
 ```
-mu = (1/D) * sum(x_j)           (feature mean)
-sigma^2 = (1/D) * sum((x_j - mu)^2)   (feature variance)
+mu = (1/B) * sum(x_i)           （批量均值）
+sigma^2 = (1/B) * sum((x_i - mu)^2)   （批量方差）
+x_hat = (x_i - mu) / sqrt(sigma^2 + eps)   （归一化）
+y = gamma * x_hat + beta        （缩放和移位）
+```
+
+Gamma 和 beta 是可学习参数，让网络在最优时撤销归一化。没有它们，你会强制每层输出为零均值单位方差，这可能不是网络想要的。
+
+**训练与推理的区分：** 训练期间，mu 和 sigma 来自当前小批量。推理期间，使用训练期间积累的运行平均值（指数移动平均，momentum = 0.1，意味着 90% 旧值 + 10% 新值）。
+
+BatchNorm 为何有效仍有争议。原始论文声称它减少了"内部协变量偏移"（层输入分布随早期层更新而变化）。Santurkar 等人（2018）证明这个解释是错误的。真正的原因：BatchNorm 使损失地貌更平滑。梯度更可预测，Lipschitz 常数更小，优化器可以更安全地采取更大的步长。这就是 BatchNorm 允许你使用更高学习率并更快收敛的原因。
+
+BatchNorm 有一个根本限制：它依赖批量统计量。批量大小为 1 时，均值和方差没有意义。批量较小（< 32）时，统计数据有噪声并损害性能。这对目标检测（内存限制批量大小）和语言建模（序列长度可变）等任务很重要。
+
+### 层归一化
+
+沿特征而不是沿批量进行归一化。对于单个样本：
+
+```
+mu = (1/D) * sum(x_j)           （特征均值）
+sigma^2 = (1/D) * sum((x_j - mu)^2)   （特征方差）
 x_hat = (x_j - mu) / sqrt(sigma^2 + eps)
 y = gamma * x_hat + beta
 ```
 
-D is the feature dimension. Each sample is normalized independently -- no dependence on batch size. This is why transformers use LayerNorm instead of BatchNorm. Sequences have variable lengths, batch sizes are often small (or 1 during generation), and the computation is identical between training and inference.
+D 是特征维度。每个样本独立归一化——不依赖批量大小。这就是 Transformer 使用 LayerNorm 而不是 BatchNorm 的原因。序列有可变长度，批量大小通常很小（或生成时为 1），训练和推理的计算相同。
 
-LayerNorm in transformers is applied after each self-attention block and each feed-forward block (Post-LN), or before them (Pre-LN, which is more stable for training).
+Transformer 中的 LayerNorm 应用于每个自注意力块和每个前馈块之后（Post-LN），或之前（Pre-LN，后者更稳定）。
 
 ### RMSNorm
 
-LayerNorm without the mean subtraction. Proposed by Zhang & Sennrich (2019).
+没有均值减法的 LayerNorm。由 Zhang & Sennrich（2019）提出。
 
 ```
 rms = sqrt((1/D) * sum(x_j^2))
 y = gamma * x / rms
 ```
 
-That's it. No mean computation, no beta parameter. The observation: the re-centering (mean subtraction) in LayerNorm contributes very little to the model's performance, but costs computation. Removing it gives the same accuracy with about 10% less overhead.
+就这样。没有均值计算，没有 beta 参数。观察：LayerNorm 中的重中心化（均值减法）对模型性能的贡献很小，但消耗计算量。去掉它以约 10% 更少的开销获得相同的准确率。
 
-LLaMA, LLaMA 2, LLaMA 3, Mistral, and most modern LLMs use RMSNorm instead of LayerNorm. At the scale of billions of parameters and trillions of tokens, that 10% savings is significant.
+LLaMA、LLaMA 2、LLaMA 3、Mistral 和大多数现代 LLM 使用 RMSNorm 而不是 LayerNorm。在数十亿参数和数万亿 token 的规模上，10% 的节省是显著的。
 
-### Normalization Comparison
+### 归一化对比
 
 ```mermaid
 graph TD
-    subgraph "Batch Normalization"
-        BN_D["Normalize across BATCH<br/>for each feature"]
-        BN_S["Batch: [x1, x2, x3, x4]<br/>Feature 1: normalize [x1f1, x2f1, x3f1, x4f1]"]
-        BN_P["Needs batch > 32<br/>Different train vs eval<br/>Used in CNNs"]
+    subgraph "批归一化"
+        BN_D["沿批量归一化<br/>对每个特征"]
+        BN_S["批量：[x1, x2, x3, x4]<br/>特征 1：归一化 [x1f1, x2f1, x3f1, x4f1]"]
+        BN_P["需要批量 > 32<br/>训练和推理不同<br/>用于 CNN"]
     end
-    subgraph "Layer Normalization"
-        LN_D["Normalize across FEATURES<br/>for each sample"]
-        LN_S["Sample x1: normalize [f1, f2, f3, f4]"]
-        LN_P["Batch-independent<br/>Same train vs eval<br/>Used in Transformers"]
+    subgraph "层归一化"
+        LN_D["沿特征归一化<br/>对每个样本"]
+        LN_S["样本 x1：归一化 [f1, f2, f3, f4]"]
+        LN_P["不依赖批量<br/>训练和推理相同<br/>用于 Transformer"]
     end
-    subgraph "RMS Normalization"
-        RN_D["Like LayerNorm<br/>but skip mean subtraction"]
-        RN_S["Just divide by RMS<br/>No centering"]
-        RN_P["10% faster than LayerNorm<br/>Same accuracy<br/>Used in LLaMA, Mistral"]
+    subgraph "RMS 归一化"
+        RN_D["像 LayerNorm<br/>但跳过均值减法"]
+        RN_S["只除以 RMS<br/>不中心化"]
+        RN_P["比 LayerNorm 快 10%<br/>相同准确率<br/>用于 LLaMA、Mistral"]
     end
 ```
 
-### Data Augmentation as Regularization
+### 数据增强作为正则化
 
-Not a model modification but a data modification. Transform training inputs while preserving labels:
+不是模型修改而是数据修改。在保留标签的同时转换训练输入：
 
-- Images: random crop, flip, rotation, color jitter, cutout
-- Text: synonym replacement, back-translation, random deletion
-- Audio: time stretch, pitch shift, noise addition
+- 图像：随机裁剪、翻转、旋转、颜色抖动、cutout
+- 文本：同义词替换、回译、随机删除
+- 音频：时间拉伸、音高移动、噪声添加
 
-The effect is identical to regularization: it increases the effective size of the training set, making it harder for the model to memorize specific examples. A model that only sees each image once in its original form can memorize it. A model that sees 50 augmented versions of each image is forced to learn the invariant structure.
+效果与正则化相同：它增加了训练集的有效大小，使模型更难记住特定样本。一个只看到每张图像原始形式的模型可以记住它。一个看到每张图像 50 个增强版本的模型被迫学习不变结构。
 
-### Early Stopping
+### 早停
 
-The simplest regularizer: stop training when validation loss starts increasing. The model hasn't overfit yet at that point. In practice, you track validation loss every epoch, save the best model, and continue training for a "patience" window (typically 5-20 epochs). If validation loss doesn't improve within the patience window, you stop and load the best saved model.
+最简单的正则化器：当验证损失开始增加时停止训练。在那一点模型还没有过拟合。实际上，你每个 epoch 跟踪验证损失，保存最佳模型，并继续训练一个"耐心"窗口（通常 5-20 个 epoch）。如果验证损失在耐心窗口内没有改善，你就停止并加载最佳保存模型。
 
-### When to Apply What
+### 何时应用什么
 
 ```mermaid
 flowchart TD
-    Gap{"Train-test<br/>accuracy gap?"} -->|"> 10%"| Heavy["Heavy regularization"]
-    Gap -->|"5-10%"| Medium["Moderate regularization"]
-    Gap -->|"< 5%"| Light["Light regularization"]
+    Gap{"训练-测试<br/>准确率差距？"} -->|"> 10%"| Heavy["强正则化"]
+    Gap -->|"5-10%"| Medium["中等正则化"]
+    Gap -->|"< 5%"| Light["轻正则化"]
 
     Heavy --> D5["Dropout p=0.3-0.5"]
-    Heavy --> WD2["Weight decay 0.01-0.1"]
-    Heavy --> Aug["Aggressive data augmentation"]
-    Heavy --> ES["Early stopping"]
+    Heavy --> WD2["权重衰减 0.01-0.1"]
+    Heavy --> Aug["激进数据增强"]
+    Heavy --> ES["早停"]
 
     Medium --> D3["Dropout p=0.1-0.2"]
-    Medium --> WD1["Weight decay 0.001-0.01"]
-    Medium --> Norm["BatchNorm or LayerNorm"]
+    Medium --> WD1["权重衰减 0.001-0.01"]
+    Medium --> Norm["BatchNorm 或 LayerNorm"]
 
     Light --> D1["Dropout p=0.05-0.1"]
-    Light --> WD0["Weight decay 1e-4"]
+    Light --> WD0["权重衰减 1e-4"]
 ```
 
-## Build It
+## 动手实现
 
-### Step 1: Dropout (Train and Eval Mode)
+### 第 1 步：Dropout（训练和评估模式）
 
 ```python
 import random
@@ -226,7 +226,7 @@ class Dropout:
         return grads
 ```
 
-### Step 2: L2 Weight Decay
+### 第 2 步：L2 权重衰减
 
 ```python
 def l2_regularization(weights, lambda_reg):
@@ -239,7 +239,7 @@ def l2_gradient(weights, lambda_reg):
     return [lambda_reg * w for w in weights]
 ```
 
-### Step 3: Batch Normalization
+### 第 3 步：批归一化
 
 ```python
 class BatchNorm:
@@ -289,7 +289,7 @@ class BatchNorm:
         return output
 ```
 
-### Step 4: Layer Normalization
+### 第 4 步：层归一化
 
 ```python
 class LayerNorm:
@@ -312,7 +312,7 @@ class LayerNorm:
         return output
 ```
 
-### Step 5: RMSNorm
+### 第 5 步：RMSNorm
 
 ```python
 class RMSNorm:
@@ -329,7 +329,7 @@ class RMSNorm:
         return output
 ```
 
-### Step 6: Training With and Without Regularization
+### 第 6 步：带正则化和不带正则化的训练
 
 ```python
 def sigmoid(x):

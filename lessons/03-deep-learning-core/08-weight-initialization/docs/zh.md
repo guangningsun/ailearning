@@ -1,171 +1,171 @@
-# Weight Initialization and Training Stability
+# 权重初始化与训练稳定性
 
-> Initialize wrong and training never starts. Initialize right and 50 layers train as smoothly as 3.
+> 初始化错误，训练永远不会开始。初始化正确，50 层网络和 3 层一样流畅。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Lesson 03.04 (Activation Functions), Lesson 03.07 (Regularization)
-**Time:** ~90 minutes
+**类型：** 学习型
+**语言：** Python
+**前置条件：** 第 03.04 课（激活函数）、第 03.07 课（正则化）
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Implement zero, random, Xavier/Glorot, and Kaiming/He initialization strategies and measure their effect on activation magnitudes through 50 layers
-- Derive why Xavier init uses Var(w) = 2/(fan_in + fan_out) and Kaiming uses Var(w) = 2/fan_in
-- Demonstrate the symmetry problem with zero initialization and explain why random scale alone is insufficient
-- Match the correct initialization strategy to the activation function: Xavier for sigmoid/tanh, Kaiming for ReLU/GELU
+- 从零实现零初始化、随机初始化、Xavier/Glorot 和 Kaiming/He 初始化策略，并通过 50 层网络测量激活值幅度的变化
+- 推导 Xavier 初始化为何使用 Var(w) = 2/(fan_in + fan_out)，Kaiming 为何使用 Var(w) = 2/fan_in
+- 演示零初始化的对称问题，并解释为何仅靠随机缩放是不够的
+- 根据激活函数匹配正确的初始化策略：sigmoid/tanh 用 Xavier，ReLU/GELU 用 Kaiming
 
-## The Problem
+## 问题
 
-Initialize all weights to zero. Nothing learns. Every neuron computes the same function, receives the same gradient, and updates identically. After 10,000 epochs, your 512-neuron hidden layer is still 512 copies of the same neuron. You paid for 512 parameters and got 1.
+把所有权重初始化为零。什么都学不到。每个神经元计算相同的函数、接收相同的梯度、以相同方式更新。训练 10,000 个 epoch 后，你的 512 神经元隐藏层仍然是 512 个相同神经元的副本。你花了 512 个参数的钱，只得到了 1 个参数的效果。
 
-Initialize them too large. Activations explode through the network. By layer 10, values hit 1e15. By layer 20, they overflow to infinity. Gradients follow the same trajectory in reverse.
+把权重初始化得太大。激活值在网络中爆炸。到第 10 层，数值达到 1e15。到第 20 层，溢出到无穷大。梯度沿同一条路径反向传播。
 
-Initialize them randomly from a standard normal distribution. Works for 3 layers. At 50 layers, the signal collapses to zero or detonates to infinity depending on whether the random scale was slightly too small or slightly too large. The boundary between "works" and "broken" is razor-thin.
+从标准正态分布中随机初始化。3 层网络可以工作。50 层时，信号会收缩到零或炸到无穷大，取决于随机缩放是略微偏小还是略微偏大。"能用"和"坏了"之间的边界极薄。
 
-Weight initialization is the most underrated decision in deep learning. Architecture gets papers. Optimizers get blog posts. Initialization gets a footnote. But get it wrong and nothing else matters -- your network is dead before training begins.
+权重初始化是深度学习中最容易被低估的决策。架构能发论文。优化器能上博客。初始化只能获得一个脚注。但一旦搞错，其他一切都不重要——你的网络在训练开始前就已经死了。
 
-## The Concept
+## 概念
 
-### The Symmetry Problem
+### 对称问题
 
-Every neuron in a layer has the same structure: multiply inputs by weights, add bias, apply activation. If all weights start at the same value (zero is the extreme case), every neuron computes the same output. During backpropagation, every neuron receives the same gradient. During the update step, every neuron changes by the same amount.
+一层中的每个神经元都有相同的结构：输入乘以权重，加偏置，应用激活。如果所有权重都从相同的值开始（零是最极端的情况），每个神经元计算相同的输出。在反向传播期间，每个神经元接收相同的梯度。在更新步骤中，每个神经元以相同的量变化。
 
-You're stuck. The network has hundreds of parameters, but they all move in lockstep. This is called symmetry, and random initialization is the brute-force way to break it. Each neuron starts at a different point in weight space, so each learns a different feature.
+你被困住了。网络有数百个参数，但它们全部步调一致。这叫做对称，而随机初始化是暴力打破它的方法。每个神经元从权重空间中的不同点开始，所以每个学习不同的特征。
 
-But "random" is not enough. The *scale* of the randomness determines whether the network trains.
+但"随机"是不够的。随机性的*尺度*决定了网络能否训练。
 
-### Variance Propagation Through Layers
+### 方差在层间的传播
 
-Consider a single layer with fan_in inputs:
+考虑一层有 fan_in 个输入：
 
 ```
 z = w1*x1 + w2*x2 + ... + w_n*x_n
 ```
 
-If each weight wi is drawn from a distribution with variance Var(w) and each input xi has variance Var(x), the output variance is:
+如果每个权重 wi 来自方差为 Var(w) 的分布，每个输入 xi 的方差为 Var(x)，输出方差为：
 
 ```
 Var(z) = fan_in * Var(w) * Var(x)
 ```
 
-If Var(w) = 1 and fan_in = 512, the output variance is 512x the input variance. After 10 layers: 512^10 = 1.2e27. Your signal has exploded.
+如果 Var(w) = 1 且 fan_in = 512，输出方差是输入方差的 512 倍。10 层后：512^10 = 1.2e27。你的信号爆炸了。
 
-If Var(w) = 0.001, the output variance shrinks by 0.001 * 512 = 0.512 per layer. After 10 layers: 0.512^10 = 0.00013. Your signal has vanished.
+如果 Var(w) = 0.001，输出方差每层缩小 0.001 * 512 = 0.512。10 层后：0.512^10 = 0.00013。你的信号消失了。
 
-The goal: choose Var(w) so that Var(z) = Var(x). Signal magnitude stays constant across layers.
+目标：选择 Var(w) 使得 Var(z) = Var(x)。信号幅度在各层之间保持恒定。
 
-### Xavier/Glorot Initialization
+### Xavier/Glorot 初始化
 
-Glorot and Bengio (2010) derived the solution for sigmoid and tanh activations. To keep variance constant in both the forward and backward pass:
+Glorot 和 Bengio（2010）为 sigmoid 和 tanh 激活函数推导出了解。为了在正向和反向传播中都保持方差恒定：
 
 ```
 Var(w) = 2 / (fan_in + fan_out)
 ```
 
-In practice, weights are drawn from:
+实践中，权重从以下分布中抽取：
 
 ```
-w ~ Uniform(-limit, limit)  where limit = sqrt(6 / (fan_in + fan_out))
+w ~ Uniform(-limit, limit)  其中 limit = sqrt(6 / (fan_in + fan_out))
 ```
 
-or:
+或者：
 
 ```
 w ~ Normal(0, sqrt(2 / (fan_in + fan_out)))
 ```
 
-This works because sigmoid and tanh are roughly linear near zero, where properly initialized activations live. The variance stays stable through dozens of layers.
+这之所以有效，是因为 sigmoid 和 tanh 在零点附近大致线性，而正确初始化的激活值就落在这个区域。方差在数十层中保持稳定。
 
-### Kaiming/He Initialization
+### Kaiming/He 初始化
 
-ReLU kills half the outputs (everything negative becomes zero). The effective fan_in is halved because on average half the inputs are zeroed. Xavier init doesn't account for this -- it underestimates the variance needed.
+ReLU 把一半的输出杀死（所有负值变成零）。有效的 fan_in 减半，因为平均一半的输入被清零。Xavier 初始化没有考虑到这一点——它低估了所需的方差。
 
-He et al. (2015) adjusted the formula:
+He 等人（2015）调整了公式：
 
 ```
 Var(w) = 2 / fan_in
 ```
 
-Weights are drawn from:
+权重从以下分布中抽取：
 
 ```
 w ~ Normal(0, sqrt(2 / fan_in))
 ```
 
-The factor of 2 compensates for ReLU zeroing half the activations. Without it, the signal shrinks by ~0.5x per layer. With 50 layers: 0.5^50 = 8.8e-16. Kaiming init prevents this.
+因子 2 补偿了 ReLU 清零一半激活值的影响。没有它，信号每层缩小约 0.5 倍。50 层后：0.5^50 = 8.8e-16。Kaiming 初始化防止了这个问题。
 
-### Transformer Initialization
+### Transformer 初始化
 
-GPT-2 introduced a different pattern. Residual connections add the output of each sub-layer to its input:
+GPT-2 引入了一种不同的模式。残差连接将每个子层的输出加到其输入上：
 
 ```
 x = x + sublayer(x)
 ```
 
-Each addition increases variance. With N residual layers, variance grows proportionally to N. GPT-2 scales the weights of residual layers by 1/sqrt(2N), where N is the number of layers. This keeps the accumulated signal magnitude stable.
+每次加法都会增加方差。有 N 个残差层时，方差与 N 成比例增长。GPT-2 将残差层的权重缩放为 1/sqrt(2N)，其中 N 是层数。这保持了累积信号幅度的稳定。
 
-Llama 3 (405B parameters, 126 layers) uses a similar scheme. Without this scaling, the residual stream would grow unbounded through 126 layers of attention and feedforward blocks.
+Llama 3（405B 参数，126 层）使用类似的方案。没有这种缩放，残差流在 126 层注意力和前馈块中会无限增长。
 
 ```mermaid
 flowchart TD
-    subgraph "Zero Init"
-        Z1["Layer 1<br/>All weights = 0"] --> Z2["Layer 2<br/>All neurons identical"]
-        Z2 --> Z3["Layer 3<br/>Still identical"]
-        Z3 --> ZR["Result: 1 effective neuron<br/>regardless of width"]
+    subgraph "零初始化"
+        Z1["层 1<br/>所有权重 = 0"] --> Z2["层 2<br/>所有神经元相同"]
+        Z2 --> Z3["层 3<br/>仍然相同"]
+        Z3 --> ZR["结果：1 个有效神经元<br/>无论宽度多大"]
     end
 
-    subgraph "Xavier Init"
-        X1["Layer 1<br/>Var = 2/(fan_in+fan_out)"] --> X2["Layer 2<br/>Signal stable"]
-        X2 --> X3["Layer 50<br/>Signal stable"]
-        X3 --> XR["Result: Trains with<br/>sigmoid/tanh"]
+    subgraph "Xavier 初始化"
+        X1["层 1<br/>Var = 2/(fan_in+fan_out)"] --> X2["层 2<br/>信号稳定"]
+        X2 --> X3["层 50<br/>信号稳定"]
+        X3 --> XR["结果：用 sigmoid/tanh<br/>可以训练"]
     end
 
-    subgraph "Kaiming Init"
-        K1["Layer 1<br/>Var = 2/fan_in"] --> K2["Layer 2<br/>Signal stable"]
-        K2 --> K3["Layer 50<br/>Signal stable"]
-        K3 --> KR["Result: Trains with<br/>ReLU/GELU"]
+    subgraph "Kaiming 初始化"
+        K1["层 1<br/>Var = 2/fan_in"] --> K2["层 2<br/>信号稳定"]
+        K2 --> K3["层 50<br/>信号稳定"]
+        K3 --> KR["结果：用 ReLU/GELU<br/>可以训练"]
     end
 ```
 
-### Activation Magnitude Through 50 Layers
+### 50 层激活值幅度
 
 ```mermaid
 graph LR
-    subgraph "Mean Activation Magnitude"
+    subgraph "平均激活值幅度"
         direction LR
-        L1["Layer 1"] --> L10["Layer 10"] --> L25["Layer 25"] --> L50["Layer 50"]
+        L1["层 1"] --> L10["层 10"] --> L25["层 25"] --> L50["层 50"]
     end
 
-    subgraph "Results"
-        R1["Random N(0,1): EXPLODES by layer 5"]
-        R2["Random N(0,0.01): Vanishes by layer 10"]
-        R3["Xavier + Sigmoid: ~1.0 at layer 50"]
-        R4["Kaiming + ReLU: ~1.0 at layer 50"]
+    subgraph "结果"
+        R1["随机 N(0,1)：第 5 层爆炸"]
+        R2["随机 N(0,0.01)：第 10 层消失"]
+        R3["Xavier + Sigmoid：第 50 层约 1.0"]
+        R4["Kaiming + ReLU：第 50 层约 1.0"]
     end
 ```
 
-### Choosing the Right Init
+### 选择正确的初始化
 
 ```mermaid
 flowchart TD
-    Start["What activation?"] --> Act{"Activation type?"}
+    Start["用什么激活函数？"] --> Act{"激活函数类型？"}
 
     Act -->|"Sigmoid / Tanh"| Xavier["Xavier/Glorot<br/>Var = 2/(fan_in + fan_out)"]
     Act -->|"ReLU / Leaky ReLU"| Kaiming["Kaiming/He<br/>Var = 2/fan_in"]
-    Act -->|"GELU / Swish"| Kaiming2["Kaiming/He<br/>(same as ReLU)"]
-    Act -->|"Transformer residual"| GPT["Scale by 1/sqrt(2N)<br/>N = num layers"]
+    Act -->|"GELU / Swish"| Kaiming2["Kaiming/He<br/>(与 ReLU 相同)"]
+    Act -->|"Transformer 残差"| GPT["按 1/sqrt(2N) 缩放<br/>N = 层数"]
 
-    Xavier --> Check["Verify: activation magnitudes<br/>stay between 0.5 and 2.0<br/>through all layers"]
+    Xavier --> Check["验证：激活值幅度<br/>在各层保持在 0.5 到 2.0 之间"]
     Kaiming --> Check
     Kaiming2 --> Check
     GPT --> Check
 ```
 
-## Build It
+## 动手实现
 
-### Step 1: Initialization Strategies
+### 第 1 步：初始化策略
 
-Four ways to initialize a weight matrix. Each returns a list of lists (a 2D matrix) with fan_in columns and fan_out rows.
+四种初始化权重矩阵的方法。每个返回一个列表的列表（2D 矩阵），有 fan_in 列和 fan_out 行。
 
 ```python
 import math
@@ -190,9 +190,9 @@ def kaiming_init(fan_in, fan_out):
     return [[random.gauss(0, std) for _ in range(fan_in)] for _ in range(fan_out)]
 ```
 
-### Step 2: Activation Functions
+### 第 2 步：激活函数
 
-We need sigmoid, tanh, and ReLU to test each init strategy with its intended activation.
+我们需要 sigmoid、tanh 和 ReLU 来用各自对应的激活函数测试每种初始化策略。
 
 ```python
 def sigmoid(x):
@@ -208,9 +208,9 @@ def relu(x):
     return max(0.0, x)
 ```
 
-### Step 3: Forward Pass Through 50 Layers
+### 第 3 步：穿越 50 层的前向传播
 
-Pass random data through a deep network and measure mean activation magnitude at each layer.
+将随机数据通过一个深度网络，测量每层的平均激活值幅度。
 
 ```python
 def forward_deep(init_fn, activation_fn, n_layers=50, width=64, n_samples=100):
@@ -241,22 +241,22 @@ def forward_deep(init_fn, activation_fn, n_layers=50, width=64, n_samples=100):
     return layer_magnitudes
 ```
 
-### Step 4: The Experiment
+### 第 4 步：实验
 
-Run all combinations: zero init, random N(0,1), random N(0,0.01), Xavier with sigmoid, Xavier with tanh, Kaiming with ReLU. Print the magnitude at key layers.
+运行所有组合：零初始化、随机 N(0,1)、随机 N(0,0.01)、Xavier 加 sigmoid、Xavier 加 tanh、Kaiming 加 ReLU。打印关键层的幅度。
 
 ```python
 def run_experiment():
     configs = [
-        ("Zero init + Sigmoid", lambda fi, fo: zero_init(fi, fo), sigmoid),
-        ("Random N(0,1) + ReLU", lambda fi, fo: random_init(fi, fo, 1.0), relu),
-        ("Random N(0,0.01) + ReLU", lambda fi, fo: random_init(fi, fo, 0.01), relu),
+        ("零初始化 + Sigmoid", lambda fi, fo: zero_init(fi, fo), sigmoid),
+        ("随机 N(0,1) + ReLU", lambda fi, fo: random_init(fi, fo, 1.0), relu),
+        ("随机 N(0,0.01) + ReLU", lambda fi, fo: random_init(fi, fo, 0.01), relu),
         ("Xavier + Sigmoid", xavier_init, sigmoid),
         ("Xavier + Tanh", xavier_init, tanh_act),
         ("Kaiming + ReLU", kaiming_init, relu),
     ]
 
-    print(f"{'Strategy':<30} {'L1':>10} {'L5':>10} {'L10':>10} {'L25':>10} {'L50':>10}")
+    print(f"{'策略':<30} {'L1':>10} {'L5':>10} {'L10':>10} {'L25':>10} {'L50':>10}")
     print("-" * 80)
 
     for name, init_fn, act_fn in configs:
@@ -265,17 +265,17 @@ def run_experiment():
         for idx in [0, 4, 9, 24, 49]:
             val = mags[idx]
             if val > 1e6:
-                row += f" {'EXPLODED':>10}"
+                row += f" {'爆炸':>10}"
             elif val < 1e-6:
-                row += f" {'VANISHED':>10}"
+                row += f" {'消失':>10}"
             else:
                 row += f" {val:>10.4f}"
         print(row)
 ```
 
-### Step 5: Symmetry Demonstration
+### 第 5 步：对称性演示
 
-Show that zero init produces identical neurons.
+展示零初始化产生相同的神经元。
 
 ```python
 def symmetry_demo():
@@ -289,17 +289,17 @@ def symmetry_demo():
         z = sum(weights[neuron_idx][j] * inputs[j] for j in range(2)) + biases[neuron_idx]
         outputs.append(sigmoid(z))
 
-    print("\nSymmetry Demo (4 neurons, zero init):")
+    print("\n对称性演示（4 个神经元，零初始化）：")
     for i, out in enumerate(outputs):
-        print(f"  Neuron {i}: output = {out:.6f}")
+        print(f"  神经元 {i}：输出 = {out:.6f}")
     all_same = all(abs(outputs[i] - outputs[0]) < 1e-10 for i in range(len(outputs)))
-    print(f"  All identical: {all_same}")
-    print(f"  Effective parameters: 1 (not {len(weights) * len(weights[0])})")
+    print(f"  所有相同：{all_same}")
+    print(f"  有效参数：1（不是 {len(weights) * len(weights[0])})")
 ```
 
-### Step 6: Layer-by-Layer Magnitude Report
+### 第 6 步：逐层幅度报告
 
-Print a visual bar chart of activation magnitudes through 50 layers.
+打印 50 层激活值幅度的可视化条形图。
 
 ```python
 def magnitude_report(name, magnitudes):
@@ -307,18 +307,18 @@ def magnitude_report(name, magnitudes):
     for i, mag in enumerate(magnitudes):
         if i % 5 == 0 or i == len(magnitudes) - 1:
             if mag > 1e6:
-                bar = "X" * 50 + " EXPLODED"
+                bar = "X" * 50 + " 爆炸"
             elif mag < 1e-6:
-                bar = "." + " VANISHED"
+                bar = "." + " 消失"
             else:
                 bar_len = min(50, max(1, int(mag * 10)))
                 bar = "#" * bar_len
-            print(f"  Layer {i+1:3d}: {bar} ({mag:.6f})")
+            print(f"  层 {i+1:3d}：{bar} ({mag:.6f})")
 ```
 
-## Use It
+## 实际使用
 
-PyTorch provides these as built-in functions:
+PyTorch 将这些作为内置函数提供：
 
 ```python
 import torch
@@ -335,45 +335,45 @@ nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')
 nn.init.zeros_(layer.bias)
 ```
 
-When you call `nn.Linear(512, 256)`, PyTorch defaults to Kaiming uniform initialization. That's why most simple networks "just work" -- PyTorch already made the right choice. But when you build custom architectures or go deeper than 20 layers, you need to understand what's happening and potentially override the default.
+当你调用 `nn.Linear(512, 256)` 时，PyTorch 默认为 Kaiming均匀初始化。这就是为什么大多数简单网络"开箱即用"——PyTorch 已经做出了正确的选择。但当你构建自定义架构或深度超过 20 层时，你需要理解正在发生的事情，并可能需要覆盖默认值。
 
-For transformers, HuggingFace models typically handle initialization in their `_init_weights` method. GPT-2's implementation scales residual projections by 1/sqrt(N). If you're building a transformer from scratch, you need to add this yourself.
+对于 transformer，HuggingFace 模型通常在其 `_init_weights` 方法中处理初始化。GPT-2 的实现将残差投影缩放为 1/sqrt(N)。如果你从头构建一个 transformer，你需要自己添加这个。
 
-## Ship It
+## 交付物
 
-This lesson produces:
-- `outputs/prompt-init-strategy.md` -- a prompt that diagnoses weight initialization problems and recommends the right strategy
+本课产出：
+- `outputs/prompt-init-strategy.md` —— 一个提示词，用于诊断权重初始化问题并推荐正确的策略
 
-## Exercises
+## 练习
 
-1. Add LeCun initialization (Var = 1/fan_in, designed for SELU activation). Run the 50-layer experiment with LeCun init + tanh and compare to Xavier + tanh.
+1. 添加 LeCun 初始化（Var = 1/fan_in，专为 SELU 激活设计）。用 LeCun init + tanh 运行 50 层实验，与 Xavier + tanh 比较。
 
-2. Implement the GPT-2 residual scaling: multiply the output of each layer by 1/sqrt(2*N) before adding to the residual stream. Run 50 layers with and without scaling, measure how fast the residual magnitude grows.
+2. 实现 GPT-2 残差缩放：在添加到残差流之前将每层的输出乘以 1/sqrt(2*N)。用有缩放和无缩放运行 50 层，测量残差幅度增长有多快。
 
-3. Create an "init health check" function that takes a network's layer dimensions and activation type, then recommends the correct initialization and warns if the current init will cause problems.
+3.创建一个"初始化健康检查"函数，接收网络的层维度和激活函数类型，然后推荐正确的初始化，并在当前初始化会导致问题时发出警告。
 
-4. Run the experiment with fan_in = 16 vs fan_in = 1024. Xavier and Kaiming adapt to fan_in, but random init doesn't. Show how the gap between "works" and "breaks" widens with larger layers.
+4. 用 fan_in = 16 vs fan_in = 1024 运行实验。Xavier 和 Kaiming 适应 fan_in，但随机初始化不行。展示"能用"和"坏了"之间的差距如何随着层变大而扩大。
 
-5. Implement orthogonal initialization (generate a random matrix, compute its SVD, use the orthogonal matrix U). Compare to Kaiming for ReLU networks at 50 layers.
+5. 实现正交初始化（生成随机矩阵，计算其 SVD，使用正交矩阵 U）。在 50 层 ReLU 网络上与 Kaiming 比较。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|----------------------|
-| Weight initialization | "Set starting weights randomly" | The strategy for choosing initial weight values that determines whether a network can train at all |
-| Symmetry breaking | "Make neurons different" | Using random initialization to ensure neurons learn distinct features instead of computing identical functions |
-| Fan-in | "Number of inputs to a neuron" | The number of incoming connections, which determines how input variance accumulates in the weighted sum |
-| Fan-out | "Number of outputs from a neuron" | The number of outgoing connections, relevant for maintaining gradient variance during backpropagation |
-| Xavier/Glorot init | "The sigmoid initialization" | Var(w) = 2/(fan_in + fan_out), designed to preserve variance through sigmoid and tanh activations |
-| Kaiming/He init | "The ReLU initialization" | Var(w) = 2/fan_in, accounts for ReLU zeroing half the activations |
-| Variance propagation | "How signals grow or shrink through layers" | The mathematical analysis of how activation variance changes layer by layer based on weight scale |
-| Residual scaling | "GPT-2's init trick" | Scaling residual connection weights by 1/sqrt(2N) to prevent variance growth through N transformer layers |
-| Dead network | "Nothing trains" | A network where poor initialization causes all gradients to be zero or all activations to saturate |
-| Exploding activations | "Values go to infinity" | When weight variance is too high, causing activation magnitudes to grow exponentially through layers |
+| 权重初始化 | "随机设置起始权重" | 选择初始权重值的策略，决定了网络能否训练 |
+| 对称打破 | "让神经元不同" | 使用随机初始化确保神经元学习不同的特征，而不是计算相同的函数 |
+| Fan-in | "神经元的输入数量" | 输入连接的数量，决定了输入方差如何在加权和中被积累 |
+| Fan-out | "神经元的输出数量" | 输出连接的数量，与反向传播期间保持梯度方差相关 |
+| Xavier/Glorot 初始化 | "sigmoid 初始化" | Var(w) = 2/(fan_in + fan_out)，旨在保持 sigmoid 和 tanh 激活的方差 |
+| Kaiming/He 初始化 | "ReLU 初始化" | Var(w) = 2/fan_in，考虑了 ReLU 清零一半激活值 |
+| 方差传播 | "信号如何在层间增长或缩小" | 基于权重尺度对激活方差如何逐层变化的数学分析 |
+| 残差缩放 | "GPT-2 的初始化技巧" | 按1/sqrt(2N) 缩放残差连接权重，以防止 N 个 transformer 层的方差增长 |
+| 死网络 | "什么都训练不了" | 初始化不良导致所有梯度为零或所有激活值饱和的网络 |
+| 激活值爆炸 | "数值趋于无穷大" | 当权重方差过高时，导致激活值幅度在层间指数增长 |
 
-## Further Reading
+## 延伸阅读
 
-- Glorot & Bengio, "Understanding the difficulty of training deep feedforward neural networks" (2010) -- the original Xavier initialization paper with variance analysis
-- He et al., "Delving Deep into Rectifiers" (2015) -- introduced Kaiming initialization for ReLU networks
-- Radford et al., "Language Models are Unsupervised Multitask Learners" (2019) -- GPT-2 paper with residual scaling initialization
-- Mishkin & Matas, "All You Need is a Good Init" (2016) -- layer-sequential unit-variance initialization, an empirical alternative to analytical formulas
+- Glorot & Bengio，"理解训练深度前馈神经网络的困难"（2010）——原始 Xavier 初始化论文，包含方差分析
+- He 等，"深入理解整流器"（2015）——为 ReLU 网络引入 Kaiming 初始化
+- Radford 等，"语言模型是无监督多任务学习者"（2019）——GPT-2 论文，包含残差缩放初始化
+- Mishkin & Matas，"你只需要一个好的初始化"（2016）——逐层单元方差初始化，一种经验性的分析公式替代方法
