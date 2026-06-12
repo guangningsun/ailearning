@@ -1,63 +1,63 @@
-# Audio Fundamentals — Waveforms, Sampling, Fourier Transform
+# 音频基础 — 波形、采样与傅里叶变换
 
-> Waveforms are the raw signal. Spectrograms are the representation. Mel features are the ML-friendly form. Every modern ASR and TTS pipeline walks this ladder, and the first rung is understanding sampling and Fourier.
+> 波形是原始信号。频谱图是表征形式。Mel 特征是 ML 友好形态。现代 ASR 和 TTS 流水线都沿着这把梯子往上走，而第一级就是理解采样与傅里叶。
 
-**Type:** Learn
-**Languages:** Python
-**Prerequisites:** Phase 1 · 06 (Vectors & Matrices), Phase 1 · 14 (Probability Distributions)
-**Time:** ~45 minutes
+**类型：** 学习型
+**语言：** Python
+**前置条件：** 阶段 1 · 06（向量与矩阵）、阶段 1 · 14（概率分布）
+**时间：** 约 45 分钟
 
-## The Problem
+## 问题
 
-A microphone produces a pressure-vs-time signal. Your neural net consumes tensors. Between them sits a stack of conventions that, when violated, produce silent bugs: the model trains fine but the WER doubles, or TTS ships a hiss, or a voice cloning system memorizes the microphone instead of the speaker.
+麦克风产生的是压力-时间信号。神经网络消耗的是张量。两者之间是一系列约定，违反它们就会产生静默 bug：模型训练正常但 WER 翻倍，TTS 发出嘶嘶声，语音克隆系统记住的是麦克风而非说话人。
 
-Every bug in speech systems traces back to one of three questions:
+语音系统的所有 bug 都能追溯到三个问题之一：
 
-1. What sample rate was the data recorded at, and what does the model expect?
-2. Is the signal aliased?
-3. Are you operating on raw samples or on a frequency representation?
+1. 数据的采样率是多少，模型期望的又是多少？
+2. 信号是否发生了混叠？
+3. 你是在原始采样上操作还是在频率表示上操作？
 
-Get these right and the rest of Phase 6 is tractable. Get them wrong and even Whisper-Large-v4 produces garbage.
+把这三个问题搞对了，阶段 6 的其余内容就 tractable。搞错了，就连 Whisper-Large-v4 也会输出垃圾。
 
-## The Concept
+## 概念
 
-![Waveform, sampling, DFT, and frequency bins visualized](../assets/audio-fundamentals.svg)
+![波形、采样、DFT 与频率 bins 可视化](../assets/audio-fundamentals.svg)
 
-**Waveform.** A one-dimensional array of floats in `[-1.0, 1.0]`. Indexed by sample number. To convert to seconds, divide by the sample rate: `t = n / sr`. A 10-second clip at 16 kHz is an array of 160,000 floats.
+**波形。** 一个一维浮点数数组，范围 `[-1.0, 1.0]`。以采样编号为索引。转换为秒需除以采样率：`t = n / sr`。一段 10 秒、16 kHz 的片段是 160,000 个浮点数的数组。
 
-**Sampling rate (sr).** How many samples per second. Common rates in 2026:
+**采样率（sr）。** 每秒多少个采样。2026 年的常用采样率：
 
-| Rate | Use |
-|------|-----|
-| 8 kHz | Telephony, legacy VOIP. Nyquist at 4 kHz kills consonants. Avoid for ASR. |
-| 16 kHz | ASR standard. Whisper, Parakeet, SeamlessM4T v2 all consume 16 kHz. |
-| 22.05 kHz | TTS vocoder training for older models. |
-| 24 kHz | Modern TTS (Kokoro, F5-TTS, xTTS v2). |
-| 44.1 kHz | CD audio, music. |
-| 48 kHz | Film, pro audio, high-fidelity TTS (VALL-E 2, NaturalSpeech 3). |
+| 采样率 | 用途 |
+|--------|------|
+| 8 kHz | 电话、传统 VOIP。奈奎斯特 4 kHz 会抹掉辅音。ASR 应避免。 |
+| 16 kHz | ASR 标准。Whisper、Parakeet、SeamlessM4T v2 都输入 16 kHz。 |
+| 22.05 kHz | 旧模型 TTS 声码器训练。 |
+| 24 kHz | 现代 TTS（Kokoro、F5-TTS、xTTS v2）。 |
+| 44.1 kHz | CD 音频、音乐。 |
+| 48 kHz | 电影、专业音频、高保真 TTS（VALL-E 2、NaturalSpeech 3）。 |
 
-**Nyquist-Shannon.** A sample rate of `sr` can unambiguously represent frequencies up to `sr/2`. The `sr/2` boundary is the *Nyquist frequency*. Energy above Nyquist gets *aliased* — folded down into lower frequencies — and corrupts the signal. Always low-pass filter before downsampling.
+**奈奎斯特-香农。** 采样率 `sr` 能无歧义地表示最高 `sr/2` 的频率。`sr/2` 边界即*奈奎斯特频率*。高于奈奎斯特的能量会被*混叠*——折叠到低频——从而破坏信号。下采样前务必做低通滤波。
 
-**Bit depth.** 16-bit PCM (signed int16, range ±32,767) is the universal exchange format. 24-bit for music, 32-bit float for internal DSP. Libraries like `soundfile` read int16 but expose float32 arrays in `[-1, 1]`.
+**位深。** 16 位 PCM（有符号 int16，范围 ±32,767）是通用交换格式。24 位用于音乐，32 位浮点用于内部 DSP。`soundfile` 等库读取 int16 但暴露为 `[-1, 1]` 的 float32 数组。
 
-**Fourier Transform.** Any finite signal is a sum of sinusoids at different frequencies. The Discrete Fourier Transform (DFT) computes, for `N` samples, `N` complex coefficients — one per frequency bin. `bin k` maps to frequency `k · sr / N` Hz. Magnitude is amplitude at that frequency, angle is phase.
+**傅里叶变换。** 任何有限信号都是不同频率正弦波的叠加。离散傅里叶变换（DFT）对 `N` 个采样计算 `N` 个复系数——每频率 bin 一个。频率 bin `k` 对应频率 `k · sr / N` Hz。幅值是该频率的能量，相角是相位。
 
-**FFT.** Fast Fourier Transform: an `O(N log N)` algorithm for the DFT when `N` is a power of 2. Every audio library uses FFT under the hood. A 1024-sample FFT at 16 kHz gives 512 usable frequency bins spanning 0–8 kHz at 15.6 Hz resolution.
+**FFT。** 快速傅里叶变换：当 `N` 是 2 的幂时，DFT 的 `O(N log N)` 算法。每个音频库底层都使用 FFT。16 kHz 下 1024 采样的 FFT 给出 512 个可用频率 bins，覆盖 0–8 kHz，分辨率 15.6 Hz。
 
-**Framing + window.** We do not FFT an entire clip. We chop it into overlapping *frames* (typically 25 ms with 10 ms hop), multiply each frame by a window function (Hann, Hamming) to kill edge discontinuities, then FFT each frame. This is the Short-Time Fourier Transform (STFT). Lesson 02 picks up from here.
+**分帧 + 加窗。** 我们不对整个片段做 FFT，而是将它切成重叠的*帧*（通常 25 ms，步长 10 ms），每帧乘以窗函数（Hann 或 Hamming）以消除边缘不连续，然后对每帧做 FFT。这就是短时傅里叶变换（STFT）。第 02 课从这里继续。
 
-## Build It
+## 动手实现
 
-### Step 1: read a clip and plot the waveform
+### 第 1 步：读取片段并绘制波形
 
-`code/main.py` uses only the stdlib `wave` module to keep the demo dependency-free. For production you will use `soundfile` or `torchaudio.load` (both return `(waveform, sr)` tuples):
+`code/main.py` 只用标准库 `wave` 模块以保持演示无依赖。生产环境你会用 `soundfile` 或 `torchaudio.load`（都返回 `(waveform, sr)` 元组）：
 
 ```python
 import soundfile as sf
 waveform, sr = sf.read("clip.wav", dtype="float32")  # shape (T,), sr=int
 ```
 
-### Step 2: synthesize a sine wave from first principles
+### 第 2 步：从第一性原理合成正弦波
 
 ```python
 import math
@@ -67,9 +67,9 @@ def sine(freq_hz, sr, seconds, amp=0.5):
     return [amp * math.sin(2 * math.pi * freq_hz * i / sr) for i in range(n)]
 ```
 
-A 440 Hz sine (concert A) at 16 kHz for 1 second is 16,000 floats. Write with `wave.open(..., "wb")` using 16-bit PCM encoding.
+一个 440 Hz 正弦波（标准音 A）在 16 kHz 下持续 1 秒是 16,000 个浮点数。用 `wave.open(..., "wb")` 和 16 位 PCM 编码写入。
 
-### Step 3: compute the DFT by hand
+### 第 3 步：手工计算 DFT
 
 ```python
 def dft(x):
@@ -82,57 +82,57 @@ def dft(x):
     return out
 ```
 
-`O(N²)` — fine for `N=256` to confirm correctness, useless for real audio. Real code calls `numpy.fft.rfft` or `torch.fft.rfft`.
+`O(N²)`——`N=256` 时用来验证正确性尚可，实际音频毫无用处。真代码调用 `numpy.fft.rfft` 或 `torch.fft.rfft`。
 
-### Step 4: find the dominant frequency
+### 第 4 步：找主导频率
 
-Magnitude peak index `k_star` maps to frequency `k_star * sr / N`. Running this on the 440 Hz sine should return a peak at bin `440 * N / sr`.
+幅值峰值索引 `k_star` 对应频率 `k_star * sr / N`。在 440 Hz 正弦波上运行应返回 bin `440 * N / sr` 处的峰值。
 
-### Step 5: demonstrate aliasing
+### 第 5 步：演示混叠
 
-Sample a 7 kHz sine at 10 kHz (Nyquist = 5 kHz). The 7 kHz tone is above Nyquist and folds to `10 − 7 = 3 kHz`. The FFT peak appears at 3 kHz. This is the classic aliasing demo and the reason every DAC/ADC ships with a brick-wall low-pass filter.
+用 10 kHz 采样 7 kHz 正弦波（奈奎斯特 = 5 kHz）。7 kHz 音调高于奈奎斯特，折叠到 `10 − 7 = 3 kHz`。FFT 峰值出现在 3 kHz。这是经典的混叠演示，也是每个 DAC/ADC 都附带砖墙式低通滤波器的原因。
 
-## Use It
+## 实际使用
 
-The stack you will actually ship in 2026:
+你 2026 年真正会发货的技术栈：
 
-| Task | Library | Why |
-|------|---------|-----|
-| Read/write WAV/FLAC/OGG | `soundfile` (libsndfile wrapper) | Fastest, stable, returns float32. |
-| Resample | `torchaudio.transforms.Resample` or `librosa.resample` | Correct anti-aliasing built in. |
-| STFT / Mel | `torchaudio` or `librosa` | GPU-friendly; PyTorch ecosystem. |
-| Real-time streaming | `sounddevice` or `pyaudio` | Cross-platform PortAudio bindings. |
-| Inspect a file | `ffprobe` or `soxi` | CLI, fast, reports sr/channels/codec. |
+| 任务 | 库 | 为什么 |
+|------|------|--------|
+| 读写 WAV/FLAC/OGG | `soundfile`（libsndfile 封装） | 最快、最稳定，返回 float32。 |
+| 重采样 | `torchaudio.transforms.Resample` 或 `librosa.resample` | 内置正确的抗混叠。 |
+| STFT / Mel | `torchaudio` 或 `librosa` | GPU 友好；PyTorch 生态。 |
+| 实时流 | `sounddevice` 或 `pyaudio` | 跨平台 PortAudio 绑定。 |
+| 检查文件 | `ffprobe` 或 `soxi` | CLI，快速，报告 sr/通道/编解码器。 |
 
-Decision rule: **match sample rate before you match anything else**. Whisper expects 16 kHz mono float32. Pass it 44.1 kHz stereo and you will get garbage that looks like a model bug.
+决策规则：**先匹配采样率，再匹配其他任何东西**。Whisper 期望 16 kHz 单声道 float32。传入 44.1 kHz 立体声，你会得到看起来像模型 bug 的垃圾。
 
-## Ship It
+## 交付
 
-Save as `outputs/skill-audio-loader.md`. The skill helps you check that audio input matches the expectations of the downstream model and resamples correctly when it does not.
+保存为 `outputs/skill-audio-loader.md`。这个 skill 帮助检查音频输入是否匹配下游模型的预期，并在不匹配时正确重采样。
 
-## Exercises
+## 练习
 
-1. **Easy.** Synthesize a 1-second mix of 220 Hz + 440 Hz + 880 Hz at 16 kHz. Run DFT. Confirm three peaks at the expected bins.
-2. **Medium.** Record a 3-second WAV of your voice at 48 kHz. Downsample to 16 kHz using `torchaudio.transforms.Resample` (with anti-aliasing), then to 16 kHz using naive decimation (every third sample). FFT both. Where does the aliasing appear?
-3. **Hard.** Build the STFT from scratch using only `math` and the DFT from Step 3. Frame size 400, hop 160, Hann window. Plot magnitudes with `matplotlib.pyplot.imshow`. This is the spectrogram of Lesson 02.
+1. **简单。** 合成 1 秒 220 Hz + 440 Hz + 880 Hz 混音，16 kHz。做 DFT。确认在预期 bins 处有三个峰值。
+2. **中等。** 用 48 kHz 录制自己声音的 3 秒 WAV。用 `torchaudio.transforms.Resample`（带抗混叠）下采样到 16 kHz，再用朴素抽取（每三个采样取一个）。对两者做 FFT。混叠出现在哪里？
+3. **困难。** 只用 `math` 和第 3 步的 DFT 从零构建 STFT。帧长 400，步长 160，Hann 窗。用 `matplotlib.pyplot.imshow` 绘制幅值。这就是第 02 课的频谱图。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
-|------|-----------------|-----------------------|
-| Sample rate | How many samples per second | Frequency in Hz at which the ADC measures the signal. |
-| Nyquist | The max frequency you can represent | `sr/2`; energy above it aliases back down. |
-| Bit depth | Resolution of each sample | `int16` = 65,536 levels; `float32` = 24-bit precision in `[-1, 1]`. |
-| DFT | The Fourier transform for sequences | `N` samples → `N` complex frequency coefficients. |
-| FFT | The fast DFT | `O(N log N)` algorithm requiring `N` = power of 2. |
-| Bin | Frequency column | `k · sr / N` Hz; resolution = `sr / N`. |
-| STFT | Spectrogram under the hood | Framed + windowed FFT over time. |
-| Aliasing | Weird frequency ghosts | Energy above Nyquist mirroring down to lower bins. |
+| 术语 | 大家怎么说的 | 实际含义 |
+|------|----------------|-----------------------|
+| 采样率 | 每秒多少个采样 | ADC 测量信号的频率（Hz）。 |
+| 奈奎斯特 | 能表示的最高频率 | `sr/2`；高于此的能量会混叠回来。 |
+| 位深 | 每个采样的分辨率 | `int16` = 65,536 个等级；`float32` = 24 位精度，范围 `[-1, 1]`。 |
+| DFT | 序列的傅里叶变换 | `N` 个采样 → `N` 个复频率系数。 |
+| FFT | 快速 DFT | `O(N log N)` 算法，要求 `N` 为 2 的幂。 |
+| Bin | 频率柱 | `k · sr / N` Hz；分辨率 = `sr / N`。 |
+| STFT | 频谱图的底层 | 分帧 + 加窗 FFT，按时间排列。 |
+| 混叠 | 奇怪的频率鬼影 | 高于奈奎斯特的能量镜像到低 bins。 |
 
-## Further Reading
+## 延伸阅读
 
-- [Shannon (1949). Communication in the Presence of Noise](https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf) — the paper behind the sampling theorem.
-- [Smith — The Scientist and Engineer's Guide to Digital Signal Processing](https://www.dspguide.com/ch8.htm) — free, canonical DSP textbook.
-- [librosa docs — audio primer](https://librosa.org/doc/latest/tutorial.html) — practical walkthrough with code.
-- [Heinrich Kuttruff — Room Acoustics (6th ed.)](https://www.routledge.com/Room-Acoustics/Kuttruff/p/book/9781482260434) — reference for why real-world audio is not a clean sinusoid.
-- [Steve Eddins — FFT Interpretation notebook](https://blogs.mathworks.com/steve/2020/03/30/fft-spectrum-and-spectral-densities/) — frequency bin intuition cleared up in 10 minutes.
+- [Shannon (1949). Communication in the Presence of Noise](https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf) — 采样定理背后的论文。
+- [Smith — The Scientist and Engineer's Guide to Digital Signal Processing](https://www.dspguide.com/ch8.htm) — 免费、权威的 DSP 教科书。
+- [librosa docs — audio primer](https://librosa.org/doc/latest/tutorial.html) — 带代码的实用教程。
+- [Heinrich Kuttruff — Room Acoustics (6th ed.)](https://www.routledge.com/Room-Acoustics/Kuttruff/p/book/9781482260434) — 真实世界音频不是干净正弦波的原因。
+- [Steve Eddins — FFT Interpretation notebook](https://blogs.mathworks.com/steve/2020/03/30/fft-spectrum-and-spectral-densities/) — 10 分钟搞懂频率 bin 直觉。
