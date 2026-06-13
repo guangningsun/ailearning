@@ -1,23 +1,23 @@
-# Leaderboard Aggregation
+# Leaderboard 聚合
 
-> Per-task scores are easy. Per-model rankings across heterogeneous tasks are harder. Statistical significance on a thousand-prediction leaderboard is the part everyone skips. This lesson does not skip it.
+> 按任务得分容易。跨异构任务对模型进行排序难。在包含一千个预测的 leaderboard 上做统计显著性是每个人都跳过的那部分。本节课不跳过。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track B foundations, lessons 70, 71, 73
-**Time:** ~90 min
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 Track B 基础，课程 70、71、73
+**时间：** 约 90 分钟
 
-## Learning objectives
+## 学习目标
 
-- Aggregate per-task scores across multiple models and multiple tasks into a tidy per-model row.
-- Normalise heterogeneous scores so that pass rates and BLEU values do not over-influence the aggregate.
-- Rank models by mean and by win-rate, and explain when each is the right summary.
-- Compute bootstrap confidence intervals on the mean score per model and on pairwise differences.
-- Output the leaderboard as a JSON report and as a markdown table the runner in lesson 75 can paste into a CI comment.
+- 跨多个模型和多个任务聚合按任务得分，整理成整洁的按模型行。
+- 归一化异构得分，使通过率和 BLEU 值不会过度影响聚合结果。
+- 按均值和按胜率对模型排序，并解释何时哪个是合适的总结。
+- 计算每个模型均值和两两差异的 bootstrap 置信区间。
+- 将 leaderboard 输出为 JSON 报告和 markdown 表格，供课程 75 的运行器粘贴到 CI 评论中。
 
-## The shape of input
+## 输入的形态
 
-The aggregator consumes a list of `EvalRun` records:
+聚合器消费一个 `EvalRun` 记录列表：
 
 ```python
 @dataclass
@@ -29,11 +29,11 @@ class EvalRun:
     category: str
 ```
 
-The runner in lesson 75 emits one record per `(model, task)` pair. The aggregator does not care how the score was produced. It expects normalisation to already have happened: every score is in `[0, 1]`.
+课程 75 的运行器为每个 `(model, task)` 对发出一行记录。聚合器不关心得分是如何产生的。它期望归一化已经发生：每个得分都在 `[0, 1]` 中。
 
-## The output
+## 输出
 
-Three tables come out:
+输出三张表：
 
 ```mermaid
 flowchart LR
@@ -47,19 +47,19 @@ flowchart LR
     G --> H[JSON + markdown table]
 ```
 
-The leaderboard row contains: `model_id`, `mean_score`, `mean_ci_lo`, `mean_ci_hi`, `win_rate`, `tasks_completed`, and an optional `categories` map for per-category mean.
+Leaderboard 行包含：`model_id`、`mean_score`、`mean_ci_lo`、`mean_ci_hi`、`win_rate`、`tasks_completed`，以及一个可选的 `categories` 映射用于按类别均值。
 
-## Normalisation
+## 归一化
 
-If one task scores in `[0, 1]` and another in `[0, 100]`, the second silently dominates the mean. The aggregator validates that every input score sits in `[0, 1]` and refuses the run otherwise. The fix lives upstream: the metric should already return a fraction. Lessons 71 to 73 enforce that contract.
+如果一个任务得分在 `[0, 1]`，另一个在 `[0, 100]`，第二个会悄然主导均值。聚合器验证每个输入得分都在 `[0, 1]` 中，否则拒绝运行。修复在上游：metric 应该已经返回分数。课程 71 到 73 执行该契约。
 
-## Mean and win-rate
+## 均值和胜率
 
-The two ranking schemes serve different goals.
+两种排序方案服务于不同目标。
 
-Mean score is the average of per-task scores for one model. It is the headline number leaderboards report. It is sensitive to outliers and to task imbalance.
+均值得分是一个模型的按任务得分平均值。它是 leaderboard 报告的 headline 数字。它对异常值和任务不平衡敏感。
 
-Win-rate counts how often a model beats every other model on the same task. For each task, the model with the highest score wins (ties split). Win rate equals wins divided by the number of tasks where the model has a score. It is less sensitive to outliers and to scale differences but loses information.
+胜率计算一个模型在同一个任务上击败其他所有模型的次数。对于每个任务，得分最高的模型获胜（平局 split）。胜率等于获胜次数除以该模型有得分的任务数。它对异常值和规模差异不那么敏感，但丢失了信息。
 
 ```python
 def win_rate(model_id, runs_by_task, all_models):
@@ -75,11 +75,11 @@ def win_rate(model_id, runs_by_task, all_models):
     return wins / total if total else 0.0
 ```
 
-The harness reports both. The runner in lesson 75 ranks by mean by default; the markdown column for win-rate is right there in case the user prefers it.
+harness 报告两者。课程 75 的运行器默认按均值排序；markdown 列中包含胜率，以防用户偏好它。
 
-## Bootstrap confidence intervals
+## Bootstrap 置信区间
 
-Per-model means come with a confidence interval estimated by bootstrap resampling over tasks. We resample task ids with replacement, compute the mean over the resampled set, repeat `B` times, and take the percentile interval at level `alpha`.
+每个模型均值带有一个由 bootstrap 重采样（跨任务）估计的置信区间。我们带放回地对任务 ID 重采样，计算重采样集的均值，重复 `B` 次，然后取 level `alpha` 的百分位置信区间。
 
 ```mermaid
 flowchart TD
@@ -93,17 +93,17 @@ flowchart TD
     G --> H[CI lo, CI hi]
 ```
 
-For pairwise comparisons we bootstrap the per-task difference `score_A - score_B`, take the percentile interval, and report it. The user reads off whether the interval excludes zero. If it does, the difference is significant at level alpha. If it does not, the leaderboard treats the models as tied.
+对于两两比较，我们 bootstrap 按任务差异 `score_A - score_B`，取百分位置信区间，并报告它。用户可以读出区间是否包含零。如果包含，则差异在 alpha 水平上显著。如果不包含，leaderboard 将模型视为平局。
 
-The low-level helpers (`bootstrap_mean_ci`, `bootstrap_pairwise_diff`) default to `B=1000`; the public aggregators (`aggregate`, `pairwise_diffs`) default to `b=500` so the demo and tests stay quick. The default alpha is 0.05. The lesson keeps the bootstrap pure numpy, no scipy.
+低级 helper（`bootstrap_mean_ci`、`bootstrap_pairwise_diff`）默认为 `B=1000`；公共聚合器（`aggregate`、`pairwise_diffs`）默认为 `b=500`，这样演示和测试保持快速。默认 alpha 是 0.05。本节课保持 bootstrap 为纯 numpy，没有 scipy。
 
-## Categories
+## 类别
 
-If `EvalRun.category` is set, the aggregator also reports per-category mean. This is the column on every leaderboard that says `math`, `reasoning`, `code`, `safety`. It lets the runner spot whether a model is good overall but weak in code, which is information the headline mean hides.
+如果设置了 `EvalRun.category`，聚合器还报告按类别均值。这是每个 leaderboard 上写着 `math`、`reasoning`、`code`、`safety` 的列。它让运行器发现一个模型总体良好但在 code 上薄弱，这是 headline 均值隐藏的信息。
 
-## Markdown rendering
+## Markdown 渲染
 
-The leaderboard is rendered as a markdown table:
+Leaderboard 渲染为 markdown 表格：
 
 ```text
 | Rank | Model | Mean | 95% CI | Win rate | Tasks |
@@ -113,18 +113,18 @@ The leaderboard is rendered as a markdown table:
 | 3    | random| 0.10 | 0.07-0.13 | 0.04 | 50 |
 ```
 
-The table is sorted by mean score. The CI is rendered to two decimals. Long model ids are truncated to twenty characters.
+表格按均值得分排序。CI 渲染为两位小数。长 model id 截断为二十个字符。
 
-## What this lesson does not do
+## 本节课不做什么
 
-It does not run models. It does not call the metric layer. It does not implement adaptive ECE or other calibration variants; those are lesson 73. It does not implement task weighting. Every task counts the same here. Production leaderboards weight tasks; we leave that hook open through the `weight` field but ignore it in the aggregator. Add weighting in a follow-up lesson if you need it.
+它不运行模型。它不调用 metric 层。它不实现自适应 ECE 或其他校准变体；那些是课程 73。它不实现任务加权。每个任务在这里计数相同。生产 leaderboard 对任务加权；我们通过 `weight` 字段保持这个钩子开放但在聚合器中忽略它。如果需要，在后续课程中添加加权。
 
-## How to read the code
+## 如何阅读代码
 
-`main.py` defines `EvalRun`, `LeaderboardRow`, `aggregate`, `bootstrap_mean_ci`, `bootstrap_pairwise_diff`, and `render_markdown`. The demo builds a synthetic suite of three models and twelve tasks, aggregates, and prints the leaderboard plus the pairwise diff table. The tests in `code/tests/test_leaderboard.py` pin the bootstrap, the markdown rendering, the win-rate edge cases, and the empty-input behaviour.
+`main.py` 定义了 `EvalRun`、`LeaderboardRow`、`aggregate`、`bootstrap_mean_ci`、`bootstrap_pairwise_diff` 和 `render_markdown`。演示构建了三个模型和十二个任务的合成套件，聚合，并打印 leaderboard 以及两两差异表。`code/tests/test_leaderboard.py` 中的测试为 bootstrap、markdown 渲染、胜率边界情况和空输入行为设置了 pin。
 
-Read `main.py` top to bottom. The data shape (EvalRun, LeaderboardRow) comes first, the aggregator next, the bootstrap third, the rendering last. Each function has a focused contract.
+从上到下阅读 `main.py`。数据形态（EvalRun、LeaderboardRow）在前，聚合器其次，bootstrap 第三，渲染最后。每个函数都有一个聚焦的契约。
 
-## Going further
+## 深入学习
 
-The natural next step is paired-task significance instead of unpaired bootstrap. If model A and B both ran the same hundred tasks, the appropriate test is the paired bootstrap on task-by-task differences, which we implement. Beyond that, you want a hierarchical bootstrap that respects task families (math problems are not independent from each other; an arithmetic error pattern affects ten of them). That is a follow-up. The point of this lesson is to get the floor right so the eval reports a number you can defend.
+自然的下一步是配对任务显著性而不是非配对 bootstrap。如果模型 A 和 B 都跑了相同的一百个任务，适当的检验是按任务差异的配对 bootstrap，我们实现了。除此之外，你需要尊重任务族的层次 bootstrap（数学问题之间不独立；一个算术错误模式影响其中十个）。那是后续内容。本节课的重点是把底限做好，这样评估报告的数字是你可以捍卫的。

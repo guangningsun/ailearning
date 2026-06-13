@@ -1,28 +1,29 @@
-# JSON-RPC 2.0 Over Newline-Delimited Stdio
+# 基于换行分隔 Stdio 的 JSON-RPC 2.0
 
-> The transport between a model client and a tool server is JSON-RPC over stdio. Hand-rolling it once teaches you what every framing layer is paying for.
+> 模型客户端与工具服务器之间的传输层是 JSON-RPC over stdio。自己手写一遍，就能明白每一层封帧协议到底在做什么。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 13 lessons 01-07, Phase 14 lesson 01
-**Time:** ~90 minutes
+**类型：** 动手构建
+**语言：** Python
+**前置条件：** 阶段 13 第 01-07 课、阶段 14 第 01 课
+**时间：** 约 90 分钟
 
-## Learning Objectives
-- Speak JSON-RPC 2.0 framed as newline-delimited JSON over stdin and stdout.
-- Map the five standard error codes (-32700, -32600, -32601, -32602, -32603) and surface them with the right semantics.
-- Distinguish requests, responses, notifications, and batches without inventing new envelope keys.
-- Handle one parse error per line without poisoning the rest of the stream.
-- Build a self-terminating demo using io.BytesIO so the lesson runs without spawning a child process.
+## 学习目标
 
-## Why JSON-RPC stays the lingua franca
+- 使用换行分隔的 JSON over stdin 和 stdout 实现 JSON-RPC 2.0 封帧。
+- 映射五个标准错误码（-32700、-32600、-32601、-32602、-32603）并用正确的语义暴露它们。
+- 区分请求、响应、通知和批量请求，不发明新的信封键。
+- 每行一个解析错误，不污染后续数据流。
+- 使用 io.BytesIO 构建自终止演示，使课程无需派生子进程即可运行。
 
-A coding agent in 2026 talks to maybe twelve tool servers in a single session. Each server is a separate process or a remote endpoint. The wire format has been the same since 2013. JSON-RPC 2.0 is two-page spec. It survives because the alternatives (gRPC, HTTP per call, custom binary) all impose a tradeoff JSON-RPC does not: they pick either streaming or batching or transport-coupling. JSON-RPC is symmetric across stdio, sockets, websockets, and HTTP, and a client can drive a server it has never seen if both honor the spec.
+## 为什么 JSON-RPC 一直是通用语言
 
-This lesson builds the stdio variant. Newline-delimited JSON. Each request is one line. Each response is one line. The transport boundary is `\n`.
+2026 年的编码 Agent 在单次会话中可能与十二个工具服务器对话。每个服务器是一个独立进程或远程端点。线格式自 2013 年以来一直没变。JSON-RPC 2.0 是两页规范。它能存活下来是因为所有替代方案（gRPC、每次调用的 HTTP、自定义二进制）都有一个 JSON-RPC 没有的权衡：它们要么选流式、要么选批量、要么选传输耦合。JSON-RPC 在 stdio、socket、WebSocket 和 HTTP 上是对称的，如果客户端和服务端都遵守规范，一个客户端可以驱动它从未见过的服务端。
 
-## The wire shape
+本课构建 stdio 变体。换行分隔的 JSON。每个请求一行。每个响应一行。传输边界是 `\n`。
 
-Four envelope shapes exist. Two are spoken by the client. Two are spoken by the server.
+## 线格式
+
+四种信封形状。两种由客户端发出。两种由服务端发出。
 
 ```mermaid
 sequenceDiagram
@@ -36,33 +37,33 @@ sequenceDiagram
     Server-->>Client: error {jsonrpc:"2.0", id:7 or null, error:{code, message, data?}}
 ```
 
-A notification has no `id`. The server must not respond to it. If a server returns a response to a notification, the client has no way to attach it to a call site. That single rule keeps the framing math simple.
+通知没有 `id`。服务端不得响应它。如果服务端返回了对通知的响应，客户端没有办法将它挂回到调用点。这条规则使得封帧逻辑保持简单。
 
-A batch is a JSON array of requests or notifications. The server replies with an array of responses, in any order, one per non-notification entry. If every entry in the batch is a notification, the server sends nothing back.
+批量是一组请求或通知的 JSON 数组。服务端返回一个响应数组，顺序任意，每个非通知条目一个。如果批量中每个条目都是通知，服务端不返回任何内容。
 
-## The five error codes
+## 五个错误码
 
 ```text
--32700  Parse error      JSON could not be parsed
--32600  Invalid Request  Envelope shape is wrong
+-32700  Parse error      无法解析的 JSON
+-32600  Invalid Request  信封形状错误
 -32601  Method not found
 -32602  Invalid params
 -32603  Internal error
 ```
 
-The codes between -32000 and -32099 are reserved for server-defined errors. Everything else is application-defined. The lesson sticks to the five. If your handler raises, the transport wraps it as -32603 with the exception class name in `data.exception`.
+-32000 到 -32099 之间的码保留给服务端定义的错误。其他的是应用定义的。本课只使用这五个。如果你的处理器抛出异常，传输层将其包装为 -32603，并在 `data.exception` 中放入异常类名。
 
-A parse error has a special rule. The `id` in the response is `null`, because the request never parsed enough to extract an id.
+解析错误有一条特殊规则。响应中的 `id` 是 `null`，因为请求从未解析出足够的部分来提取 id。
 
-## Newline framing and the BytesIO demo
+## 换行封帧与 BytesIO 演示
 
-The transport reads one line at a time. A line is bytes up to and including `\n`. If a line cannot be parsed, the transport writes a -32700 response with `id: null` and continues. The stream is not poisoned. The next line gets parsed fresh.
+传输层每次读取一行。一行是从开始到并包含 `\n` 的字节。如果一行无法解析，传输层写入一个 `id: null` 的 -32700 响应并继续。流不会被污染。下一行会重新开始解析。
 
-For the lesson we wrap an `io.BytesIO` pair as stdin and stdout. The server reads requests until EOF, writes responses for each, and returns. The client reads the responses back. No process spawn. No timeouts. The transport behavior is identical to a real subprocess pipe because Python's `io` interface presents the same `.readline()` and `.write()` contract.
+在本课中，我们将一对 `io.BytesIO` 作为 stdin 和 stdout 包装起来。服务端读取请求直到 EOF，为每个请求写入响应，然后返回。客户端读取响应。不派生进程。不涉及超时。传输层行为与真实的子进程管道完全相同，因为 Python 的 `io` 接口呈现相同的 `.readline()` 和 `.write()` 契约。
 
-## Method dispatch
+## 方法分发
 
-The transport does not know which methods exist. It hands off to a callable `handler(method, params)` that the harness supplies. The handler returns a result or raises. Three exception classes surface specific codes.
+传输层不知道存在哪些方法。它转交给 harness 提供的可调用对象 `handler(method, params)`。处理器返回结果或抛出异常。三个异常类暴露特定的错误码。
 
 ```text
 MethodNotFound -> -32601
@@ -70,9 +71,9 @@ InvalidParams  -> -32602
 Anything else  -> -32603 with exception name in data
 ```
 
-The transport never sees a tool registry. The registry sits behind the handler. This is the layering we want. The transport speaks JSON-RPC. The registry speaks tool shapes. The dispatcher (lesson twenty-three) stitches them together.
+传输层从不看到工具注册表。注册表在处理器后面。这是我们想要的分层。传输层说 JSON-RPC。注册表说工具形状。调度器（第 23 课）将它们缝合在一起。
 
-## Stream behavior on errors
+## 错误时的流行为
 
 ```text
 client writes              server reads             server writes
@@ -83,20 +84,20 @@ client writes              server reads             server writes
 {...missing method...}     invalid envelope         {id:X, error: -32600}
 ```
 
-A broken JSON line does not stop the loop. A missing `method` field does not stop the loop. A handler exception does not stop the loop. The transport keeps reading until EOF.
+损坏的 JSON 行不会停止循环。缺少 `method` 字段不会停止循环。处理器异常不会停止循环。传输层持续读取直到 EOF。
 
-## Notifications and asymmetric flows
+## 通知与非对称流
 
-A notification is fire-and-forget. The harness uses notifications for progress events, cancellation signals, and log lines. Notifications are how a long-running tool can stream status updates without round-tripping for each one.
+通知是"发射后不管"。harness 使用通知发送进度事件、取消信号和日志行。通知是长时运行工具可以在不往返获取每一步的情况下流式传输状态更新的方式。
 
-The lesson implements one outbound notification helper, `write_notification`. The server uses it to emit progress while a request is in flight. The demo shows the pattern: a request comes in, the handler emits two progress notifications, then writes the final response.
+本课实现了一个出站通知辅助函数 `write_notification`。服务端用它在一个请求进行中时发出进度。演示展示了这一模式：一个请求进来，处理器发出两个进度通知，然后写入最终响应。
 
-## How to read the code
+## 如何阅读代码
 
-`code/main.py` defines `StdioTransport`, the parse helper (`parse_request`), the three write helpers (`write_response`, `write_error`, `write_notification`), and the dispatch loop `serve`. The error code constants live at module scope.
+`code/main.py` 定义了 `StdioTransport`、解析辅助函数（`parse_request`）、三个写入辅助函数（`write_response`、`write_error`、`write_notification`）以及分发循环 `serve`。错误码常量在模块作用域。
 
-`code/tests/test_transport.py` covers the five error codes, notifications (no response written), batches (array in, array out, notifications skipped), broken JSON (parse error then continue), and the asymmetric flow where a handler writes a notification mid-call.
+`code/tests/test_transport.py` 覆盖了五个错误码、通知（不写入响应）、批量（数组进数组出，跳过通知）、损坏的 JSON（解析错误后继续）以及处理器在调用中途写入通知的非对称流。
 
-## Going further
+## 进一步探索
 
-This transport is enough for the lessons that follow. Production transports add three things. A correlation id field that survives forwarding (your `id` is already this, but in a mesh you need an outer trace id too). A cancellation channel (a notification like `$/cancelRequest` with the id of the in-flight call). And a content-type negotiation handshake so the same socket can speak JSON-RPC and Streamable HTTP. None of those change the wire. They add metadata.
+这个传输层对后续课程已经够用。生产传输层增加三样东西。一个能在转发中保留下来的关联 id 字段（你的 `id` 已经是这样了，但在网格中你还需要一个外层追踪 id）。一个取消通道（一个类似 `$/cancelRequest` 的通知，带有进行中调用的 id）。以及一个 content-type 协商握手，使同一个 socket 能说 JSON-RPC 和 Streamable HTTP。这些都不改变线格式。它们只是增加元数据。

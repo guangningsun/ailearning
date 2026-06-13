@@ -1,129 +1,129 @@
-# Gradient Clipping and Mixed Precision
+# 梯度裁剪与混合精度
 
-> The optimizer and schedule from the previous lesson assume gradients are sane. They usually are not. A single bad batch can spike the gradient norm by three orders of magnitude. Mixed-precision training amplifies this by introducing FP16 overflow on the loss side. This lesson builds the two safety belts that production training cannot ship without: gradient clipping to a configured global L2 norm, and a mixed-precision loop with autocast and GradScaler that detects NaN and Inf, skips the step cleanly, and logs the scaling factor for forensics.
+> 上一课的优化器和调度器假设梯度是正常的。但它们通常不是。单批次梯度范数可能飙升至原来的三千倍。混合精度训练通过引入 FP16 溢出进一步放大这个问题。本课构建生产训练不可或缺的两种安全带：按配置的全局 L2 范数裁剪梯度，以及带有 autocast 和 GradScaler 的混合精度循环，用于检测 NaN 和 Inf、干净地跳过步骤并记录缩放因子供事后分析。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 lessons 30-37
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python
+**前置条件：** 阶段 19 第 30-37 课
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Compute the global L2 norm over all parameter gradients and clip in place when it exceeds a configured threshold.
-- Wrap a training step in autocast plus a GradScaler so FP16 forward and backward passes survive overflow.
-- Detect NaN and Inf in the loss or gradient, skip the optimizer step, and log the skip.
-- Report the GradScaler's scaling factor every step so a long sequence of skips is visible immediately.
+- 计算所有参数梯度的全局 L2 范数，在其超过配置阈值时原地裁剪。
+- 用 autocast 加 GradScaler 包装训练步骤，使 FP16 前向和反向传播在溢出时存活。
+- 检测损失或梯度中的 NaN 和 Inf，跳过优化器步骤并记录跳过。
+- 每步报告 GradScaler 的缩放因子，使长时间的连续跳过立即可见。
 
-## The Problem
+## 问题
 
-A training run that ran clean yesterday produces a loss curve that goes vertical at step 8,217. The culprit is a single batch whose gradient norm is 4,200, twenty times the previous peak. Without clipping the optimizer applies a step that resets every learning the model had done in the previous hour. With a global L2 clip at norm 1.0, the same batch contributes a unit-norm update; the loss stays on its trend line; the run survives.
+昨天运行正常的训练，在第 8,217 步时损失曲线突然垂直上升。罪魁祸首是一个梯度范数为 4,200 的单批次，是前一个峰值的二十倍。不裁剪的话，优化器会应用一个将前一小时所有学习重置的步骤。若全局 L2 裁剪到范数 1.0，同样的批次贡献一个单位范数更新；损失保持在趋势线上；训练得以存活。
 
-Mixed-precision training pushes throughput by 2-3x by computing the forward pass and most of the backward pass in FP16. The cost is that FP16 has a narrow exponent range. A typical gradient that overflows in FP16 evaluates to Inf, which propagates through subsequent layers as NaN, which sets every weight to NaN at the next optimizer step. PyTorch's GradScaler solves this by multiplying the loss by a large scaling factor before the backward pass and dividing the gradients by the same factor before the optimizer step. If any gradient is Inf or NaN at unscale time, the scaler skips the step and halves the scaling factor; if the previous N steps were clean, the scaler doubles the factor. Over the course of training the factor finds the highest value the FP16 range allows.
+混合精度训练通过在 FP16 中计算前向传播和大部分反向传播，将吞吐量提升 2-3 倍。代价是 FP16 的指数范围很窄。一个在 FP16 中溢出的典型梯度计算结果为 Inf，Inf 会通过后续层传播为 NaN，在下一次优化器步骤时将所有权重设为 NaN。PyTorch 的 GradScaler 通过在反向传播前将损失乘以一个大缩放因子，并在优化器步骤前将梯度除以相同的因子来解决这个问题。如果任何梯度在 unscale 时为 Inf 或 NaN，缩放器跳过该步骤并将缩放因子减半；如果前 N 步都是干净的，缩放器将因子翻倍。在训练过程中，因子会找到 FP16 范围允许的最高值。
 
-The build problem is wiring the two correctly. Clip before unscale and the threshold is on scaled gradients; clip after unscale and the order of operations on the GradScaler matters. The right order is: `scaler.scale(loss).backward()`, then `scaler.unscale_(optimizer)`, then `clip_grad_norm_`, then `scaler.step(optimizer)`, then `scaler.update()`. Any other order produces a silently broken loop.
+构建问题是正确连接这两者。unscale 前裁剪，阈值作用于缩放后的梯度；unscale 后裁剪，GradScaler 的操作顺序会出问题。正确的顺序是：`scaler.scale(loss).backward()`，然后 `scaler.unscale_(optimizer)`，然后 `clip_grad_norm_`，然后 `scaler.step(optimizer)`，然后 `scaler.update()`。任何其他顺序都会产生一个静默失效的循环。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart TD
-  Forward[Forward in autocast] --> Loss[Loss in FP32]
-  Loss --> Scale[scaler.scale loss]
-  Scale --> Backward[Backward pass FP16 grads]
-  Backward --> Unscale[scaler.unscale optimizer]
-  Unscale --> NormCheck[Compute global L2 norm]
-  NormCheck --> Detect{NaN or Inf?}
-  Detect -- yes --> Skip[Skip step + log + scaler.update halves]
-  Detect -- no --> Clip[Clip grads to max_norm]
-  Clip --> StepOpt[scaler.step optimizer]
-  StepOpt --> Update[scaler.update doubles or halves]
-  Update --> NextStep[Next step]
+  Forward["FP16 autocast 中的前向传播"] --> Loss["FP32 中的损失"]
+  Loss --> Scale["scaler.scale 损失"]
+  Scale --> Backward["FP16 梯度的反向传播"]
+  Backward --> Unscale["scaler.unscale 优化器"]
+  Unscale --> NormCheck["计算全局 L2 范数"]
+  NormCheck --> Detect{"NaN 或 Inf？"}
+  Detect -- 是 --> Skip["跳过步骤 + 记录 + scaler.update 减半"]
+  Detect -- 否 --> Clip["将梯度裁剪到 max_norm"]
+  Clip --> StepOpt["scaler.step 优化器"]
+  StepOpt --> Update["scaler.update 翻倍或减半"]
+  Update --> NextStep["下一步"]
   Skip --> NextStep
 ```
 
-### Global L2 norm
+### 全局 L2 范数
 
-The global L2 norm is the Euclidean norm of the concatenated gradient vector, not the per-parameter norm. PyTorch implements this as `torch.nn.utils.clip_grad_norm_(parameters, max_norm)`. The function returns the pre-clip norm so the lesson can log both the natural and the clipped value, which is necessary for the "we are clipping at every step" diagnosis.
+全局 L2 范数是拼接梯度向量的欧几里得范数，而非逐参数范数。PyTorch 通过 `torch.nn.utils.clip_grad_norm_(parameters, max_norm)` 实现。该函数返回裁剪前的范数，以便记录自然值和裁剪后的值，这对"每步都在裁剪"的诊断是必要的。
 
-### autocast and GradScaler
+### autocast 与 GradScaler
 
-`torch.amp.autocast(device_type)` is the context manager that selectively runs eligible operations (most matmul-class operations) in FP16. `torch.amp.GradScaler(device_type)` is the helper that scales the loss before backward and inverse-scales the gradients before the optimizer step. The two are designed together; using one without the other is a configuration error the test should catch.
+`torch.amp.autocast(device_type)` 是选择性以 FP16 运行合格操作（大多数 matmul 类操作）的上下文管理器。`torch.amp.GradScaler(device_type)` 是在反向传播前缩放损失并在优化器步骤前反向缩放梯度的辅助类。两者设计在一起使用；单独使用其中一个是测试应捕获的配置错误。
 
-The lesson uses CPU autocast because that is what runs in CI; the same pattern transfers verbatim to CUDA by changing `device_type="cpu"` to `device_type="cuda"`. The GradScaler on CPU is a stub (CPU autocast already operates in BF16 by default and does not need loss scaling), but the lesson includes the call sites so the wiring is identical to the GPU loop.
+本课使用 CPU autocast，因为那是 CI 中运行的；相同的模式原封不动地转移到 CUDA，只需将 `device_type="cpu"` 改为 `device_type="cuda"`。CPU 上的 GradScaler 是一个占位实现（CPU autocast 默认已在 BF16 上运行，不需要损失缩放），但本课包含调用点，使接线方式与 GPU 循环完全一致。
 
-### NaN and Inf detection
+### NaN 和 Inf 检测
 
-The detection happens in two places. First, the loss itself is checked with `torch.isfinite` before backward; an Inf or NaN loss does not produce useful gradients and is skipped without entering the optimizer. Second, after `scaler.unscale_(optimizer)` the lesson scans the unscaled gradients with `has_non_finite_grad(...)` and treats any Inf or NaN as a skip. The two checks together cover both the forward-pass and the backward-pass failure modes.
+检测发生在两个地方。首先，用 `torch.isfinite` 在反向传播前检查损失本身；Inf 或 NaN 损失不会产生有用的梯度，会在不进入优化器的情况下被跳过。其次，在 `scaler.unscale_(optimizer)` 之后，本课使用 `has_non_finite_grad(...)` 扫描未缩放的梯度，并将任何 Inf 或 NaN 视为跳过。这两项检查共同覆盖了前向传播和反向传播两种失败模式。
 
-### Scaling factor diagnostics
+### 缩放因子诊断
 
-The scaling factor is the GradScaler's internal state. Every step the lesson reads `scaler.get_scale()` and logs it next to the learning rate and gradient norm. A healthy run shows the scaling factor climbing in powers of two until it saturates near `2^17` or `2^18`. A misbehaving run shows the factor oscillating between high and low values, which is the signal that the model's gradients are sometimes in range and sometimes not. The diagnostic is invisible without logging.
+缩放因子是 GradScaler 的内部状态。每步读取 `scaler.get_scale()` 并与学习率和梯度范数一起记录。健康的运行显示缩放因子以 2 的幂次攀升，直到在 `2^17` 或 `2^18` 附近饱和。行为异常的运行显示因子在高值和低值之间振荡，这表明模型的梯度有时在范围内，有时不在。没有记录，此诊断不可见。
 
-## Build It
+## 构建
 
-`code/main.py` implements:
+`code/main.py` 实现：
 
-- `clip_global_l2_norm` - a wrapper around `torch.nn.utils.clip_grad_norm_` that returns both the pre-clip and post-clip norm.
-- `has_non_finite_grad` - a helper that scans gradients for NaN and Inf.
-- `AmpTrainState` - wraps a model, an `AdamW` optimizer, a GradScaler, and an autocast device. Exposes a `step(inputs, targets)` that runs the full clipping, scaling, and skip-on-NaN pipeline.
-- `StepLog` and `SkipLog` - structured per-step records.
-- A demo that trains a small `nn.Linear` model for 20 steps, injects an Inf into the gradient on step 5 to exercise the skip path, and prints the resulting log.
+- `clip_global_l2_norm` —— `torch.nn.utils.clip_grad_norm_` 的包装器，返回裁剪前和裁剪后的范数。
+- `has_non_finite_grad` —— 扫描梯度中的 NaN 和 Inf 的辅助函数。
+- `AmpTrainState` —— 包装模型、AdamW 优化器、GradScaler 和 autocast 设备。暴露 `step(inputs, targets)` 方法，运行完整的裁剪、缩放和 NaN 时跳过流程。
+- `StepLog` 和 `SkipLog` —— 结构化的每步记录。
+- 一个演示：对一个小 `nn.Linear` 模型训练 20 步，在第 5 步注入一个 Inf 到梯度中以锻炼跳过路径，并打印结果日志。
 
-Run it:
+运行：
 
 ```bash
 python3 code/main.py
 ```
 
-The script exits zero and prints a per-step log with each row tagged `STEP` or `SKIP`; at least one row is a `SKIP`.
+脚本以零退出，打印每步日志，每行标记为 `STEP` 或 `SKIP`；至少有一行是 `SKIP`。
 
-## Production Patterns
+## 生产模式
 
-Four patterns elevate the loop to a production training step.
+四个模式将循环提升到生产训练步骤。
 
-**Skip counter as an alert, not a log line.** A handful of skipped steps per training run is healthy. Hundreds of skips per epoch are a hard alert: the model is in a regime FP16 cannot hold and the loop is silently failing. The lesson tracks a 1,000-step rolling skip rate and would, in production, page on a rate above 5 percent.
+**跳过计数器作为告警，而非日志行。** 每个训练运行中有少量跳过的步骤是健康的。每 epoch 数百次跳过是硬告警：模型处于 FP16 无法容纳的状态，循环正在静默失败。本课追踪 1,000 步滚动跳过率，在生产中会在比率超过 5% 时分页告警。
 
-**Clip threshold lives in the config.** `max_norm = 1.0` is the modern default for language-model training. Sweep it on a small model first; larger thresholds let the model recover from genuinely difficult batches; smaller thresholds bound the worst case at the cost of a noisier loss curve. The threshold belongs in the same YAML or JSON config as the schedule from lesson 44.
+**裁剪阈值放在配置中。** `max_norm = 1.0` 是语言模型训练的现代默认值。先在小模型上调整；更大的阈值让模型从真正困难的批次中恢复；更小的阈值以更嘈杂的损失曲线为代价限制最坏情况。阈值与第 44 课的调度器放在同一个 YAML 或 JSON 配置中。
 
-**Norm log goes to a CSV with the schedule.** The CSV columns are `step, lr, grad_l2_pre_clip, grad_l2_post_clip, loss, skipped, skip_reason, scaler_scale`. A reviewer who opens the file sees the schedule, the gradient story, the scaling factor, and the skip outcome (with its reason) in one row. Splitting the columns across files is a recipe for misaligned analyses.
+**范数日志写入与调度器相同的 CSV。** CSV 列是 `step, lr, grad_l2_pre_clip, grad_l2_post_clip, loss, skipped, skip_reason, scaler_scale`。打开文件的审查者在一行中看到调度器、梯度故事、缩放因子和跳过结果（及其原因）。将列拆分到不同文件是错位分析的秘诀。
 
-**`scaler.update()` runs every step, even on skip.** On a clean step the scaler reads its no-inf counter, increments it, and possibly doubles the factor. On a skipped step the scaler halves the factor and resets the counter. Forgetting `update()` on the skip path is the bug that produces "the scaling factor never changed."
+**`scaler.update()` 每步都运行，即使在跳过时。** 在干净步骤上，缩放器读取其无 inf 计数器，递增，可能将因子翻倍。在跳过的步骤上，缩放器将因子减半并重置计数器。在跳过路径上忘记 `update()` 是产生"缩放因子从未改变"的 bug。
 
-## Use It
+## 使用
 
-Production patterns:
+生产模式：
 
-- **Autocast device matches optimizer device.** `torch.amp.autocast(device_type="cuda")` for GPU training; `torch.amp.autocast(device_type="cpu")` for CPU. Mixing devices produces a silent type error that surfaces as a loss curve that looks fine but a model that is not learning.
-- **Loss check before backward.** `torch.isfinite(loss).all()` is one tensor reduction; the cost is negligible and the savings on a NaN loss are an entire training step. Always run it.
-- **`set_to_none=True` in `zero_grad`.** Sets gradients to `None` instead of zero, which lets the optimizer skip computation for unaffected parameter groups. The setting is a free throughput improvement and a slight bug-surface reduction.
+- **Autocast 设备与优化器设备匹配。** GPU 训练用 `torch.amp.autocast(device_type="cuda")`；CPU 训练用 `torch.amp.autocast(device_type="cpu")`。混合设备会产生静默的类型错误，表现为损失曲线看起来正常但模型没有在学习。
+- **反向传播前检查损失。** `torch.isfinite(loss).all()` 是一次张量归约；代价可以忽略不计，而 NaN 损失的节省是一个完整的训练步骤。始终运行它。
+- **`zero_grad` 中的 `set_to_none=True`。** 将梯度设置为 `None` 而非零，使优化器能够跳过不受影响参数组的计算。此设置是免费的吞吐量改进和轻微的 bug 表面减少。
 
-## Ship It
+## 交付
 
-`outputs/skill-clip-amp.md` would, on a real project, describe which clip threshold and autocast device the training step uses, where the per-step CSV lives in version control, and what the production skip-rate alert threshold is. This lesson ships the engine.
+`outputs/skill-clip-amp.md` 在实际项目中描述训练步骤使用的裁剪阈值和 autocast 设备、每步 CSV 在版本控制中的位置，以及生产跳过率告警阈值。本课交付引擎。
 
-## Exercises
+## 练习
 
-1. Replace the synthetic Inf injection with a real loss spike (multiply one batch's target by 1e8) and verify the skip path triggers.
-2. Add a `--bf16` mode that switches autocast to BF16 instead of FP16. BF16 has a wider exponent range than FP16 and rarely needs loss scaling; verify the skip rate drops to zero on the same demo.
-3. Add a unit test that the gradient-clip wrapper returns the pre-clip and post-clip norm correctly when no clipping occurs.
-4. Add a rolling-window skip-rate computation and a CLI flag that fails the run if the rate exceeds a configured threshold for 100 consecutive steps.
-5. Wire the loop to write the canonical CSV (`step, lr, grad_l2_pre_clip, grad_l2_post_clip, loss, skipped, skip_reason, scaler_scale`) and confirm the file survives a Ctrl-C by flushing after every row.
+1. 将合成 Inf 注入替换为真实损失峰值（将一个批次的目标乘以 1e8），验证跳过路径触发。
+2. 添加 `--bf16` 模式，将 autocast 切换为 BF16 而非 FP16。BF16 的指数范围比 FP16 更宽，很少需要损失缩放；验证在同一演示上跳过率降至零。
+3. 添加一个单元测试，验证梯度裁剪包装器在未发生裁剪时正确返回裁剪前和裁剪后的范数。
+4. 添加滚动窗口跳过率计算和一个 CLI 标志，在连续 100 步超过配置阈值时使运行失败。
+5. 将循环连接到写入规范 CSV（`step, lr, grad_l2_pre_clip, grad_l2_post_clip, loss, skipped, skip_reason, scaler_scale`），并确认文件在 Ctrl-C 时通过每行后刷新存活。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|------------------------|
-| Global L2 norm | "Clip target" | Euclidean norm of the concatenated gradient vector across all trainable parameters |
-| autocast | "Mixed precision" | Selective FP16 (or BF16) execution of eligible operations inside a `with` block |
-| GradScaler | "Loss scaler" | Helper that multiplies the loss before backward and inverse-scales gradients before the optimizer step |
-| Skip | "Bad step" | An optimizer step refused because the gradient or loss was non-finite; the scaler halves the factor |
-| Scaling factor | "Scaler state" | The GradScaler's current multiplier; doubles after clean stretches and halves on every skip |
+| 全局 L2 范数 | "裁剪目标" | 所有可训练参数拼接梯度向量的欧几里得范数 |
+| autocast | "混合精度" | 在 `with` 块内有选择地执行 FP16（或 BF16）合格操作 |
+| GradScaler | "损失缩放器" | 在反向传播前乘以损失并在优化器步骤前反向缩放梯度的辅助类 |
+| 跳过 | "坏步骤" | 因梯度或损失非有限而被拒绝的优化器步骤；缩放器将因子减半 |
+| 缩放因子 | "缩放器状态" | GradScaler 当前乘数；在干净连续段后翻倍，每次跳过时减半 |
 
-## Further Reading
+## 进一步阅读
 
-- [Micikevicius et al., Mixed Precision Training (arXiv 1710.03740)](https://arxiv.org/abs/1710.03740) - the original loss-scaling proposal
-- [Pascanu, Mikolov, Bengio, On the difficulty of training recurrent neural networks (arXiv 1211.5063)](https://arxiv.org/abs/1211.5063) - the gradient-clipping reference paper
-- [PyTorch torch.amp.GradScaler](https://docs.pytorch.org/docs/stable/amp.html) - the scaler API this lesson wraps
-- [PyTorch torch.nn.utils.clip_grad_norm_](https://docs.pytorch.org/docs/stable/generated/torch.nn.utils.clip_grad_norm_.html) - the clipping primitive this lesson uses
-- Phase 19 · 42 - the downloader whose corpus feeds the loop
-- Phase 19 · 43 - the dataloader the loop consumes
-- Phase 19 · 44 - the schedule this loop composes with
+- [Micikevicius 等，混合精度训练（arXiv 1710.03740）](https://arxiv.org/abs/1710.03740) —— 原始损失缩放提案
+- [Pascanu, Mikolov, Bengio，训练循环神经网络的难度（arXiv 1211.5063）](https://arxiv.org/abs/1211.5063) —— 梯度裁剪参考论文
+- [PyTorch torch.amp.GradScaler](https://docs.pytorch.org/docs/stable/amp.html) —— 本课包装的缩放器 API
+- [PyTorch torch.nn.utils.clip_grad_norm_](https://docs.pytorch.org/docs/stable/generated/torch.nn.utils.clip_grad_norm_.html) —— 本课使用的裁剪原语
+- 阶段 19 · 42 —— 下载器，其语料供给本循环
+- 阶段 19 · 43 —— 本循环消费的数据加载器
+- 阶段 19 · 44 —— 本循环组合的调度器

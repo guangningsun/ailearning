@@ -1,84 +1,84 @@
-# Distributed Data Parallel and FSDP from Scratch
+# 从零实现分布式数据并行与 FSDP
 
-> Multi-rank training is two collectives and one rule. Broadcast the parameters at startup, average the gradients after backward, never let the ranks disagree about what step they are on.
+> 多 rank 训练只需要两个集合操作和一条规则：启动时广播参数，反向后平均梯度，永远不让各个 rank 在处于哪一步上产生分歧。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 lessons 42 to 45
-**Time:** ~90 minutes
+**类型：** 建造
+**语言：** Python
+**前置条件：** 阶段 19 第 42 至 45 课
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Bring up a process group across N ranks with the `gloo` backend, no special hardware.
-- Implement a minimal DDP wrapper that broadcasts parameters at construction and all-reduces gradients after backward.
-- Prove that the all-reduce of per-rank gradients matches a single-process gradient on the concatenated input.
-- Sketch FSDP parameter sharding: each rank holds a slice, the full tensor is gathered for the forward pass and dropped after.
+- 在 N 个 rank 上用 `gloo` 后端启动进程组，无需特殊硬件。
+- 实现一个最小的 DDP 封装器，在构造时广播参数，在反向传播后对梯度做 all-reduce。
+- 证明每个 rank 梯度的 all-reduce 与拼接输入上单进程的梯度一致。
+- 勾勒 FSDP 参数分片：每个 rank 持有一片，前向传播时汇聚成完整张量，之后丢弃。
 
-## The Problem
+## 问题
 
-The model fits on one device. The dataset does not. The optimization budget says you want to see N times the examples per wallclock second. The first lever is data parallel: each rank runs the same model on a different slice of the batch, then averages gradients before the optimizer step. The second lever is FSDP: the model does not fit on one device either, so each rank holds a fraction of every parameter and reconstructs the full tensors layer by layer during the forward pass.
+模型能装进一个设备。数据集装不进。优化预算要求每秒墙上时间看到 N 倍的样本。第一层杠杆是数据并行：每个 rank 用不同的 batch 分片跑同一个模型，然后在优化器步骤前对梯度做平均。第二层杠杆是 FSDP：模型在一个设备里也装不下，所以每个 rank 持有每个参数的一部分，在前向传播过程中逐层重建完整张量。
 
-The pain is the bookkeeping. If parameters drift across ranks the run is silently corrupt. If you average gradients but not the loss the dashboard lies. If the collective backend cannot agree on a topology the run hangs forever. The fix is to write the collectives by hand once and never trust a wrapper you cannot reproduce.
+真正的痛苦在于记账。如果参数在各个 rank 之间漂移，运行结果就会悄悄损坏。如果对梯度做了平均但没有对损失做平均，仪表盘就在说谎。如果集合通信后端不能在拓扑上达成一致，运行就会永远挂起。解决办法是手动写一次集合通信，永远不要信任一个你无法复现的封装器。
 
-This lesson runs on CPU. CUDA is not assumed. The `gloo` backend ships with every PyTorch build and accepts `torch.multiprocessing` workers; the same code switches to `nccl` on a multi-GPU node without changing structure.
+本课在 CPU 上运行。不需要 CUDA。`gloo` 后端随每个 PyTorch 构建附带，支持 `torch.multiprocessing` 工作进程；同一份代码在多 GPU 节点上切到 `nccl` 无需改变结构。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart TB
-  init[rank 0 process] --> seed[seed model on rank 0]
-  init --> spawn[spawn ranks 1..N-1]
+  init[rank 0 进程] --> seed[在 rank 0 上生成种子模型]
+  init --> spawn[生成 rank 1..N-1]
   spawn --> pg[init_process_group: backend, world_size, master_addr, master_port]
-  pg --> bcast[broadcast model parameters from rank 0]
-  bcast --> loop[training loop per rank]
-  loop --> shard[each rank: own slice of the batch]
-  shard --> fwd[forward + backward locally]
-  fwd --> ar[all_reduce gradients, divide by world_size]
-  ar --> step[optimizer.step on every rank with the same gradient]
+  pg --> bcast[从 rank 0 广播模型参数]
+  bcast --> loop[每个 rank 的训练循环]
+  loop --> shard[每个 rank: 持有 batch 的一个分片]
+  shard --> fwd[本地前向 + 反向]
+  fwd --> ar[all_reduce 梯度，除以 world_size]
+  ar --> step[每个 rank 用相同梯度执行 optimizer.step]
   step --> loop
 ```
 
-### The two collectives that matter
+### 两个关键的集合操作
 
-| Collective | What it does | When |
+| 集合操作 | 功能 | 时机 |
 |------------|--------------|------|
-| `broadcast` | Copy a tensor from one rank to all others | Parameter init, scheduler state, any one-to-all sync |
-| `all_reduce` | Sum (or mean, or max) a tensor across all ranks, every rank gets the result | Gradient averaging after backward |
-| `all_gather` | Each rank contributes a tensor, every rank gets the concatenation | Logits collection, FSDP parameter unshard |
+| `broadcast` | 把一个张量从某个 rank 复制到所有其他 rank | 参数初始化、调度器状态、任何一对多同步 |
+| `all_reduce` | 在所有 rank 上对张量求和（或求平均，或求最大），每个 rank 获得相同结果 | 反向传播后对梯度做平均 |
+| `all_gather` | 每个 rank 提供一个张量，每个 rank 获得所有张量的拼接 | Logits 收集、FSDP 参数去分片 |
 
-The DDP contract is `broadcast` at construction and `all_reduce` after backward. The FSDP sketch adds `all_gather` before each layer's forward pass.
+DDP 契约是：构造时 `broadcast`，反向传播后 `all_reduce`。FSDP 草稿在此基础上增加了：每个层的前向传播前做 `all_gather`。
 
-### Gradient averaging matches single-process gradient
+### 梯度平均与单进程梯度等价
 
-A model trained on a batch of B examples across N ranks must produce the same gradient as a single process training on a batch of N*B. The trick is that summing per-rank gradients and dividing by N gives the average loss gradient, which is what cross entropy with mean reduction would produce on the full batch. The lesson code asserts this with `max-abs-diff < 1e-3` between the manual all-reduce gradient and the reference single-process gradient.
+一个模型在 N 个 rank 上用 B 个样本训练的批次，必须产生与单进程在 N*B 个样本批次上训练相同的梯度。技巧在于：把每个 rank 的梯度求和再除以 N，得到的是平均损失梯度——这正是交叉熵使用均值归约时在完整批次上产生的结果。课程代码用 `max-abs-diff < 1e-3` 来断言手动 all-reduce 的梯度与参考单进程梯度一致。
 
-### FSDP sketch
+### FSDP 草稿
 
 ```mermaid
 flowchart LR
-  param[full parameter] --> split[split into N equal flat shards]
-  split --> r0[rank 0 holds shard 0]
-  split --> r1[rank 1 holds shard 1]
-  split --> rN[rank N-1 holds shard N-1]
-  r0 --> gather[all_gather before forward]
+  param[完整参数] --> split[拆分成 N 个相等的扁平分片]
+  split --> r0[rank 0 持有分片 0]
+  split --> r1[rank 1 持有分片 1]
+  split --> rN[rank N-1 持有分片 N-1]
+  r0 --> gather[前向传播前 all_gather]
   r1 --> gather
   rN --> gather
-  gather --> full[full tensor on every rank]
-  full --> fwd[forward through this layer]
-  fwd --> drop[drop full tensor, keep only the shard]
+  gather --> full[每个 rank 上都有完整张量]
+  full --> fwd[该层前向传播]
+  fwd --> drop[丢弃完整张量，只保留分片]
 ```
 
-The memory win is exact: per-rank memory for parameters drops to 1/N. The cost is the gather, which is paid every forward pass. Production FSDP overlaps the gather with the previous layer's compute so the wallclock cost is much smaller than the naive accounting predicts. The lesson does the round-trip on every parameter and asserts the reconstruction is bit-equal to the original.
+内存节省是精确的：每个 rank 的参数量内存降到 1/N。代价是汇聚操作，每个前向传播都要支付一次。生产级 FSDP 将下一个层的去分片与当前层的计算重叠，所以墙上时间代价比简单计算要小得多。本课在每个参数上做完整往返，并断言重建结果与原始参数位相等。
 
-### CPU and the gloo backend
+### CPU 和 gloo 后端
 
-CUDA is the production target, but the same code paths exist on CPU. `gloo` is the CPU collective backend. It is slower than `nccl` on GPUs by orders of magnitude, but the API surface is identical. The lesson's process group is initialized with `backend="gloo"` and ranks are spawned with `torch.multiprocessing` rather than `torchrun`; both end up at the same `torch.distributed` calls. On a multi-GPU node, the only changes are `backend="nccl"`, device tensors, and `torchrun` to launch.
+CUDA 是生产目标，但同样的代码路径在 CPU 上也存在。`gloo` 是 CPU 的集合通信后端。它比 GPU 上的 `nccl` 慢几个数量级，但 API 表面完全相同。本课用 `backend="gloo"` 初始化进程组，用 `torch.multiprocessing` 生成 rank，而不是用 `torchrun`；两者最终都调用相同的 `torch.distributed` 接口。在多 GPU 节点上，唯一的变化是 `backend="nccl"`、设备张量，以及用 `torchrun` 启动。
 
-## Build It
+## 动手实现
 
-`code/main.py` is the runnable artifact.
+`code/main.py` 是可运行的产物。
 
-### Step 1: bring up the process group
+### 第 1 步：启动进程组
 
 ```python
 os.environ["MASTER_ADDR"] = "127.0.0.1"
@@ -86,13 +86,13 @@ os.environ["MASTER_PORT"] = str(port)
 dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
 ```
 
-`MASTER_ADDR` and `MASTER_PORT` are the rendezvous: every rank dials the same port on the same host. The lesson picks a free port via a bind-and-close trick to avoid collisions when several runs share a machine.
+`MASTER_ADDR` 和 `MASTER_PORT` 是会合点：每个 rank 都在同一台主机的同一端口上拨号连接。本课通过一个绑定后关闭的技巧来选取空闲端口，以避免多轮运行共享一台机器时发生冲突。
 
-### Step 2: broadcast at construction
+### 第 2 步：构造时广播
 
-`MinimalDDP.__init__` walks every parameter and buffer and calls `dist.broadcast(tensor, src=0)`. Rank 0's values become the canonical init. Without this, each rank initializes with its own seed and the ranks diverge from step one.
+`MinimalDDP.__init__` 遍历每个参数和缓冲区，调用 `dist.broadcast(tensor, src=0)`。Rank 0 的值成为规范初始化。没有这一步，每个 rank 用自己的种子初始化，从第一步开始各个 rank 就会分叉。
 
-### Step 3: all-reduce gradients after backward
+### 第 3 步：反向传播后 all-reduce 梯度
 
 ```python
 def all_reduce_grads_(module, world_size):
@@ -103,58 +103,58 @@ def all_reduce_grads_(module, world_size):
         p.grad.data.div_(world_size)
 ```
 
-Every rank ends up with the same averaged gradient. The optimizer step is now a function of the same input on every rank, which is why the parameters stay in sync across the run.
+每个 rank 最终持有相同的平均梯度。优化器步骤现在在每个 rank 上都是相同输入的函数，这就是参数在整个运行过程中保持同步的原因。
 
-### Step 4: prove the equivalence
+### 第 4 步：证明等价性
 
-`manual_all_reduce_matches_single_process` builds the same model on rank 0 and compares the post-all-reduce gradient against the gradient a single process would compute on the concatenated input. The max-abs-diff is around 1e-8.
+`manual_all_reduce_matches_single_process` 在 rank 0 上构建相同模型，并将 all-reduce 后的梯度与单进程在拼接输入上计算的梯度进行比较。最大绝对差约为 1e-8。
 
-### Step 5: FSDP round trip
+### 第 5 步：FSDP 往返
 
-`fsdp_round_trip_sketch` flattens each parameter, pads to a multiple of `world_size`, slices, all-gathers, and unpads. Every rank's reconstruction equals the original. This is the unshard step; the inverse (re-shard after the forward) is one slice off the gathered tensor.
+`fsdp_round_trip_sketch` 将每个参数展平，补齐到 `world_size` 的倍数，切片，all-gather，然后去除填充。每个 rank 的重建结果与原始值相等。这是去分片步骤；逆过程（反向传播后重新分片）是从汇聚张量中取一个切片。
 
-Run it:
+运行：
 
 ```bash
 python3 code/main.py
 ```
 
-Default world size is 2. Two CPU processes spawn, talk to each other through `gloo`, and exit zero. The output `outputs/ddp-demo.json` captures parameter sums per rank, the gradient norm after all-reduce, the FSDP round-trip result, and the manual-vs-reference gradient diff.
+默认 world size 为 2。两个 CPU 进程生成，通过 `gloo` 互相通信，然后以退出码 0 退出。输出 `outputs/ddp-demo.json` 捕获每个 rank 的参数和、all-reduce 后的梯度范数、FSDP 往返结果，以及手动与参考梯度之间的差异。
 
-## Use It
+## 实际使用
 
-Production training stacks call the same primitives. PyTorch's `DistributedDataParallel` adds: post-backward gradient hooks that overlap all-reduce with backward, bucketed all-reduce that combines several small gradients into one collective, and the `no_sync` context lesson 46 used.
+生产训练堆栈调用相同的原语。PyTorch 的 `DistributedDataParallel` 额外提供：与反向传播重叠的 post-backward 梯度钩子、将多个小梯度合并为一个集合操作的 bucketed all-reduce，以及第 46 课使用的 `no_sync` 上下文。
 
-PyTorch's FSDP adds: a flat parameter view per layer so each rank holds one contiguous buffer, overlap of the next layer's unshard with the current layer's compute, and optional CPU offload for the shards.
+PyTorch 的 FSDP 额外提供：每个层一个扁平参数视图，使每个 rank 持有一段连续缓冲区，下一层的去分片与当前层的计算重叠，以及可选的 CPU 卸载分片。
 
-The shape stays the same: broadcast at startup, reduce after backward, shard parameters when they no longer fit.
+形状保持不变：启动时广播，反向传播后归约，参数装不下时分片。
 
-## Ship It
+## 交付物
 
-`outputs/skill-distributed-fsdp-ddp.md` carries the recipe for a new training script: spin up the process group with `gloo` for CPU and `nccl` for GPU, wrap the model in a DDP shell that broadcasts at construction and reduces after backward, optionally shard parameters with the all_gather pattern from the FSDP sketch.
+`outputs/skill-distributed-fsdp-ddp.md` 携带新训练脚本的配方：用 `gloo` 启动 CPU 进程组、用 `nccl` 启动 GPU 进程组，用 DDP 外壳封装模型（在构造时广播，在反向传播后归约），可选地使用 FSDP 草稿中的 all_gather 模式对参数进行分片。
 
-## Exercises
+## 练习
 
-1. Run with `--world-size 4` and confirm the param spread stays under 1e-3 across the run.
-2. Replace the manual averaging with `dist.all_reduce(op=dist.ReduceOp.AVG)` and time the difference.
-3. Add a post-backward hook to the DDP wrapper so the all-reduce overlaps with the rest of the backward; measure the wallclock improvement.
-4. Implement the FSDP re-shard step: after the forward pass, replace the full tensor with the local shard again. Confirm per-rank memory drops.
-5. Switch the backend to `nccl` on a CUDA box. Note which environment variables change and which stay the same.
+1. 用 `--world-size 4` 运行，确认参数分散在整个运行过程中保持在 1e-3 以下。
+2. 将手动平均替换为 `dist.all_reduce(op=dist.ReduceOp.AVG)` 并计时比较差异。
+3. 给 DDP 封装器添加 post-backward 钩子，使 all-reduce 与反向传播的其余部分重叠；测量墙上时间的改进。
+4. 实现 FSDP 重新分片步骤：在前向传播后，用本地分片替换完整张量。确认每个 rank 的内存下降。
+5. 在 CUDA 机器上把后端切换到 `nccl`。注意哪些环境变量会改变，哪些保持不变。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|------------------------|
-| Backend | "gloo or nccl" | The library that implements the collective ops; gloo is CPU, nccl is GPU |
-| World size | "Total ranks" | Number of processes in the group; the group is the unit collectives operate on |
-| Rank | "Worker id" | Process identifier within the group, zero indexed |
-| All-reduce | "Sum the grads" | Sum a tensor across all ranks, every rank ends with the same result |
-| Unshard | "Gather the params" | Reconstruct the full tensor from per-rank slices via all_gather |
+| 后端 | "gloo 或 nccl" | 实现集合操作的库；gloo 用于 CPU，nccl 用于 GPU |
+| World size | "总 rank 数" | 组中的进程数；组是集合操作的作用单元 |
+| Rank | "工作进程 ID" | 组内的进程标识符，从零开始索引 |
+| All-reduce | "对梯度求和" | 在所有 rank 上对张量求和，每个 rank 最终持有相同结果 |
+| Unshard | "汇聚参数" | 通过 all_gather 从每个 rank 的分片重建完整张量 |
 
-## Further Reading
+## 延伸阅读
 
-- PyTorch `torch.distributed` documentation for the collective semantics this lesson relies on.
-- The `gloo` library's collective list, identical in shape to the CUDA-backed `nccl` primitives.
-- Phase 19 lesson 46 for the gradient accumulation pattern that wraps the DDP all-reduce in `no_sync`.
-- Phase 19 lesson 47 for the checkpoint layout that survives DDP and FSDP runs.
-- PyTorch FSDP documentation for the production implementation of the parameter sharding sketched here.
+- PyTorch `torch.distributed` 文档，介绍本课所依赖的集合操作语义。
+- `gloo` 库的集合操作列表，与 CUDA 支持的 `nccl` 原语形状相同。
+- 阶段 19 第 46 课，介绍梯度累积模式，该模式将 DDP all-reduce 包装在 `no_sync` 中。
+- 阶段 19 第 47 课，介绍能在 DDP 和 FSDP 运行中存活的检查点布局。
+- PyTorch FSDP 文档，介绍本课所勾勒的参数分片的生产级实现。

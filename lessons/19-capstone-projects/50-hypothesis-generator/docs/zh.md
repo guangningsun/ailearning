@@ -1,77 +1,78 @@
-# Hypothesis Generator
+# 假设生成器
 
-> A research agent that asks the same question twice is wasting tokens. The trick is forcing each draft to land somewhere new.
+> 一个问同样问题两次的研究智能体就是在浪费 token。诀窍是迫使每份草稿落在某个新地方。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track A lessons 20-29
-**Time:** ~90 minutes
+**类型：** 建造
+**语言：** Python
+**前置条件：** 阶段 19 A 轨道第 20-29 课
+**时间：** 约 90 分钟
 
-## Learning Objectives
-- Drive a sampler from a seed prompt and turn its outputs into typed hypothesis records.
-- Ramp the sampler temperature on each pass so the next draft drifts further from the last.
-- Filter near duplicates with a small embedding model and a cosine distance threshold.
-- Rank the survivors with a scoring function that blends novelty, specificity, and testability.
-- Hold every step deterministic so the same seed always produces the same queue.
+## 学习目标
 
-## Why generate, then filter
+- 从种子提示词驱动采样器，并将其输出转换为类型化的假设记录。
+- 在每轮 pass 中提升采样器温度，使下一份草稿与上一份偏离得更远。
+- 用小型 embedding 模型和余弦距离阈值过滤近似重复。
+- 用融合新颖性、特异性和可测试性的评分函数对幸存者排序。
+- 保持每一步确定性，使相同的种子总是产生相同的队列。
 
-A planner that asks one model one time gets one hypothesis. That is fine for a worked example. For a research loop it is the wrong shape. The loop wants a ranked queue with depth, so when the first hypothesis fails the runner has the next one ready without paying for another full sampling pass.
+## 为什么要先生成再过滤
 
-Two ideas combine to produce that queue. The first is temperature ramping: each pass through the sampler raises the temperature a notch, so later drafts are encouraged to wander. The second is novelty filtering: after each draft, the generator measures the embedding distance from every prior survivor and rejects anything inside the cluster.
+一个规划器问一次模型一个问题得到一个假设。这对一个工的例子来说是够的。对于一个研究循环来说形状就错了。循环想要一个有深度的排序队列，这样当第一个假设失败时，运行器已经有下一个准备好了，而不必为另一轮完整采样付费。
 
-The lesson ships a mock language model that returns scripted token sequences for fixed prompts. The mock is enough to exercise the full path: seed prompt in, temperature ramp applied, candidates parsed, novelty filter run, ranked queue out.
+两个想法结合产生这个队列。第一个是温度 ramping：每次通过采样器都提升一档温度，这样后面的草稿被鼓励去漫游。第二个是新奇性过滤：每份草稿之后，生成器测量与每个先前幸存者的 embedding 距离，拒绝簇内的任何内容。
 
-## The Hypothesis shape
+本课交付一个模拟语言模型，对固定 prompt 返回脚本化的 token 序列。这足以走通完整路径：种子 prompt 输入，应用温度 ramp，解析候选者，运行新奇性过滤，排序队列输出。
+
+## 假设的形状
 
 ```text
 Hypothesis
-  id             : int           (monotonic within a run)
-  text           : str           (the claim)
-  variables      : list[str]     (what changes between conditions)
-  metric         : str           (what the runner will measure)
-  baseline_ref   : str | None    (which paper or run the comparison cites)
-  draft_pass     : int           (which sampler pass produced this)
-  temperature    : float         (the sampler setting at draft time)
-  novelty_score  : float         (distance from prior survivors, 0..1)
-  rank_score     : float         (weighted sum used for ordering)
+  id             : int           (运行内单调递增)
+  text           : str           (主张内容)
+  variables      : list[str]     (条件间变化的内容)
+  metric         : str           (运行器将要测量的内容)
+  baseline_ref   : str | None    (比较所引用的论文或运行)
+  draft_pass     : int           (哪一轮采样产生了这个)
+  temperature    : float         (草稿时的采样器设置)
+  novelty_score  : float         (与先前幸存者的距离，0..1)
+  rank_score     : float         (用于排序的加权总和)
 ```
 
-`variables` and `metric` are not free text. The parser pulls them from a tagged response. The runner in lesson fifty-two reads these fields directly when it builds the experiment config.
+`variables` 和 `metric` 不是自由文本。解析器从带标签的响应中提取它们。第 52 课的运行器在构建实验配置时直接读取这些字段。
 
-`baseline_ref` is optional but recommended. The evaluator in lesson fifty-three needs a baseline to compare against. If the hypothesis omits one, the evaluator falls back to the previous run on the same metric.
+`baseline_ref` 是可选的但建议填写。第 53 课的评估器需要一个基线来比较。如果假设省略了，评估器会回退到同一指标上的上一次运行。
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart TD
-    A[seed prompt] --> B[temperature ramp]
-    B --> C[mock language model draft]
-    C --> D[parse tagged response]
-    D --> E{novelty filter}
-    E -- duplicate --> F[discard]
-    E -- novel --> G[append to survivors]
-    G --> H{pass budget hit}
-    H -- no --> B
-    H -- yes --> I[rank survivors]
-    I --> J[hypothesis queue]
+    A[种子提示词] --> B[温度 ramp]
+    B --> C[模拟语言模型草稿]
+    C --> D[解析带标签的响应]
+    D --> E{新奇性过滤器}
+    E -- 重复 --> F[丢弃]
+    E -- 新颖 --> G[追加到幸存者]
+    G --> H{轮次预算用完？}
+    H -- 否 --> B
+    H -- 是 --> I[对幸存者排序]
+    I --> J[假设队列]
 ```
 
-The loop is straight forward. The interesting part is each box has a hard contract.
+循环是直来直去的。有趣的是每个框都有一个硬契约。
 
-## Temperature ramp
+## 温度 ramp
 
-Start at `t_min`, end at `t_max`, step `(t_max - t_min) / (n_passes - 1)`. Each pass calls the sampler at the current temperature, producing `n_passes` evenly spaced values from `GeneratorConfig.schedule()`. The mock model honors temperature by switching between a small set of scripted responses keyed on `(prompt, temp_bucket)`. The buckets are open intervals so a small change in temperature picks a different bucket and produces a different draft. In production the sampler would be a real model with `temperature=t` passed through.
+从 `t_min` 开始，到 `t_max` 结束，步长为 `(t_max - t_min) / (n_passes - 1)`。每轮 pass 以当前温度调用采样器，产生从 `GeneratorConfig.schedule()` 中均匀分布的 `n_passes` 个值。模拟模型通过在 `(prompt, temp_bucket)` 上切换一组小的脚本化响应来遵守温度。桶是开放区间，所以温度的小变化会选择不同的桶并产生不同的草稿。在生产中，采样器将是一个真正的模型，`temperature=t` 通过传入。
 
-The default schedule is six passes from `0.2` to `1.2`. Six is enough to fill the queue without paying for samples that the novelty filter will reject anyway. Below `0.2` the model parrots the seed back. Above `1.2` the responses tend to drift off topic and fail the parser.
+默认 schedule 是六轮从 `0.2` 到 `1.2`。六轮足够填满队列，而不必为那些新奇性过滤器本来就会拒绝的样本付费。低于 `0.2` 模型会鹦鹉学舌般地重复种子。高于 `1.2` 响应往往会跑题并通过了解析器。
 
-## Novelty filter
+## 新奇性过滤器
 
-After each draft is parsed, the generator embeds the text and compares against every accepted hypothesis. The embedding is a small hashed bag of word tokens, normalised to unit length. Cosine distance between two unit vectors is `1 - dot(a, b)`. A draft passes if its minimum distance to any prior survivor is above `novelty_threshold`. Default is `0.25`.
+每份草稿被解析后，生成器 embedding 文本并与每个已接受的假设进行比较。embedding 是一个小型词汇袋哈希，归一化到单位长度。两个单位向量之间的余弦距离是 `1 - dot(a, b)`。如果一份草稿与任何先前幸存者的最小距离高于 `novelty_threshold`，它就通过。默认是 `0.25`。
 
-The hashed embedding is not fancy. It is deterministic, has zero dependencies, and is enough to catch the obvious case: two drafts that share most of their nouns. A production deployment would swap in a small sentence model. The interface stays the same.
+哈希 embedding 不花哨。它是确定性的，零依赖，足以捕捉明显的情况：两份共享大部分名词的草稿。生产部署会换成小型句子模型。接口保持不变。
 
-## Rank score
+## 排序分数
 
 ```text
 rank_score = w_novelty * novelty_score
@@ -79,11 +80,11 @@ rank_score = w_novelty * novelty_score
            + w_testability * testability_score
 ```
 
-Three sub scores. `novelty_score` is the minimum embedding distance from prior survivors. `specificity_score` is the count of concrete variables in the hypothesis divided by a target count. `testability_score` is one if the hypothesis specifies both a metric and a baseline, half if it only has a metric, zero otherwise.
+三个子分数。`novelty_score` 是与先前幸存者的最小 embedding 距离。`specificity_score` 是假设中具体变量的数量除以目标数量。`testability_score` 是：如果假设同时指定了指标和基线则为 1，只指定了指标则为 0.5，否则为 0。
 
-Default weights are `0.4`, `0.3`, `0.3`. The weights live in the generator config so a downstream lesson can shift them without forking the code.
+默认权重是 `0.4`、`0.3`、`0.3`。权重存在于生成器配置中，这样下游课程可以移动它们而无需 fork 代码。
 
-## Mock language model
+## 模拟语言模型
 
 ```python
 class MockLLM:
@@ -91,22 +92,32 @@ class MockLLM:
         ...
 ```
 
-The sampler is deterministic given a `(prompt, temperature, seed)` triple. The mock keeps a scripted response table keyed on `(prompt_signature, temperature_bucket)`. If the table has no entry for a key, the sampler returns a fallback that fails the parser. The fallback path is exercised by one of the tests.
+给定 `(prompt, temperature, seed)` 三元组，采样器是确定性的。模拟模型维护一个脚本化响应表，以 `(prompt_signature, temperature_bucket)` 为键。如果表中没有条目的键，采样器返回一个解析器会拒绝的回退。回退路径由其中一个测试覆盖。
 
-The seed is mixed into the response so the same `(prompt, temperature)` pair with different seeds produces different drafts. In tests we pin the seed to keep results reproducible. In a real deployment the seed would come from a system clock or a counter.
+种子被混入响应中，所以相同的 `(prompt, temperature)` 对配合不同的种子会产生不同的草稿。在测试中我们固定种子以保持结果可复现。在真实部署中，种子将来自系统时钟或计数器。
 
-## Output queue
+## 输出队列
 
-The output is a list of `Hypothesis` records sorted by `rank_score` descending. The runner in lesson fifty-two pops the head, runs the experiment, and the evaluator in lesson fifty-three writes a verdict back. If the verdict says the hypothesis was wrong, the runner pops the next one.
+输出是一个按 `rank_score` 降序排列的 `Hypothesis` 记录列表。第 52 课的运行器弹出队头，运行实验，第 53 课的评估器写回一个裁决。如果裁决说假设是错的，运行器弹出下一个。
 
-The queue is finite. When it is empty the orchestrator can either widen the seed prompt and run the generator again or stop and report the budget exhausted.
+队列是有限的。当它为空时，编排器可以扩大种子提示词再次运行生成器，或者停止并报告预算耗尽。
 
-## How to read the code
+## 如何阅读代码
 
-`code/main.py` defines `Hypothesis`, `MockLLM`, `HypothesisGenerator`, and a deterministic demo. The generator exposes a single `run(seed_prompt)` method that returns a sorted queue; the pass count is read from `GeneratorConfig.n_passes` rather than passed as an argument. The embedding is a hashed bag of tokens. The novelty filter is a single function. The rank score is a single function. Nothing depends on `numpy`; the embedding math is pure stdlib so the lesson stays portable.
+`code/main.py` 定义了 `Hypothesis`、`MockLLM`、`HypothesisGenerator` 和一个确定性演示。生成器暴露一个返回排序队列的单一 `run(seed_prompt)` 方法；pass 数从 `GeneratorConfig.n_passes` 读取而不是作为参数传入。embedding 是词汇袋哈希。新奇性过滤器是一个单一函数。排序分数是一个单一函数。没有依赖 `numpy`；embedding 数学是纯标准库，所以本课保持可移植。
 
-`code/tests/test_generator.py` covers the linear path, the duplicate rejection path, the parser failure path, the temperature ramp boundaries, and the rank ordering.
+`code/tests/test_generator.py` 覆盖线性路径、重复拒绝路径、解析器失败路径、温度 ramp 边界和排序顺序。
 
-## Where this slots in
+## 这在哪儿接入
 
-Lesson fifty produces the queue. Lesson fifty-one takes the head of the queue and runs a literature search to confirm or refute it. Lesson fifty-two takes the same head and runs an actual experiment. Lesson fifty-three reads both outputs and writes a verdict. The four lessons compose into a research loop with no human in it; a human can step in at any boundary.
+第 50 课产生队列。第 51 课取队头运行文献搜索以确认或反驳。第 52 课取同一个队头运行一个真实的实验。第 53 课读取两个输出并写下裁决。四课组合成一个没有人类参与的研究循环；人类可以在任何边界介入。
+
+## 关键术语
+
+| 术语 | 大家怎么说的 | 实际含义 |
+|------|-----------------|------------------------|
+| 温度 ramp | "让采样更狂野" | 每轮 pass 提升温度，使后面的草稿与前面的偏离更远 |
+| 新奇性过滤 | "去掉相似的" | 用 embedding 距离过滤掉与已有假设太接近的草稿 |
+| 排序分数 | "最好假设排前面" | 新颖性、特异性和可测试性的加权总和，用于排序 |
+| 模拟 LLM | "假的但可测试" | 对固定 prompt 返回脚本化响应的采样器，用于测试全路径 |
+| 假设队列 | "待验证的列表" | 按排序分数降序排列的 Hypothesis 列表，等待运行器消费 |

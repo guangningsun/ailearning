@@ -1,68 +1,69 @@
-# Literature Retrieval
+# 文献检索
 
-> A hypothesis is cheap. Knowing whether someone already proved it is the expensive part. Build the retrieval layer that answers that question before the runner spins up a sandbox.
+> 假设很廉价。知道是否已经有人证明了它，才是昂贵的地方。在运行器启动沙箱之前，先构建能回答这个问题的检索层。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track A lessons 20-29
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python
+**前置条件：** 阶段 19 Track A 课程 20-29
+**时间：** 约 90 分钟
 
-## Learning Objectives
-- Model a small paper record with the fields the loop will read downstream.
-- Build a BM25 index over abstracts with stdlib data structures only.
-- Walk a citation graph to surface papers the lexical search missed.
-- Deduplicate hits across the lexical and graph passes by stable paper id.
-- Wrap two mock external APIs behind a single client so the upstream call site stays the same when real endpoints land.
+## 学习目标
 
-## Why two retrieval passes
+- 用循环下游会读取的字段建模一个小论文记录。
+- 仅用 stdlib 数据结构在摘要上构建 BM25 索引。
+- 遍历引用图，找出词汇搜索漏掉的论文。
+- 通过稳定的论文 id 对词汇和图遍历命中的结果去重。
+- 把两个模拟外部 API 封装在单个客户端后面，这样当真实端点上线路时，上游调用点保持不变。
 
-A keyword search over abstracts returns papers that share vocabulary with the query. That covers most of the surface. It misses two cases. The first is when the foundational paper uses different vocabulary; for example a query for "sparse attention" misses a paper titled "block selection in transformer routing." The second is when the relevant paper is a follow up that cites a known anchor; it is more efficient to find the anchor and walk forward than to brute force the abstract pool.
+## 为什么要两次检索
 
-The lesson builds both passes. BM25 over abstracts catches the lexical hits. A citation graph traversal expands a seed set forward and backward by one or two hops. The union is deduplicated by paper id and ranked by a small combined score.
+对摘要的关键字搜索返回与查询共享词汇的论文。这覆盖了大部分表面情况。它会漏掉两种情况。第一种是奠基性论文使用了不同词汇；例如查询"稀疏注意力"会漏掉一篇名为"变换器路由中的块选择"的论文。第二种是相关论文是一篇引用已知锚点的后续论文；找到锚点然后向前查找比暴力扫描摘要库更高效。
 
-## The Paper shape
+本课程构建两次检索。摘要上的 BM25 捕获词汇命中。引用图遍历将种子集合向前和向后扩展一到两跳。通过论文 id 对结果进行并集去重，再按小组合分数排序。
+
+## Paper 的形状
 
 ```text
 Paper
-  id          : str           (stable identifier, "p001" for the mock corpus)
+  id          : str           (稳定标识符，"p001" 用于模拟语料库)
   title       : str
   abstract    : str
   year        : int
   authors     : list[str]
-  references  : list[str]     (paper ids this paper cites)
-  citations   : list[str]     (paper ids that cite this paper)
-  source      : str           (which mock api supplied it, "arxiv" or "s2")
+  references  : list[str]     (本论文引用的论文 id)
+  citations   : list[str]     (引用本论文的论文 id)
+  source      : str           (哪个模拟 API 提供的，"arxiv" 或 "s2")
 ```
 
-The references and citations fields form the directed citation graph. The two mock APIs return overlapping but not identical fields, so the corpus loader unions them on `id`.
+references 和 citations 字段形成有向引用图。两个模拟 API 返回有重叠但不相同的字段，因此语料库加载器按 `id` 进行合并。
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart TD
-    Q[query string] --> A[arxiv mock client]
-    Q --> S[semantic scholar mock client]
-    A --> L[load corpus]
+    Q[查询字符串] --> A[arxiv 模拟客户端]
+    Q --> S[语义学者模拟客户端]
+    A --> L[加载语料库]
     S --> L
-    L --> B[bm25 index]
-    L --> G[citation graph]
+    L --> B[BM25 索引]
+    L --> G[引用图]
     Q --> B
-    B --> R1[lexical hits]
-    R1 --> H[expand hops 1 to 2]
+    B --> R1[词汇命中]
+    R1 --> H[扩展跳数 1 到 2]
     G --> H
-    H --> R2[graph hits]
-    R1 --> M[merge and dedup]
+    H --> R2[图命中]
+    R1 --> M[合并与去重]
     R2 --> M
-    M --> O[ranked paper list]
+    M --> O[排序后的论文列表]
 ```
 
-The retrieval client owns both passes and the merge. The caller hands it a query and gets back a ranked list where each entry carries per paper score fields (`bm25_score`, `graph_distance`, `recency_score`, `final_score`) that explain the ranking.
+检索客户端拥有两次检索和合并逻辑。调用方传入查询，返回排序后的列表，每个条目都带有每篇论文的分数字段（`bm25_score`、`graph_distance`、`recency_score`、`final_score`）来解释排序。
 
-## BM25 from scratch
+## 从零实现 BM25
 
-The implementation is the standard Okapi BM25 with default parameters `k1=1.5`, `b=0.75`. The index is two dictionaries: `term -> doc_frequency` and `term -> list of (doc_id, term_count)`. The document length is the token count of the abstract. The average document length is computed once at index build time. Scoring a query is a sum over query terms of `idf * tf_norm` where `tf_norm` is the standard BM25 length normalised term frequency.
+实现是标准 Okapi BM25，默认参数 `k1=1.5`、`b=0.75`。索引是两个字典：`term -> doc_frequency` 和 `term -> list of (doc_id, term_count)`。文档长度是摘要的 token 计数。平均文档长度在索引构建时计算一次。查询评分是 `idf * tf_norm` 对查询词的求和，其中 `tf_norm` 是标准 BM25 长度归一化的词频。
 
-The tokeniser is `lower` then split on non alphanumeric. It is not stemmed. A production system would swap in a small stemmer. The interface stays the same.
+分词器是先 `lower` 然后按非字母数字分割。不进行词干提取。生产系统会换用小型词干提取器。接口保持不变。
 
 ```text
 idf(t)      = log((N - df + 0.5) / (df + 0.5) + 1.0)
@@ -70,15 +71,15 @@ tf_norm(t)  = (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
 score(d, q) = sum over t in q of idf(t) * tf_norm(t)
 ```
 
-## Citation graph traversal
+## 引用图遍历
 
-The graph is built once from the corpus. Forward edges go from a paper to its references. Backward edges go from a paper to its citations. The traversal is a breadth first search seeded by the top BM25 hits, capped at two hops.
+图从语料库构建一次。前向边从论文指向它的引用。后向边从论文指向它的被引用。遍历是从顶部 BM25 命中开始的广度优先搜索，限制在两跳以内。
 
-Two hops is a deliberate ceiling. One hop is too shallow; the agent often wants the immediate ancestor or descendant. Three hops blows up the result size on a connected graph and tends to drift off topic. The lesson exposes the hop limit as a config knob so a downstream loop can tighten it.
+两跳是刻意设定的上限。一跳太浅；智能体通常想要最近的祖先或后代。三跳在连通图上会爆炸式增长结果大小，而且容易偏离主题。本课程将跳数限制暴露为一个配置旋钮，这样下游循环可以收紧它。
 
-## Dedup and ranking
+## 去重与排序
 
-The two passes return overlapping sets. The merge keys on paper id. For each paper the final score is a weighted blend.
+两次检索返回有重叠的集合。合并按论文 id 作为键。对每篇论文，最终分数是加权混合。
 
 ```text
 final_score = w_bm25 * bm25_score_norm
@@ -86,28 +87,28 @@ final_score = w_bm25 * bm25_score_norm
             + w_recency * recency_score
 ```
 
-`bm25_score_norm` is the BM25 score divided by the maximum BM25 score in the merged set (so the field lives in zero to one). `graph_score` is one for direct lexical hits, then `0.6` for one hop, `0.3` for two hops, zero otherwise. `recency_score` is a linear ramp from zero at the corpus minimum year to one at the maximum.
+`bm25_score_norm` 是 BM25 分数除以合并集合中的最大 BM25 分数（这样字段在零到一之间）。`graph_score` 直接词汇命中为一，然后一跳 `0.6`，两跳 `0.3`，否则为零。`recency_score` 是从语料库最小年份的零到最大年份的一的线性递增。
 
-Default weights are `0.5`, `0.3`, `0.2`. The weights are config; a stale topic might tune recency down while a fast moving topic raises it.
+默认权重是 `0.5`、`0.3`、`0.2`。权重可配置；过时主题可能调低新鲜度，而快速变化的主题会调高它。
 
-## Mock corpus
+## 模拟语料库
 
-The corpus is one hundred papers, generated by `build_corpus()`. Each paper has a hand written title and abstract on one of five topics: attention sparsity, retrieval augmentation, low rank adapters, dataset distillation, and evaluation harnesses. References and citations are wired so each topic forms a connected sub graph with a few cross topic edges.
+语料库是一百篇论文，由 `build_corpus()` 生成。每篇论文在一组五个主题上有一段手写的标题和摘要：注意力稀疏性、检索增强、低秩适配器、数据集蒸馏和评估工具。引用和被引用是连接好的，这样每个主题形成一个连通的子图，只有少量跨主题边。
 
-The two mock API clients (`ArxivMockClient`, `SemanticScholarMockClient`) read from the same corpus but expose different fields. Arxiv returns title, abstract, year, authors. Semantic Scholar adds references and citations. The retrieval client unions on id; cross client field disagreement handling is deferred to a follow up lesson.
+两个模拟 API 客户端（`ArxivMockClient`、`SemanticScholarMockClient`）从同一个语料库读取，但暴露不同的字段。Arxiv 返回标题、摘要、年份、作者。语义学者额外提供引用和被引用。检索客户端按 id 合并；跨客户端字段分歧处理留到后续课程。
 
-## What lessons 52 and 53 read
+## 课程 52 和 53 读取什么
 
-The runner in lesson fifty-two reads `paper.id`, `paper.title`, and the top three sentences of the abstract as context for the experiment. The evaluator in lesson fifty-three reads `paper.year` and `paper.references` to attribute a baseline to a specific paper.
+第五十二课的运行器读取 `paper.id`、`paper.title` 和摘要的前三句作为实验上下文。第五十三课的评估器读取 `paper.year` 和 `paper.references` 来将基线归因于特定论文。
 
-The retrieval client returns a `RetrievalResult` with both the ranked list and the per query metrics: hit count, average score, top score, total wall time. The runner logs these so a downstream observability pass can plot quality over time.
+检索客户端返回 `RetrievalResult`，包含排序列表和按查询的指标：命中数、平均分数、最高分数、总耗时。运行器记录这些，这样下游可观测性可以通过时间绘制质量图。
 
-## How to read the code
+## 如何阅读代码
 
-`code/main.py` defines `Paper`, `ArxivMockClient`, `SemanticScholarMockClient`, `BM25Index`, `CitationGraph`, `RetrievalClient`, and a deterministic demo. The mock clients and the corpus are in the same file so the lesson stays portable. The BM25 implementation is one class, sixty lines. The graph traversal is one method.
+`code/main.py` 定义了 `Paper`、`ArxivMockClient`、`SemanticScholarMockClient`、`BM25Index`、`CitationGraph`、`RetrievalClient` 和一个确定性演示。模拟客户端和语料库在同一个文件中，这样课程保持可移植。BM25 实现是一个类，六十行代码。图遍历是一个方法。
 
-`code/tests/test_retrieval.py` covers the lexical path, the graph path, the merge, the dedup, and the empty query.
+`code/tests/test_retrieval.py` 覆盖了词汇路径、图路径、合并、去重和空查询。
 
-## Where this slots in
+## 这放在哪里
 
-Lesson fifty produces a hypothesis. Lesson fifty-one searches the literature to see whether that hypothesis is already settled. Lesson fifty-two runs the experiment if it is not. Lesson fifty-three reads both the retrieval result and the experiment metrics to write the verdict. The retrieval client is the cheapest of the four stages and runs first in the orchestrator.
+第五十课产生假设。第五十一课搜索文献，看假设是否已经解决。第五十二课如果没有解决就运行实验。第五十三课读取检索结果和实验指标来写出裁决。检索客户端是四个阶段中最便宜的，而且首先在编排器中运行。

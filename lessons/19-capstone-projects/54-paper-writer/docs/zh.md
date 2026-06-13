@@ -1,108 +1,108 @@
-# Paper Writer
+# 论文写作器
 
-> A LaTeX skeleton is a contract between the researcher and the typesetter. If the contract is broken the document does not compile, and the failure is loud. Build the skeleton first, then fill it.
+> LaTeX 骨架是研究者和排版系统之间的一份契约。一旦契约被打破，文档无法编译，失败会大声响起。先搭骨架，再填内容。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 lessons 50-53
-**Time:** ~90 minutes
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 第 50-53 节
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Treat a research paper as a structured artifact with a known section graph, not a freeform document.
-- Generate a LaTeX skeleton that declares its abstract, sections, figure slots, and bibliography keys before any prose is written.
-- Inject figures from experiment outputs (paths and captions) into the skeleton through a deterministic slot mechanism.
-- Wire a mocked prose generator that fills each section from a structured outline so the harness is testable without a model.
-- Emit a single `paper.tex` plus a `references.bib` plus a manifest that lists every figure referenced and every citation used.
+- 将研究论文视为一种结构化制品，具有已知的小节图，而非自由格式文档。
+- 生成一个 LaTeX 骨架，在任何正文之前声明其摘要、各小节、图表槽位和参考文献键。
+- 通过确定性槽位机制，将实验输出（路径和标题）注入到骨架中。
+- 连接一个模拟正文生成器，从结构化大纲填充每个小节，使测试框架可以在不调用模型的情况下进行测试。
+- 输出一个 `paper.tex` 加上 `references.bib` 加上一个清单，列出每个引用的图表和每条引用的参考文献。
 
-## Why a skeleton first
+## 为什么先搭骨架
 
-A draft that starts as prose accumulates structural debt. The introduction grows three paragraphs that should be in related work. A figure gets referenced before it is defined. The bibliography ends up with three keys for the same paper. By the time the author notices, the rewriting cost is higher than the writing cost.
+从正文开始的草稿会积累结构性债务。引言部分写了三段应该放在相关工作里的内容。一个图表在定义之前就被引用了。参考文献里出现了三个指向同一篇论文的键。当作者注意到这些问题时，重写成本已经高于写作成本了。
 
-A skeleton inverts that. The structure is declared up front as data. Sections are slots with names and order. Figures are slots with ids and captions. Bibliography keys are declared at the top with the entries they point at. Prose is generated into those slots one at a time. The harness can validate, before any prose is written, that every figure has a slot, every citation has an entry, and every section appears in the table of contents.
+骨架将这个顺序反转。结构作为数据预先声明。各小节是带有名称和顺序的槽位。图表是带有 id 和标题的槽位。参考文献键在顶部声明，指向对应的条目。正文逐个槽位地生成到其中。测试框架可以在任何正文被写入之前就验证：每个图表都有槽位、每条引用都有条目、每个小节都出现在目录中。
 
-This is the same discipline that earlier lessons applied to plans, tool calls, and traces. The structure is the contract.
+这与前面课程应用到计划、工具调用和追踪的纪律相同。结构就是契约。
 
-## The Paper shape
+## 论文的形状
 
 ```mermaid
 flowchart TB
-    Paper[Paper] --> Meta[metadata]
-    Paper --> Sections[sections list]
-    Paper --> Figures[figures list]
-    Paper --> Bib[bibliography list]
-    Meta --> Title[title]
-    Meta --> Authors[authors]
-    Meta --> Abstract[abstract]
-    Sections --> Sec1[Section: id, title, body, cites]
-    Figures --> Fig1[Figure: id, path, caption, label]
-    Bib --> Entry1[BibEntry: key, fields]
+    Paper[论文] --> Meta[元数据]
+    Paper --> Sections[小节列表]
+    Paper --> Figures[图表列表]
+    Paper --> Bib[参考文献列表]
+    Meta --> Title[标题]
+    Meta --> Authors[作者]
+    Meta --> Abstract[摘要]
+    Sections --> Sec1[小节: id, 标题, 正文, 引用]
+    Figures --> Fig1[图表: id, 路径, 标题, 标签]
+    Bib --> Entry1[文献条目: 键, 字段]
 ```
 
-Every field is plain Python data. The renderer is a pure function from `Paper` to a LaTeX string. The harness can introspect the paper before rendering: count sections, list missing figure files, check that every `\cite{key}` has a matching `BibEntry`.
+每个字段都是纯 Python 数据。渲染器是将 `Paper` 转换为 LaTeX 字符串的纯函数。测试框架可以在渲染之前检查论文：计数小节、列出缺失的图表文件、检查每个 `\cite{key}` 是否有对应的 `BibEntry`。
 
-## The render contract
+## 渲染契约
 
-The renderer guarantees three properties. First, every figure slot in the skeleton emits a `\begin{figure}` block with a stable label of the form `fig:<id>`. Second, every section emits a `\section{}` with a stable label of the form `sec:<id>` so cross-references work. Third, the bibliography emits a `\bibliography` block whose `references.bib` contains exactly the entries declared on the paper, no more and no fewer.
+渲染器保证三个属性。第一，骨架中的每个图表槽位都输出一个带有稳定标签的 `\begin{figure}` 块，标签形式为 `fig:<id>`。第二，每个小节都输出一个带有稳定标签的 `\section{}`，标签形式为 `sec:<id>`，使交叉引用正常工作。第三，参考文献输出一个 `\bibliography` 块，其 `references.bib` 恰好包含论文上声明的条目，不多不少。
 
-Violating any of these is a render error, not a warning. The skeleton is the contract; a render that silently drops a figure is a contract break.
+违反其中任何一条都是渲染错误，不是警告。骨架就是契约；一个静默丢弃图表的渲染是契约破坏。
 
-## Figure injection from experiments
+## 从实验注入图表
 
-The earlier lessons in this track produced experiment outputs as JSON manifests. Each manifest carries a list of artifacts with paths and short captions. The paper writer reads that manifest and produces `Figure` records.
+本轨迹的前面课程将实验输出生成为 JSON 清单。每个清单携带一个工件列表，带有路径和简短标题。论文写作器读取该清单并生成 `Figure` 记录。
 
 ```mermaid
 flowchart LR
-    Exp[experiment.json] --> Reader[read_experiment_manifest]
-    Reader --> Figs[Figure list]
+    Exp[experiment.json] --> Reader[读取实验清单]
+    Reader --> Figs[图表列表]
     Figs --> Paper[Paper.figures]
-    Paper --> Render[render_latex]
+    Paper --> Render[渲染 LaTeX]
     Render --> Out[paper.tex]
 ```
 
-The injection is deterministic. Figure ids are derived from the experiment name plus a monotonic counter. Captions come from the manifest. Paths are normalised relative to the paper's output directory so the LaTeX compiles even when the experiment outputs sit elsewhere on disk.
+注入是确定性的。图表 id 从实验名称加上单调计数器派生。标题来自清单。路径相对于论文输出目录进行规范化，这样即使实验输出位于磁盘上的其他位置，LaTeX 也能编译。
 
-## The mocked prose generator
+## 模拟正文生成器
 
-The lesson does not call a model. A `MockProseGenerator` reads an outline shape and emits prose deterministically. The outline shape is one short string per section. The generator expands that string into two short paragraphs with the section title woven in. The generated prose name-drops figures and citations exactly when the outline declares them.
+本课程不调用模型。`MockProseGenerator` 读取大纲形状并确定性地产出正文。大纲形状是每个小节一个短字符串。生成器将该字符串展开为两段短文，并将小节标题编织其中。生成的正文恰好在大纲声明它们时才会提及图表和引用。
 
-This is enough to test every behaviour of the writer. A real implementation would swap the generator for a model call. The harness around it does not change. That is the value of declaring the prose generator as a callable: the test substitutes a deterministic one, production substitutes a model one, the rest of the pipeline is identical.
+这足以测试写作器的所有行为。真实实现会将生成器替换为模型调用。它周围的测试框架不会改变。将正文生成器声明为可调用对象就是这个价值：测试替换为一个确定性的，生产替换为一个模型的，其余管道完全相同。
 
-## The manifest output
+## 清单输出
 
-The writer emits three files into the output directory.
+写作器向输出目录发出三个文件。
 
 ```mermaid
 flowchart TB
     Writer[PaperWriter.write] --> Tex[paper.tex]
     Writer --> Bib[references.bib]
     Writer --> Man[manifest.json]
-    Man --> F[figures referenced]
-    Man --> C[citations used]
-    Man --> S[sections rendered]
+    Man --> F[引用的图表]
+    Man --> C[使用的引用]
+    Man --> S[渲染的小节]
 ```
 
-The manifest is what a downstream evaluator or critic loop reads. It does not parse LaTeX; it reads the manifest. The next lesson, the critic loop, takes this manifest as input and produces a feedback list. That is why the manifest is part of the contract and the LaTeX is not.
+清单是下游评估器或批评循环读取的内容。它不解析 LaTeX；它读取清单。下一课，批评循环，将这个清单作为输入并产生反馈列表。这就是为什么清单是契约的一部分，而 LaTeX 不是。
 
-## Validation gates
+## 验证门
 
-The writer runs four gates before writing any file.
+写作器在写入任何文件之前运行四个门。
 
-1. Every figure id is unique within the paper.
-2. Every section's `cites` field references a bibliography key that is declared on the paper.
-3. The abstract is non-empty.
-4. The title is non-empty.
+1. 每个图表 id 在论文内是唯一的。
+2. 每个小节的 `cites` 字段引用了论文上声明的参考文献键。
+3. 摘要非空。
+4. 标题非空。
 
-A failed gate raises `PaperValidationError` with a precise reason. The harness surfaces the reason as the failure mode. There is no partial write: either all three files are emitted, or none.
+失败的门抛出 `PaperValidationError` 并带有精确原因。测试框架将原因作为失败模式显示。没有部分写入：要么三个文件都发出，要么都不发出。
 
-## How to read the code
+## 如何阅读代码
 
-`code/main.py` defines `Paper`, `Section`, `Figure`, `BibEntry`, `PaperValidationError`, `MockProseGenerator`, `PaperWriter`, and a `render_latex` function. The `write` method takes an output directory and emits `paper.tex`, `references.bib`, and `manifest.json`. The `read_experiment_manifest` helper converts a list of experiment manifests into `Figure` records.
+`code/main.py` 定义了 `Paper`、`Section`、`Figure`、`BibEntry`、`PaperValidationError`、`MockProseGenerator`、`PaperWriter` 和 `render_latex` 函数。`write` 方法接受一个输出目录并发出 `paper.tex`、`references.bib` 和 `manifest.json`。`read_experiment_manifest` 辅助函数将实验清单列表转换为 `Figure` 记录。
 
-`code/tests/test_paper_writer.py` covers: skeleton render with no sections, full render with two sections and two figures, missing-citation gate, duplicate-figure-id gate, manifest content, and the LaTeX-string contract (every section emits a `\section{}`, every figure emits a `\begin{figure}`).
+`code/tests/test_paper_writer.py` 覆盖了：无小节的骨架渲染、两个小节和两个图表的完整渲染、缺失引用门、重复图表 id 门、清单内容，以及 LaTeX 字符串契约（每个小节发出一个 `\section{}`，每个图表发出一个 `\begin{figure}`）。
 
-## Going further
+## 进一步探索
 
-Two extensions a real implementation will want. First, multi-format render: the same `Paper` shape compiles to Markdown for blog posts and HTML for previews. The renderer becomes a strategy on `Paper`. Second, citation enrichment: the writer fetches BibTeX entries from a citation key, given a local cache of DOIs. Both add value, both can be added without touching the skeleton contract.
+真实实现会想要的两个扩展。第一，多格式渲染：相同的 `Paper` 形状可以编译为博客帖子的 Markdown 和预览的 HTML。渲染器成为 `Paper` 上的策略。第二，引用富化：给定 DOI 的本地缓存，写作器根据引用键获取 BibTeX 条目。两者都增加价值，两者都可以在不触及骨架契约的情况下添加。
 
-The skeleton is the bet. Sections, figures, and citations declared as data, prose generated into slots, manifest emitted alongside the LaTeX. Every other improvement composes on top.
+骨架就是赌注。小节、图表和引用声明为数据，正文生成到槽位中，清单与 LaTeX 一起发出。每另一个改进都构建在上面。

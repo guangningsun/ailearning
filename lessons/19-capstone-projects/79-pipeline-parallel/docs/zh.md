@@ -1,114 +1,114 @@
-# Pipeline Parallel and Bubble Analysis
+# 流水线并行与气泡分析
 
-> Tensor parallelism splits the matrix multiply across ranks. Pipeline parallelism splits the model across ranks, one stage per rank. Microbatches flow through the pipeline. The empty time at the start and end is the bubble; minimising it is the whole craft.
+> 张量并行将矩阵乘法拆分到各个 rank。流水线并行将模型拆分到各个 rank，每阶段一个 rank。微批次流经流水线。开始和结束时的空闲时间就是气泡；最小化它就是整个工艺。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track C lessons 42-49
-**Time:** ~90 min
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 C 轨道课程 42-49
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Split a sequential model into N stages and simulate a forward pipeline across N ranks.
-- Schedule M microbatches through the pipeline using the GPipe schedule (forward-only fill, then backward) and compute the bubble fraction.
-- Compare bubble against the interleaved 1F1B schedule used in Megatron-LM and PipeDream.
-- Defend stage assignment: equal compute per stage matters more than equal parameter count per stage.
+- 将顺序模型拆分为 N 个阶段，并在 N 个 rank 上模拟前向流水线。
+- 使用 GPipe 调度（仅前向填充，然后反向）在流水线中调度 M 个微批次，并计算气泡比例。
+- 将气泡与 Megatron-LM 和 PipeDream 中使用的交错 1F1B 调度进行比较。
+- 论证阶段分配：每阶段相等计算量比每阶段相等参数数量更重要。
 
-## The Problem
+## 问题
 
-A 70B-parameter model in fp16 needs 140 GB of parameters alone. No consumer GPU holds it. ZeRO-3 shards parameters across ranks but still needs every rank to allgather the full layer for each forward step, paying log(N) hops per layer. Pipeline parallel takes a different route: cut the model into N stages and put one stage on each rank. Forward of layer 1 finishes on rank 0 and hands the activation tensor to rank 1; rank 1 runs layer 2 and hands to rank 2; and so on. Backward flows in reverse. Memory drops linearly because each rank only holds one stage; compute is sequential, which is the bubble problem.
+一个采用 fp16 的 70B 参数模型仅参数就需要 140 GB。没有消费级 GPU 能容纳它。ZeRO-3 跨 rank 分片参数，但仍然需要每个 rank 在每个前向步骤时 allgather 完整层，每层支付 log(N) 跳。流水线并行采取不同的路线：将模型切成 N 个阶段，每个 rank 放置一个阶段。第 0 层的正向在 rank 0 上完成并将激活张量交给 rank 1；rank 1 运行第 1 层并交给 rank 2；以此类推。反向传播反向流动。内存线性下降，因为每个 rank 只持有一个阶段；计算是顺序的，这就是气泡问题。
 
-The bubble is the idle time at the start of the pipeline (waiting for the first microbatch to reach the last stage) and at the end (waiting for the last microbatch to drain back through). With M microbatches and N stages the per-stage bubble fraction is (N-1)/(M+N-1). At M=8, N=4 that is 27%. At M=64, N=4 it is 4.5%. The bubble shrinks when you have many microbatches per step, which means small per-microbatch batch sizes, which is the constraint that drives microbatch design.
+气泡是流水线开始时的空闲时间（等待第一个微批次到达最后阶段）和结束时（等待最后一个微批次回流）的空闲时间。对于 M 个微批次和 N 个阶段，每阶段气泡比例是 (N-1)/(M+N-1)。在 M=8, N=4 时是 27%。在 M=64, N=4 时是 4.5%。当你有多个微批次每步时气泡会缩小，这意味着每个微批次 batch 大小较小，这是驱动微批次设计的约束。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart LR
-  R0[rank 0: stage 0 / layer 0] --> R1[rank 1: stage 1 / layer 1]
-  R1 --> R2[rank 2: stage 2 / layer 2]
-  R2 --> R3[rank 3: stage 3 / loss]
+  R0[rank 0: 阶段 0 / 层 0] --> R1[rank 1: 阶段 1 / 层 1]
+  R1 --> R2[rank 2: 阶段 2 / 层 2]
+  R2 --> R3[rank 3: 阶段 3 / 损失]
   R3 -.backward.-> R2
   R2 -.backward.-> R1
   R1 -.backward.-> R0
 ```
 
-### GPipe schedule
+### GPipe 调度
 
-Fill the pipeline forward with all M microbatches before starting any backward; then drain backward in reverse. Activations from every microbatch must be held until its backward, so memory grows linearly with M. Forward takes M+N-1 cycles, backward takes another M+N-1 cycles. Per-stage useful work is 2M cycles; per-stage bubble is 2(N-1) cycles. Bubble fraction is (N-1)/(M+N-1) when each forward and backward takes one unit of time. Picking M much greater than N hides the bubble.
+用所有 M 个微批次填充流水线前向，然后再开始任何反向传播；然后按反向排出反向传播。每个微批次的激活必须保留到其反向传播，所以内存随 M 线性增长。前向需要 M+N-1 个周期，反向传播再需要 M+N-1 个周期。每阶段有用工作是 2M 个周期；每阶段气泡是 2(N-1) 个周期。当每个前向和反向传播需要一个时间单位时，气泡比例是 (N-1)/(M+N-1)。选择 M 远大于 N 可以隐藏气泡。
 
-### 1F1B schedule
+### 1F1B 调度
 
-Interleave: as soon as a microbatch's forward reaches the last stage, start its backward and let it stream back. The schedule alternates one forward and one backward per stage. Bubble is still N-1 but activation memory is bounded by the pipeline depth, not the microbatch count. Production pipelines use 1F1B (Megatron, PipeDream). The lesson implements GPipe first because it is simpler, and 1F1B as an exercise.
+交错：当微批次的前向到达最后阶段时，立即开始其反向传播并让它流回。调度在每个阶段交替一个前向和一个反向。气泡仍然是 N-1，但激活内存受流水线深度限制，而不是微批次数量。生产流水线使用 1F1B（Megatron、PipeDream）。本课首先实现 GPipe，因为更简单，然后 1F1B 作为练习。
 
-### Why equal compute per stage matters
+### 为什么每阶段相等计算量很重要
 
-If stage 0 takes 50 ms and stage 1 takes 100 ms, every cycle is gated on stage 1. The other stages idle 50 ms per cycle waiting for stage 1 to release. Equal parameter count is the wrong axis: a transformer's compute is dominated by attention plus MLP per layer, and embedding layers have many parameters but little compute. Stage assignment should equalise FLOPs per stage, not weights per stage.
+如果阶段 0 需要 50 ms，阶段 1 需要 100 ms，每个周期都以阶段 1 为门控。其他阶段每周期空闲 50 ms 等待阶段 1 释放。按参数数量相等是错误的轴：transformer 的计算由注意力加每层 MLP 主导，而嵌入层有很多参数但计算量很少。阶段分配应该使每阶段 FLOPs 相等，而不是每阶段权重相等。
 
-### Microbatch versus batch
+### 微批次与批次
 
-A pipeline runs M microbatches of size B each. The effective batch size is M*B. The gradient at the end of a pipeline step is the gradient on the combined M*B examples. Bubble fraction depends on M; the optimiser sees M*B. Tuning M means trading bubble (lower with high M) against per-microbatch memory (higher activation memory with high M for GPipe).
+流水线运行 M 个大小为 B 的微批次。有效批次大小是 M*B。流水线步骤结束时的梯度是 M*B 个样本组合上的梯度。气泡比例取决于 M；优化器看到 M*B。调整 M 意味着在气泡（随 M 增大而减小）和每微批次内存（GPipe 下随 M 增大而激活内存更高）之间权衡。
 
-## Build It
+## 构建它
 
-`code/main.py` implements:
+`code/main.py` 实现：
 
-- `PipelineStage`: a small `nn.Module` that holds one stage's parameters and exposes `forward(activation)`.
-- `Pipeline(stages, num_microbatches)`: orchestrates the GPipe schedule on simulated stages using simulated wall-clock per stage.
-- `bubble_fraction(num_stages, num_microbatches)`: closed-form (N-1)/(M+N-1).
-- A 4-stage demo that prints the per-microbatch trace and the measured bubble fraction.
+- `PipelineStage`：一个小的 `nn.Module`，持有阶段的参数并暴露 `forward(activation)`。
+- `Pipeline(stages, num_microbatches)`：使用模拟墙钟时间在模拟阶段上编排 GPipe 调度。
+- `bubble_fraction(num_stages, num_microbatches)`：闭式 (N-1)/(M+N-1)。
+- 一个 4 阶段演示，打印每个微批次轨迹和测量到的气泡比例。
 
-Run it:
+运行它：
 
 ```bash
 python3 code/main.py
 ```
 
-Output: a stage-by-microbatch Gantt chart and the bubble percentage against the closed-form prediction.
+输出：按阶段-微批次甘特图以及气泡百分比与闭式预测的对比。
 
-## Production patterns in the wild
+## 生产环境中的模式
 
-Three patterns harden pipeline parallel enough to ship.
+三个模式使流水线并行足够坚固可以交付。
 
-**Activation checkpointing pairs with pipeline.** With M microbatches in flight on GPipe, activation memory is M times one microbatch. Activation checkpointing recomputes the forward at backward time, trading compute for memory; the combination is what makes pipeline tractable for long sequences.
+**激活检查点与流水线配对。** GPipe 上有 M 个微批次在飞，激活内存是 M 倍的一个微批次。激活检查点在反向传播时重新计算前向，以计算换内存；这种组合使长序列的流水线变得可行。
 
-**Stage balance is measured, not assumed.** Production teams run a profiling pass that measures actual per-layer compute (FLOPs and wall-clock) on the target hardware, then partition by that measurement. The Megatron-LM `--num-layers-per-stage` flag accepts a list to allow uneven layer counts when stages have different per-layer cost.
+**阶段平衡是测量出来的，不是假定的。** 生产团队运行分析传递，在目标硬件上测量实际每层计算（FLOPs 和墙钟），然后按该测量进行分区。Megatron-LM 的 `--num-layers-per-stage` 标志接受一个列表，以允许在每层成本不同的情况下不均匀的层计数。
 
-**Send-recv schedule must avoid deadlock.** A pipeline that has every stage send before receive deadlocks on the wire. The standard fix is to interleave: even-rank stages send first then recv, odd-rank stages recv first then send. The lesson schedules ranks explicitly so the pattern is visible.
+**发送-接收调度必须避免死锁。** 如果流水线每个阶段都是先发送再接收，就会在网络上死锁。标准修复是交错：偶数 rank 阶段先发送再接收，奇数 rank 阶段先接收再发送。本课明确调度 rank 以使模式可见。
 
-## Use It
+## 使用它
 
-Production patterns:
+生产模式：
 
-- **Megatron-LM.** The reference for pipeline parallel at scale. Uses 1F1B and supports tensor + pipeline + data parallel combined.
-- **DeepSpeed Pipeline.** Integrates with ZeRO; ZeRO-1 + pipeline is a common combo for the largest open models.
-- **PyTorch Pipe.** The PyTorch-native pipeline wrapper, built on `torch.distributed.pipeline.sync.Pipe`.
+- **Megatron-LM。** 大规模流水线并行的参考。使用 1F1B 并支持张量 + 流水线 + 数据并行组合。
+- **DeepSpeed Pipeline。** 与 ZeRO 集成；ZeRO-1 + 流水线是最大开放模型的常见组合。
+- **PyTorch Pipe。** PyTorch 原生流水线包装器，构建在 `torch.distributed.pipeline.sync.Pipe` 上。
 
-## Ship It
+## 交付它
 
-Lesson 80 stores the per-stage parameter shards in the sharded checkpoint. Lesson 81 composes DDP + ZeRO + pipeline on the end-to-end demo (in spirit; the demo keeps the pipeline simulated for runtime).
+第 80 课将每阶段参数分片存储在分片检查点中。第 81 课在端到端演示上组合 DDP + ZeRO + 流水线（精神上；演示保持流水线模拟以用于运行时）。
 
-## Exercises
+## 练习
 
-1. Implement 1F1B and verify the bubble fraction matches GPipe but activation memory is bounded.
-2. Profile real per-stage time on a deeper model and rebalance stages by measured wall-clock.
-3. Add gradient accumulation across pipeline microbatches and check the gradient equals the gradient of the equivalent full-batch forward.
-4. Pair the pipeline with activation checkpointing and measure the memory drop versus compute cost.
-5. Combine pipeline with DDP (each pipeline rank is replicated across a data-parallel group) and reason through the 2D schedule.
+1. 实现 1F1B 并验证气泡比例与 GPipe 匹配，但激活内存有界。
+2. 在更深的模型上分析真实每阶段时间，并按测量的墙钟重新平衡阶段。
+3. 跨流水线微批次添加梯度累积，并检查梯度等于等效全批次前向的梯度。
+4. 将流水线与激活检查点配对，并测量相对于计算成本的内存下降。
+5. 将流水线与 DDP 组合（每个流水线 rank 在数据并行组中复制）并推理 2D 调度。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Pipeline | "Model parallel along depth" | One stage per rank, activations flow stage to stage |
-| Bubble | "Pipeline idle time" | (N-1) steps at start + end where some stages have no work |
-| Microbatch | "Slice of the batch" | One forward/backward unit; bubble shrinks as M grows |
-| GPipe | "Fill then drain" | All M forwards before any backward; high activation memory |
-| 1F1B | "Interleaved schedule" | One forward one backward per stage; bounded activation memory |
+| 流水线 | "沿深度方向的模型并行" | 每 rank 一个阶段，激活在阶段间流动 |
+| 气泡 | "流水线空闲时间" | 开始和结束时的 (N-1) 步，其中某些阶段没有工作 |
+| 微批次 | "批次的切片" | 一个前向/反向单元；气泡随 M 增大而缩小 |
+| GPipe | "填充然后排出" | 所有 M 个前向在任何反向之前；高激活内存 |
+| 1F1B | "交错调度" | 每阶段一个前向一个反向；有界激活内存 |
 
-## Further Reading
+## 延伸阅读
 
 - [Huang et al, GPipe: Efficient Training of Giant Neural Networks](https://arxiv.org/abs/1811.06965)
 - [Narayanan et al, PipeDream: Generalized Pipeline Parallelism for DNN Training](https://arxiv.org/abs/1806.03377)
-- [Megatron-LM pipeline parallel docs](https://github.com/NVIDIA/Megatron-LM)
-- Phase 19 Lesson 76 - the send/recv primitives the schedule uses
-- Phase 19 Lesson 78 - ZeRO is orthogonal to pipeline and often combined
+- [Megatron-LM 流水线并行文档](https://github.com/NVIDIA/Megatron-LM)
+- 第 19 课第 76 节 - 调度使用的发送/接收原语
+- 第 19 课第 78 节 - ZeRO 与流水线正交，常组合使用

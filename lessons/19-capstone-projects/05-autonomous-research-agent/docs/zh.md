@@ -1,155 +1,155 @@
-# Capstone 05 — Autonomous Research Agent (AI-Scientist Class)
+# 毕业项目 05 — 自主研究智能体（AI-Scientist 类）
 
-> Sakana's AI-Scientist-v2 published full papers. Agent Laboratory ran the experiments. Allen AI shared traces. The 2026 shape is plan-execute-verify tree search over experiments, budgeted cost, sandboxed code execution, a vision-feedback LaTeX writer, and an automated NeurIPS-style reviewer ensemble. The capstone is to build one, run it end to end within $30 per paper, and survive the sandbox-escape red team that Sakana documented.
+> Sakana 的 AI-Scientist-v2 发表了完整论文。Agent Laboratory 运行了实验。Allen AI 分享了追踪记录。2026 年的形态是：在实验上进行计划-执行-验证树搜索，有成本预算、沙箱代码执行、带视觉反馈的 LaTeX 写作器，以及自动化 NeurIPS 风格评审团。本毕业项目的目标是构建这样一个智能体，在每篇论文 30 美元的成本内运行完整流程，并通过 Sakana 记录的红队越狱测试。
 
-**Type:** Capstone
-**Languages:** Python (agent + sandbox), LaTeX (output)
-**Prerequisites:** Phase 2 (ML), Phase 3 (deep learning), Phase 7 (transformers), Phase 10 (LLMs from scratch), Phase 14 (agents), Phase 15 (autonomous), Phase 16 (multi-agent), Phase 18 (safety)
-**Phases exercised:** P0 · P2 · P3 · P7 · P10 · P14 · P15 · P16 · P18
-**Time:** 40 hours
+**类型：** 毕业项目
+**语言：** Python（智能体 + 沙箱）、LaTeX（输出）
+**前置条件：** 阶段 2（机器学习）、阶段 3（深度学习）、阶段 7（Transformer）、阶段 10（从零构建 LLM）、阶段 14（智能体）、阶段 15（自主系统）、阶段 16（多智能体）、阶段 18（安全）
+**涉及的阶段：** P0 · P2 · P3 · P7 · P10 · P14 · P15 · P16 · P18
+**时间：** 约 40 小时
 
-## Problem
+## 问题
 
-Autonomous research agents crossed a threshold in 2026. Sakana AI's AI-Scientist-v2 was published in Nature with generated papers that cleared workshop peer review. ShinkaEvolve (ICLR 2026) extended the line to evolving hypotheses. AMD's Agent Laboratory shipped reproducible traces. The agents are not magic — they are a plan-execute-verify loop running over a tree of candidate experiments, with cost caps, seed-bound sandboxes, and automated review. The craft is in the loop, the budget, and the safety story.
+2026 年，自主研究智能体跨越了一个门槛。Sakana AI 的 AI-Scientist-v2 在 Nature 上发表了生成的论文，清除了 workshop 同行评审。ShinkaEvolve（ICLR 2026）将这条路线扩展到假设演化。AMD 的 Agent Laboratory 交付了可复现的追踪记录。这些智能体不是魔法——它们是在候选实验树上运行计划-执行-验证循环的系统，有成本上限、种子绑定的沙箱和自动化评审。技艺在于循环、预算和安全故事。
 
-You learn the loop by implementing one against a seed idea in a narrow domain (for example, attention-sparsity ablations on a 100M-parameter transformer). The value is not in discovering something new on the first run. The value is in the infrastructure: the tree-search, the experiment sandbox, the writer-reviewer loop, the red-team report. The Sakana team documented sandbox-escape failures; your agent must pass the same red team.
+你通过在一个窄领域（例如，针对 100M 参数 Transformer 的注意力稀疏性消融实验）上实现一个来学习这个循环。价值不在于第一次运行就发现新东西。价值在于基础设施：树搜索、实验沙箱、写作-评审循环、红队报告。Sakana 团队记录了沙箱越狱失败案例；你的智能体必须通过相同的红队测试。
 
-## Concept
+## 概念
 
-The agent is a best-first tree search. Nodes are experiment specifications: (hypothesis, config, code, expected outcome). An expand step proposes children with small edits (swap optimizer, shift batch size, ablate a component). Each child runs in a fresh sandbox with a hard resource cap. Results feed back into a scoring function that ranks nodes by (novelty × quality × remaining budget). The tree grows until budget is exhausted, then the best branch is written up.
+智能体是最优优先树搜索。节点是实验规范：（假设、配置、代码、预期结果）。扩展步骤提出子节点，每个子节点有微小改动（换优化器、改变批量大小、消融一个组件）。每个子节点在全新沙箱中运行，有严格的资源上限。结果反馈给评分函数，按（新颖度 × 质量 × 剩余预算）排序节点。树生长直到预算耗尽，然后最好的一条分支被写成论文。
 
-The writer is multimodal. It generates a LaTeX draft, compiles it, renders figures, and feeds the rendered PDF back into Claude Opus 4.7's vision mode for critique on layout, figure legibility, and claim-evidence alignment. A reviewer ensemble of five LLM judges emits NeurIPS-style scores (novelty, rigor, clarity, reproducibility, impact); if the average drops below threshold, the paper returns to the writer with critique.
+写作器是多模态的。它生成 LaTeX 草稿、编译、渲染图表，并将渲染后的 PDF 反馈给 Claude Opus 4.7 的视觉模式，以审查布局、图表可读性和论点-证据一致性。评审团由五个 LLM 评判员组成，发出 NeurIPS 风格评分（新颖度、严谨性、清晰度、可复现性、影响力）；如果平均分低于阈值，论文退回给写作器并附带评审意见。
 
-Safety is load-bearing. Every experiment runs in an E2B or Daytona sandbox with no network egress, bounded wall-clock, and pinned resource limits. The agent's code-generation step passes through a policy layer that blocks syscalls that escape the sandbox. The red-team report reproduces the Sakana-documented attack surface (fork bombs, filesystem escapes, LLM-written network calls).
+安全是承重结构。每个实验都在 E2B 或 Daytona 沙箱中运行，没有网络出口，有界 wall-clock，资源限制固定。智能体的代码生成步骤通过一个策略层，该层阻止逃逸沙箱的系统调用。红队报告复现了 Sakana 记录的攻击面（fork 炸弹、文件系统越狱、LLM 编写的网络调用）。
 
-## Architecture
+## 架构
 
 ```
-seed idea + domain
+种子想法 + 领域
       |
       v
-  literature search (Semantic Scholar + OpenAlex + FAISS cache)
+  文献检索（Semantic Scholar + OpenAlex + FAISS 缓存）
       |
       v
-  LangGraph plan-execute-verify tree
+  LangGraph 计划-执行-验证树
       |
       v
-  +--- expand node ----+      per-node sandbox
-  |                    |      (E2B / Daytona)
-  v                    v      resource caps
-  child_1           child_k   no network egress
-  |                    |      deterministic seeds
+  +--- 扩展节点 ----+      每个节点沙箱
+  |                    |      （E2B / Daytona）
+  v                    v      资源上限
+  子节点_1           子节点_k  无网络出口
+  |                    |      确定性种子
   v                    v
-  run experiment       run experiment
+  运行实验            运行实验
   |                    |
   v                    v
-  score nodes by (novelty, quality, budget)
+  按（新颖度、质量、预算）评分节点
       |
       v
-  best branch -> LaTeX writer
+  最佳分支 -> LaTeX 写作器
       |
       v
-  compile + vision critique (Opus 4.7 vision)
+  编译 + 视觉审查（Opus 4.7 视觉模式）
       |
       v
-  reviewer ensemble (5 LLM judges, NeurIPS rubric)
+  评审团（5 个 LLM 评判员，NeurIPS 评分标准）
       |
       v
   paper.pdf + review.md + trace.json
 ```
 
-## Stack
+## 技术栈
 
-- Orchestration: LangGraph with checkpointing and human-approval gates
-- Tree search: custom best-first over experiment nodes (AB-MCTS-style from Sakana v2)
-- Sandbox: E2B per experiment, Docker-in-Docker fallback; resource caps via cgroups
-- Literature: Semantic Scholar Graph API + OpenAlex + local FAISS cache of abstracts
-- Writer: LaTeX template + Claude Opus 4.7 (vision mode) for figure critique and layout
-- Reviewer: ensemble of 5 judges (Opus 4.7, GPT-5.4, Gemini 3 Pro, DeepSeek R1, Qwen3-Max) with weighted aggregation
-- Experiment framework: PyTorch 2.5 for the physical experiments, W&B for logging
-- Observability: Langfuse for agent traces, $30 hard budget per paper
+- 编排：LangGraph，带检查点和人工审批门控
+- 树搜索：自定义最优优先搜索，遍历实验节点（来自 Sakana v2 的 AB-MCTS 风格）
+- 沙箱：每个实验一个 E2B，Docker-in-Docker 后备；通过 cgroups 限制资源
+- 文献：Semantic Scholar Graph API + OpenAlex + 本地 FAISS 缓存（摘要）
+- 写作器：LaTeX 模板 + Claude Opus 4.7（视觉模式）进行图表审查和布局
+- 评审团：5 个评判员集合（Opus 4.7、GPT-5.4、Gemini 3 Pro、DeepSeek R1、Qwen3-Max），加权聚合
+- 实验框架：PyTorch 2.5 用于实际实验，W&B 用于日志
+- 可观测性：Langfuse 用于智能体追踪，每篇论文硬预算 30 美元
 
-## Build It
+## 构建步骤
 
-1. **Seed and domain scoping.** Take a seed idea (e.g., "investigate sparsity patterns in attention maps of sub-1B transformers"). Define the search space: models, datasets, compute budget.
+1. **种子和领域界定。** 取一个种子想法（例如，"研究亚 1B Transformer 注意力图中的稀疏性模式"）。定义搜索空间：模型、数据集、计算预算。
 
-2. **Literature pass.** Query Semantic Scholar + OpenAlex for 50 most-cited relevant papers; cache abstracts locally; generate a 1-page domain digest.
+2. **文献检索。** 查询 Semantic Scholar + OpenAlex，获取 50 篇最相关的高被引论文；本地缓存摘要；生成 1 页领域摘要。
 
-3. **Tree scaffolding.** Initialize the root with the seed hypothesis. Implement `expand(node) -> children` with small-edit proposals (one config change per child). Implement `score(node)` as a weighted novelty × quality × budget term.
+3. **树骨架。** 用种子假设初始化根节点。实现 `expand(node) -> children`，每次子节点提议一个配置变更。实现 `score(node)` 为加权的新颖度 × 质量 × 预算项。
 
-4. **Sandbox wrapping.** Every experiment runs `docker run --network=none --memory=8g --cpus=2 --pids-limit=256 --read-only` (or the equivalent E2B policy). Seeds are written to the sandbox; outputs are mounted read-only back out.
+4. **沙箱包装。** 每个实验以 `docker run --network=none --memory=8g --cpus=2 --pids-limit=256 --read-only` 运行（或等效的 E2B 策略）。种子写入沙箱；输出只读挂载输出。
 
-5. **Plan-execute-verify loop.** `plan` proposes children. `execute` runs the sandbox, captures logs and metrics. `verify` runs unit checks on metrics (did the loss decrease? did the ablation isolate the effect?). Failed nodes get a failure reason stored on the tree.
+5. **计划-执行-验证循环。** `plan` 提议子节点。`execute` 运行沙箱，捕获日志和指标。`verify` 对指标运行单元检查（损失是否下降？消融是否隔离了效应？）。失败节点在树上存储失败原因。
 
-6. **Writer.** After budget, select the best branch. Render figures with matplotlib. Generate a LaTeX draft via Claude Opus 4.7 with the branch trace in context. Compile. Feed the compiled PDF back to Opus 4.7 vision for critique. Iterate.
+6. **写作器。** 预算耗尽后，选择最佳分支。用 matplotlib 渲染图表。通过 Claude Opus 4.7 生成 LaTeX 草稿，分支追踪记录作为上下文。编译。将编译后的 PDF 反馈给 Opus 4.7 视觉模式进行审查。迭代。
 
-7. **Reviewer ensemble.** Five judges score the draft on (novelty, rigor, clarity, reproducibility, impact) with NeurIPS-style rubrics. If mean < 4.0/5, return to writer with critique. Hard stop after 3 rewrites.
+7. **评审团。** 五个评判员在（新颖度、严谨性、清晰度、可复现性、影响力）上用 NeurIPS 风格评分标准对草稿评分。如果均值 < 4.0/5，退回给写作器并附带评审意见。3 次重写后硬停止。
 
-8. **Red team.** Build or integrate a set of adversarial tasks targeting the sandbox: fork bombs, network exfiltration attempts, filesystem escapes, LLM-written shell metacharacters. Confirm all are blocked. Write up findings.
+8. **红队。** 构建或集成一套针对沙箱的对抗任务：fork 炸弹、网络数据窃取尝试、文件系统越狱、LLM 编写的 shell 元字符。确认全部被阻止。撰写发现报告。
 
-9. **Reproducibility.** Every paper ships with its tree-search trace JSON, seeds, W&B run links, sandbox configs, and a README reproducing it end to end.
+9. **可复现性。** 每篇论文附带树搜索追踪 JSON、种子、W&B 运行链接、沙箱配置和 README，从头到尾复现。
 
-## Use It
+## 使用示例
 
 ```
-$ ai-scientist run --seed "attention sparsity in sub-1B transformers" --budget 30
-[lit]    50 papers, digest in 12s
-[tree]   expanded 8 nodes, budget 12/30
-[exec]   node #3 sparsity=top-8, loss=2.83 (best so far)
-[exec]   node #6 sparsity=top-4, loss=3.12 (worse)
-[exec]   ...
-[tree]   chose branch rooted at node #3 (novelty 0.62, quality 0.81)
-[write]  LaTeX draft v1 complete
-[vision] critique: figure 2 legend too small, claim-evidence ok
-[write]  draft v2 after 3 edits
-[review] mean 4.2/5 (novelty 3.9, rigor 4.3, clarity 4.1, repro 4.5, impact 4.2)
-[done]   paper.pdf + review.md + trace.json     $28.40 spent
+$ ai-scientist run --seed "亚1B Transformer 中的注意力稀疏性" --budget 30
+[文献]   50 篇论文，摘要 12s
+[树]     扩展 8 个节点，预算 12/30
+[执行]   节点 #3 稀疏度=top-8，loss=2.83（目前最佳）
+[执行]   节点 #6 稀疏度=top-4，loss=3.12（更差）
+[执行]   ...
+[树]     选择以节点 #3 为根的分支（新颖度 0.62，质量 0.81）
+[写作]   LaTeX 草稿 v1 完成
+[视觉]   评审：图 2 图例太小，论点-证据 OK
+[写作]   经过 3 处修改后的草稿 v2
+[评审]   均值 4.2/5（新颖度 3.9，严谨性 4.3，清晰度 4.1，可复现性 4.5，影响力 4.2）
+[完成]   paper.pdf + review.md + trace.json     花费 $28.40
 ```
 
-## Ship It
+## 交付
 
-`outputs/skill-ai-scientist.md` is the deliverable. Given a seed idea + a domain + a $30 budget, it runs the full pipeline and emits a reviewable paper plus a reproducibility bundle.
+`outputs/skill-ai-scientist.md` 是交付物。给定一个种子想法 + 领域 + 30 美元预算，它运行完整流水线并输出一份可供评审的论文加可复现性包。
 
-| Weight | Criterion | How it is measured |
+| 权重 | 标准 | 衡量方式 |
 |:-:|---|---|
-| 25 | Paper quality | Blind rubric review against published workshop papers |
-| 20 | Experimental rigor | Baselines, seeds, ablations; every claim backed by a cell in the results table |
-| 20 | Cost and compute discipline | $30/paper ceiling enforced, Langfuse-traced |
-| 20 | Safety | Sandbox red team passes; network policy and kill-switch verified |
-| 15 | Reproducibility | One-command rerun with identical seeds reproduces the paper |
+| 25 | 论文质量 | 盲评分标准审查，对标已发表的 workshop 论文 |
+| 20 | 实验严谨性 | 基线、种子、消融；每个论点都有结果表中一个单元格支撑 |
+| 20 | 成本和计算纪律 | 30美元/篇上限强制执行，Langfuse 追踪记录 |
+| 20 | 安全性 | 沙箱红队通过；网络策略和 kill switch 验证通过 |
+| 15 | 可复现性 | 一条命令用相同种子复现论文 |
 | **100** | | |
 
-## Exercises
+## 练习
 
-1. Run the pipeline against three different seed ideas in the same domain. Compare which parts of the tree-search overlap. Identify duplicated wasted compute.
+1. 在同一领域用三个不同的种子想法运行流水线。比较树搜索中重叠的部分。识别浪费的重复计算。
 
-2. Add a human-in-the-loop gate before experiment execution for nodes estimated above $5. Measure how much total cost drops.
+2. 在估计费用超过 5 美元的节点执行前添加人工介入门控。测量总成本下降了多少。
 
-3. Swap the reviewer ensemble for a single judge. Measure the false-accept rate on a held-out set of known-bad papers.
+3. 将评审团替换为单一评判员。在一组已知劣质论文的保留集上测量错误接受率。
 
-4. Introduce a network-exfiltration red team test: agent writes code that tries to `curl` an external address. Confirm the `--network=none` policy blocks it. Log the attempt.
+4. 引入网络数据窃取红队测试：智能体编写尝试 `curl` 外部地址的代码。确认 `--network=none` 策略阻止了它。记录该尝试。
 
-5. Compare your tree-search with a flat random baseline (same budget, no expansion strategy). Report the novelty × quality gain.
+5. 将树搜索与平面随机基线对比（相同预算，无扩展策略）。报告新颖度 × 质量增益。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|------------------------|
-| Tree search | "AB-MCTS-style expansion" | Best-first exploration over experiment nodes with a novelty×quality×budget score |
-| Sandbox | "Experiment isolation" | Container with no network, bounded CPU/memory, pinned seeds, read-only inputs |
-| Vision critique | "Render-then-read" | Compile the paper to PDF, feed the PDF back to a VLM for layout and claim-evidence critique |
-| Reviewer ensemble | "Automated peer review" | Multiple LLM judges scoring the paper with a NeurIPS rubric; weighted aggregate gates the pipeline |
-| Novelty score | "Is this new?" | Heuristic that penalizes proximity to the 50-paper literature cache |
-| Cost ceiling | "$ budget" | Hard cap on total spend per paper; Langfuse counters + pre-run estimates |
-| Red team | "Sandbox-escape audit" | Adversarial tasks that would escape the sandbox if the policy is wrong |
+| 树搜索 (Tree search) | "AB-MCTS 风格扩展" | 在实验节点上的最优优先探索，带新颖度×质量×预算评分 |
+| 沙箱 (Sandbox) | "实验隔离" | 无网络、有界 CPU/内存、固定种子、只读输入的容器 |
+| 视觉审查 (Vision critique) | "渲染后读取" | 将论文编译为 PDF，将 PDF 反馈给 VLM 审查布局和论点-证据一致性 |
+| 评审团 (Reviewer ensemble) | "自动化同行评审" | 多个 LLM 评判员用 NeurIPS 评分标准对论文评分；加权聚合门控流水线 |
+| 新颖度分数 (Novelty score) | "这是新的吗？" | 一种启发式方法，惩罚与 50 篇论文文献缓存的接近程度 |
+| 成本上限 (Cost ceiling) | "$ 预算" | 每篇论文的总支出硬上限；Langfuse 计数器 + 预运行估算 |
+| 红队 (Red team) | "沙箱越狱审计" | 如果策略错误就会越狱的对抗任务 |
 
-## Further Reading
+## 延伸阅读
 
-- [Sakana AI-Scientist-v2 repository](https://github.com/SakanaAI/AI-Scientist-v2) — the reference production research agent
-- [Sakana AI-Scientist-v1 paper (arXiv:2408.06292)](https://arxiv.org/abs/2408.06292) — the original methodology
-- [ShinkaEvolve (Sakana ICLR 2026)](https://sakana.ai) — evolutionary extension
-- [Agent Laboratory (AMD)](https://github.com/SamuelSchmidgall/AgentLaboratory) — multi-role research-lab framework
-- [LangGraph documentation](https://langchain-ai.github.io/langgraph/) — reference orchestration layer
-- [Semantic Scholar Graph API](https://api.semanticscholar.org/) — literature search
-- [E2B sandboxes](https://e2b.dev) — reference experiment isolation
-- [NeurIPS reviewer guidelines](https://neurips.cc/Conferences/2026/Reviewer-Guidelines) — the rubric the reviewer ensemble encodes
+- [Sakana AI-Scientist-v2 仓库](https://github.com/SakanaAI/AI-Scientist-v2) — 参考生产级研究智能体
+- [Sakana AI-Scientist-v1 论文（arXiv:2408.06292）](https://arxiv.org/abs/2408.06292) — 原始方法论文
+- [ShinkaEvolve（Sakana ICLR 2026）](https://sakana.ai) — 演化扩展
+- [Agent Laboratory（AMD）](https://github.com/SamuelSchmidgall/AgentLaboratory) — 多角色研究实验室框架
+- [LangGraph 文档](https://langchain-ai.github.io/langgraph/) — 参考编排层
+- [Semantic Scholar Graph API](https://api.semanticscholar.org/) — 文献检索
+- [E2B 沙箱](https://e2b.dev) — 参考实验隔离方案
+- [NeurIPS 评审指南](https://neurips.cc/Conferences/2026/Reviewer-Guidelines) — 评审团编码的评分标准

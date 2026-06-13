@@ -1,33 +1,33 @@
-# Capstone 86 — Constitutional Rules Engine
+# Capstone 86 — 宪政规则引擎
 
-> A rule is a name, a predicate, and an explanation. Anything missing one of those three is a vibe, not a rule.
+> 规则由名称、谓词和解释三部分组成。缺少任何一个都只是感觉，不是规则。
 
-**Type:** Build
-**Languages:** Python, YAML
-**Prerequisites:** Phase 18 safety lessons, Phase 19 Track A lessons 25-29
-**Time:** ~90 min
+**类型：** 构建
+**语言：** Python、YAML
+**前置条件：** 阶段 18 安全课程、阶段 19 Track A 课程 25-29
+**时间：** 约 90 分钟
 
-## Problem
+## 问题
 
-Classifiers cover the recognizable failures. Rules engines cover the contractual ones. A team writing a coding assistant wants a constraint like "every response that contains code must end in either a runnable block or a stated assumption." A team running a customer support bot wants "every refusal must offer a next step." These constraints are not natural classifier targets. They are predicates over the response, the conversation, and the system policy, and they need to be readable by a non-engineer.
+分类器覆盖可识别的失败。规则引擎覆盖合同性的。一个编写代码助手的团队想要一个约束，比如"每个包含代码的响应必须以可运行块或声明的假设结尾"。运行客户支持机器人的团队想要"每个拒绝必须提供下一步"。这些约束不是自然的分类器目标。它们是关于响应、对话和系统策略的谓词，需要非工程师也能阅读。
 
-The honest representation is a declarative file. A constitution lives in YAML alongside the code, in version control, with a separate review process. Each rule has a `name`, a `predicate`, a `severity`, and an `explanation` template. The engine loads the file, evaluates each rule against the candidate output, and returns a structured `Violation` per rule that fired. The rules engine in this capstone composes predicates with `all_of`, `any_of`, and `not_` so a single rule can express "if the response contains code, it must end with a runnable block AND not reference an internal-only library."
+诚实的表示是一份声明式文件。宪政文件与代码一起存在于 YAML 中，进入版本控制，有独立的审查流程。每条规则有一个 `name`、`predicate`、`severity` 和 `explanation` 模板。引擎加载文件，对候选输出评估每条规则，并返回每个触发的规则的结构化 `Violation`。本 capstone 的规则引擎通过 `all_of`、`any_of` 和 `not_` 组合谓词，因此一条规则可以表达"如果响应包含代码，它必须以可运行块结尾 AND 不引用仅内部库"。
 
-The other half of the lesson is revision. A rule engine that only blocks is half-built. A rule engine that proposes a fix is operationally useful: the assistant drafts a response, the engine flags violations, a fixer produces a revised response, and the engine confirms the revision satisfies the rules. The lesson ships a minimal fixer (regex replacement per rule) and a structured diff (line-by-line additions, removals, edits) between draft and revised.
+这节课的另一半是修订。只阻止的规则引擎只完成了一半。只提出修复的规则引擎在操作上有用：助手起草响应，引擎标记违规，修复器产生修订后的响应，引擎确认修订满足规则。这节课交付一个最小的修复器（每条规则的正则替换）和一份结构化 diff（逐行添加、移除、编辑），在草稿和修订之间。
 
-## Concept
+## 概念
 
 ```mermaid
 flowchart LR
-  D[draft response] --> RE[rules engine]
-  RE -->|violations| F[fixer]
-  F --> R[revised response]
-  R --> RE2[rules engine 2nd pass]
-  RE2 -->|verdict| OUT[accepted or escalated]
+  D[草稿响应] --> RE[规则引擎]
+  RE -->|违规| F[修复器]
+  F --> R[修订后的响应]
+  R --> RE2[规则引擎 第二轮]
+  RE2 -->|裁决| OUT[接受或升级]
   D -.->|diff| R
 ```
 
-A rule has the shape
+规则的形式如下：
 
 ```yaml
 - name: end-with-runnable-or-assumption
@@ -38,56 +38,56 @@ A rule has the shape
     any_of:
       - ends_with_regex: '```\s*$'
       - contains_regex: 'assumption:'
-  explanation: "Code responses must end in either a closing fence or an explicit assumption."
+  explanation: "代码响应必须以闭合围栏或明确假设结尾。"
   fix:
     append_if_missing: "\n\nAssumption: example inputs are valid."
 ```
 
-Predicates are atomic: `contains_regex`, `not_contains_regex`, `ends_with_regex`, `starts_with_regex`, `max_words`, `min_words`. Compositions are `all_of`, `any_of`, `not_`. The engine evaluates `applies_when` first; if the rule does not apply, the violation is recorded as `not_applicable`. Otherwise the engine evaluates `must` and produces either `pass` or `violation`.
+谓词是原子的：`contains_regex`、`not_contains_regex`、`ends_with_regex`、`starts_with_regex`、`max_words`、`min_words`。组合是 `all_of`、`any_of`、`not_`。引擎首先评估 `applies_when`；如果规则不适用，则违规记录为 `not_applicable`。否则引擎评估 `must` 并产生 `pass` 或 `violation`。
 
-Severities are `low`, `medium`, `high`, mirroring lesson 85. The downstream gate (lesson 87) treats a `high` rule violation the same as a `high` classifier verdict: block.
+严重级别是 `low`、`medium`、`high`，与第 85 课一致。下游门控（第 87 课）将 `high` 规则违规与 `high` 分类器裁决同等对待：block。
 
-The fixer is a list of declarative operations: `append_if_missing`, `prepend_if_missing`, `replace_regex`. Each operation maps a rule by name to a transform. The fixer is intentionally limited to local edits; structural rewrites belong in a separate refusal-and-help layer not covered here.
+修复器是声明式操作列表：`append_if_missing`、`prepend_if_missing`、`replace_regex`。每个操作通过名称将规则映射到变换。修复器故意限于局部编辑；结构重写属于单独的拒绝和帮助层，不在此覆盖。
 
-The diff is computed against the original and the revised. It is a list of `Change` records with `op` (add, remove, edit) and the relevant text. The downstream gate can log the diff so a human reviewer audits the fixer's behavior over time.
+diff 是相对于原始和修订计算的。它是一个带有 `op`（add、remove、edit）和相关文本的 `Change` 记录列表。下游门控可以记录 diff，以便人类审查员随时间审计修复器的行为。
 
-## Build It
+## 构建
 
-`code/rules.yml` holds the constitution. The loader in `code/main.py` accepts either a YAML file (when PyYAML is available) or a JSON file (built-in). The lesson ships a `rules.yml` that the lesson tests parse by both code paths. `code/main.py` defines the `Engine` and `Fixer` classes and a `diff` function. Compositions are evaluated recursively with short-circuiting on `any_of`.
+`code/rules.yml` 持有宪政文件。`code/main.py` 中的加载器接受 YAML 文件（当 PyYAML 可用时）或 JSON 文件（内置）。这节课发布一个 `rules.yml`，课程测试通过两种代码路径解析它。`code/main.py` 定义了 `Engine` 和 `Fixer` 类以及一个 `diff` 函数。组合通过 `any_of` 的短路求值进行递归求值。
 
-The constitution as shipped:
+发货的宪政文件：
 
-- `no-empty-refusal` (medium) - a refusal must include either a suggestion or a redirect
-- `end-with-runnable-or-assumption` (medium) - code responses must close cleanly
-- `no-pii-in-examples` (high) - example data must not contain emails or phone shapes
-- `cite-when-asserting-fact` (low) - lines beginning with "According to" must contain a parenthetical citation
-- `no-internal-library-leak` (high) - the words `internal-only` and `policybot-internal` must not appear in the output
-- `bounded-length` (low) - responses must not exceed 800 words
+- `no-empty-refusal`（medium）—— 拒绝必须包含建议或重定向之一
+- `end-with-runnable-or-assumption`（medium）—— 代码响应必须干净关闭
+- `no-pii-in-examples`（high）—— 示例数据不得包含邮箱或电话形状
+- `cite-when-asserting-fact`（low）—— 以"According to"开头的行必须包含括号引用
+- `no-internal-library-leak`（high）—— 词语 `internal-only` 和 `policybot-internal` 不得出现在输出中
+- `bounded-length`（low）—— 响应不得超过 800 字
 
-## Use It
+## 使用
 
-`python3 main.py`. The demo runs three draft responses through the engine, prints violations, runs the fixer, prints the diff, and writes `outputs/rules_report.json`. One fixture has a non-applicable rule (no code block in the draft), and the report shows `not_applicable` for that rule so the team sees the engine evaluated it explicitly.
+`python3 main.py`。演示通过引擎运行三个草稿响应，打印违规，运行修复器，打印 diff，并写出 `outputs/rules_report.json`。一个 fixture 有一个不适用的规则（草稿中没有代码块），报告显示该规则的 `not_applicable`，以便团队看到引擎明确评估了它。
 
-## Ship It
+## 交付
 
-`outputs/skill-constitutional-rules-engine.md` documents the rule grammar and the fixer operations.
+`outputs/skill-constitutional-rules-engine.md` 记录了规则语法和修复器操作。
 
-## Exercises
+## 练习
 
-1. Add a rule that requires every response to include the phrase "If this is urgent" when the prompt mentions safety. Use composition.
-2. Replace the regex fixer with a templating fixer that takes named slots. Demonstrate one rule rewritten under the new design.
-3. Add a metrics endpoint that, given a corpus of drafts, returns the per-rule violation rate so the team can see which rule is over-firing.
+1. 添加一条规则，要求每当提示词提到安全时，响应必须包含短语"If this is urgent"。使用组合。
+2. 用模板修复器替换正则修复器，该修复器接受命名槽。演示在新设计下重写的一条规则。
+3. 添加一个指标端点，给定一个草稿语料库，返回每条规则的违规率，以便团队看到哪条规则过度触发。
 
-## Key Terms
+## 关键术语
 
-| Term | Common usage | Precise meaning |
+| 术语 | 常见说法 | 精确含义 |
 |---|---|---|
-| constitution | a vague policy doc | a YAML file of rules with predicates, severities, and explanations |
-| predicate | a check | a callable from text to bool, atomic or composed via all_of/any_of/not_ |
-| violation | a failure | a structured record with rule name, severity, explanation, and matched span |
-| fixer | a model fine-tune | a deterministic per-rule transform mapping draft to revised |
-| diff | a string compare | a structured list of add, remove, edit operations between draft and revised |
+| 宪政文件 | 一个模糊的策略文档 | 一份包含谓词、严重级别和解释的规则 YAML 文件 |
+| 谓词 | 一个检查 | 从文本到布尔值或组合（通过 all_of/any_of/not_）的可调用对象 |
+| 违规 | 一个失败 | 带有规则名称、严重级别、解释和匹配 span 的结构化记录 |
+| 修复器 | 一个模型微调 | 一个确定性每规则变换，将草稿映射到修订 |
+| diff | 一个字符串比较 | 草稿和修订之间的 add、remove、edit 操作的结构化列表 |
 
-## Further Reading
+## 延伸阅读
 
-Lesson 87 composes this engine with the input-side detector and the output-side classifier into a single safety gate.
+第 87 课将此引擎与输入侧检测器和输出侧分类器组合成单一安全门控。

@@ -1,29 +1,29 @@
-# Code Exec Metric
+# 代码执行指标
 
-> Generated code is right when it passes the tests. The eval harness has to extract code, run it without crashing the host, and tally pass-rates honestly. This lesson builds that surface.
+> 生成的代码在通过测试时就是正确的。评估工具必须能够从生成内容中提取代码、在隔离进程中运行它，并诚实地统计通过率。本节课来构建这一层能力。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track B foundations, lessons 70 and 71
-**Time:** ~90 min
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 Track B 基础，课程 70 和 71
+**时间：** 约 90 分钟
 
-## Learning objectives
+## 学习目标
 
-- Extract a code block from a free-form generation in a way that matches the post-process rule from lesson 70.
-- Execute candidate code in an isolated subprocess with a wall-clock timeout, output cap, and an import denylist.
-- Score a task as the fraction of supplied assertion strings that pass against the candidate.
-- Compute pass-at-k for tasks that sample multiple generations from one model.
-- Treat sandbox crashes, syntax errors, and timeouts as first-class fail modes with distinct exit codes the runner can log.
+- 从自由形式的生成内容中提取代码块，方式与课程 70 的后处理规则一致。
+- 在隔离子进程中以 wall-clock 超时、输出上限和导入黑名单的方式执行候选项代码。
+- 将任务得分计算为通过的对 supplied assertion 字符串的比例。
+- 为采样了多个生成的候选项的任务计算 pass-at-k。
+- 将沙箱崩溃、语法错误和超时作为一类失败模式，用不同的退出码记录，供运行器使用。
 
-## Why an isolated subprocess
+## 为什么要用隔离子进程
 
-Inline `exec` is a security and stability hazard. A generated `while True: pass` blocks the eval forever. A generated `import shutil; shutil.rmtree('/')` is exactly as catastrophic as it sounds. The fix is to spawn a fresh Python interpreter per candidate, pass the code on stdin, write the assertion results to stdout, and kill the process if it overruns. The host eval process keeps running.
+内联 `exec` 是安全和稳定性隐患。生成的 `while True: pass` 会永久阻塞评估。生成的 `import shutil; shutil.rmtree('/')` 造成的后果和听起来一样灾难性。解决办法是为每个候选项启动一个全新的 Python 解释器，通过 stdin 传入代码，将断言结果写入 stdout，如果超出时间就 kill 掉进程。主机评估进程继续运行。
 
-Real evals like HumanEval, MBPP, BigCodeBench, and LiveCodeBench all use a subprocess sandbox. Some layer Docker on top. We stop at the subprocess for a reason: it is portable, it is stdlib, and it catches the failure modes that matter for educational eval. Production deployments add seccomp, network isolation, and a read-only filesystem. The next lesson on hardening lives outside this track.
+HumanEval、MBPP、BigCodeBench 和 LiveCodeBench 等真实评估都使用子进程沙箱。有的在其上再封装一层 Docker。我们只用到子进程这一步是有原因的：它可移植、它是标准库，而且能捕获对教学评估真正重要的失败模式。生产部署会添加 seccomp、网络隔离和只读文件系统。下一课讲加固的内容不在本 track 内。
 
-## The shape of a code-exec task
+## 代码执行任务的形态
 
-A `code_exec` task carries assertion strings in `targets`. The runner extracts a fenced code block from the generation, builds a test harness around it, and runs the result.
+`code_exec` 任务在 `targets` 中携带 assertion 字符串。运行器从生成内容中提取一个带围栏的代码块，围绕它构建测试工具，然后运行结果。
 
 ```mermaid
 flowchart TD
@@ -39,13 +39,13 @@ flowchart TD
     H --> I
 ```
 
-The score is a fraction in `[0, 1]`. A task with three assertions where two pass scores 0.667. The runner returns the same shape no matter what fails: the subprocess crashes are mapped to a normalised error code, not a Python traceback bubbling up to the harness.
+得分是一个 `[0, 1]` 之间的分数。有三个断言且通过两个的任务得分为 0.667。无论哪种失败，运行器都返回相同的结构：子进程崩溃被映射为标准化的错误码，而不是 Python 追踪信息冒泡到 harness。
 
-## The denylist
+## 黑名单
 
-The denylist is import-based. Before running candidate code, the runner script rewrites imports of dangerous modules to a stub that raises `ImportError("denied")`. The list is deliberately conservative: `os.system`, `subprocess`, `socket`, `requests`, `urllib`, `urllib.request`, `urllib.error`, `urllib.parse`, `ctypes`, `shutil`, `http.client`, `asyncio.subprocess`.
+黑名单基于导入。在运行候选项代码之前，运行器脚本将危险模块的导入重写为抛出 `ImportError("denied")` 的桩。该列表是刻意保守的：`os.system`、`subprocess`、`socket`、`requests`、`urllib`、`urllib.request`、`urllib.error`、`urllib.parse`、`ctypes`、`shutil`、`http.client`、`asyncio.subprocess`。
 
-We do not pretend this is bulletproof. Determined adversarial code can escape any in-process sandbox in Python. The denylist is a backstop. The wall-clock timeout and the output cap are the load-bearing controls.
+我们不会假装这是坚不可摧的。determined adversarial 代码可以逃逸 Python 中任何进程内沙箱。黑名单是最后防线。wall-clock 超时和输出上限才是承载控制量的部分。
 
 ```python
 DENIED = {
@@ -59,27 +59,27 @@ DENIED = {
 }
 ```
 
-We wrap the candidate by prepending `import sys` and a guard that monkey-patches `os.system` to raise. The full template is in `main.py`.
+我们通过前置 `import sys` 和一个 guard 来包装候选项，该 guard monkey-patches `os.system` 使其抛出异常。完整的模板在 `main.py` 中。
 
-## Wall-clock timeout
+## Wall-clock 超时
 
-Every subprocess gets a default budget of three wall-clock seconds. The runner uses `subprocess.run(..., timeout=t)`. If the timeout fires, the runner catches `TimeoutExpired`, kills the process, and records a `timeout` exit reason for the task. The score for that task is zero. The runner moves on.
+每个子进程都有三秒 wall-clock 的默认预算。运行器使用 `subprocess.run(..., timeout=t)`。如果超时触发，运行器捕获 `TimeoutExpired`，kill 掉进程，并为该任务记录 `timeout` 退出原因。该任务的得分为零。运行器继续下一个。
 
-The timeout is configurable per task through `task.metadata.timeout_s`. Long-running unit tests can ask for more; the validator from lesson 70 caps the value at thirty seconds to keep the suite bounded.
+超时可以通过 `task.metadata.timeout_s` 按任务配置。长运行的单元测试可以请求更多时间；课程 70 的验证器将值上限设为三十秒，以保持套件有界。
 
-## Output cap
+## 输出上限
 
-The subprocess can flood stdout, exhausting host memory. The runner streams stdout into a buffer and kills the child as soon as the running total crosses 256 KB. The result is recorded as `exit_code = error` with the detail string `"output overflow"`. This shows up in practice when a generation accidentally writes an infinite loop that prints.
+子进程可能 flood stdout，耗尽主机内存。运行器将 stdout 流式写入缓冲区，一旦运行总计超过 256 KB 就 kill 子进程。结果记录为 `exit_code = error`，详情字符串为 `"output overflow"`。这在实践中会出现，当生成代码意外写入一个打印内容的无限循环时。
 
 ## Pass-at-k
 
-Pass-at-k is the unbiased estimator used by HumanEval and friends. Given `n` independent samples per task and `c` of them passing, the probability that a sample of size `k` from the `n` contains at least one passing solution is:
+Pass-at-k 是 HumanEval 等使用的无偏估计量。给定每个任务 `n` 个独立样本，其中 `c` 个通过，从 `n` 中采样大小为 `k` 的样本至少包含一个通过方案的概率为：
 
 ```
 pass_at_k(n, c, k) = 1 - C(n - c, k) / C(n, k)
 ```
 
-When `n - c < k` the numerator is undefined and the value is `1`. The implementation handles the edge case directly. We expose `pass_at_k(n, c, k)` for use by the leaderboard layer in lesson 74.
+当 `n - c < k` 时分子无定义，值为 `1`。实现直接处理这个边界情况。我们暴露 `pass_at_k(n, c, k)` 以供课程 74 的 leaderboard 层使用。
 
 ```mermaid
 flowchart LR
@@ -90,28 +90,28 @@ flowchart LR
     C --> F[pass_at_10 = 1 if c>0 else 0]
 ```
 
-## Exit codes
+## 退出码
 
-The runner returns one of five outcomes per task:
+运行器为每个任务返回以下五种结果之一：
 
-- `pass` when every assertion passed.
-- `assertion_fail` when the code ran but at least one assertion failed.
-- `syntax_error` when the code did not import or had a SyntaxError.
-- `timeout` when the wall clock expired.
-- `error` for any other crash, including denylist hits and output overflow (overflow surfaces with detail `"output overflow"`).
+- `pass` 当所有断言都通过时。
+- `assertion_fail` 当代码运行了但至少有一个断言失败时。
+- `syntax_error` 当代码未能导入或存在 SyntaxError 时。
+- `timeout` 当 wall clock 超期时。
+- `error` 用于任何其他崩溃，包括黑名单命中和输出溢出（溢出时详情为 `"output overflow"`）。
 
-The score is still a fraction. The exit code is metadata. Downstream lessons can decide whether to count a timeout as zero or as missing data.
+得分仍然是分数。退出码是元数据。下游课程可以决定是将超时计为零还是计为缺失数据。
 
-## What this lesson does not do
+## 本节课不做什么
 
-It does not give you a real sandbox. It does not run untrusted code from the open web. It does not handle stateful tasks like file I/O or network calls. Those need a container or a microVM. The point of this lesson is the contract: an isolated subprocess, a denylist, a timeout, an output cap, a clean exit-code vocabulary, and pass-at-k math.
+它不给你一个真正的沙箱。它不运行来自开放网络的不受信任的代码。它不处理有状态的任务，如文件 I/O 或网络调用。那些需要容器或 microVM。本节课的重点是契约：隔离子进程、黑名单、超时、输出上限、干净的退出码词汇表，以及 pass-at-k 数学。
 
-## How to read the code
+## 如何阅读代码
 
-`main.py` defines `extract_code`, `run_candidate`, `score_code_exec`, and `pass_at_k`. The subprocess runner script is built as a string and passed as `-c` to a fresh Python interpreter. The tests in `code/tests/test_exec.py` exercise the four exit codes plus pass-at-k against worked examples drawn from the HumanEval style.
+`main.py` 定义了 `extract_code`、`run_candidate`、`score_code_exec` 和 `pass_at_k`。子进程运行器脚本被构建为字符串，并作为 `-c` 传递给全新的 Python 解释器。`code/tests/test_exec.py` 中的测试针对 HumanEval 风格的案例验证了四种退出码加上 pass-at-k。
 
-Read `main.py` top to bottom. The runner template is the load-bearing piece. Stare at the assertion loop until you can predict the JSON envelope it writes back to the parent process.
+从上到下阅读 `main.py`。运行器模板是承载的部分。盯着断言循环直到你能预测它写回父进程的 JSON 信封结构。
 
-## Going further
+## 深入学习
 
-Once the subprocess shape works, the next concern is portability. Different Python versions handle SIGKILL differently on Windows. The cleanest fix is to put the runner in a Docker image. The next thing after that is replacing assertion strings with real unit test files so the eval matches what production CI does. Stop calling assertion strings tests at that point; they are toy tests and they have toy failure modes.
+一旦子进程形态工作起来，下一个关注点是可移植性。不同 Python 版本在 Windows 上对 SIGKILL 的处理不同。最干净的解决办法是把运行器放进 Docker 镜像。之后的下一步是用真正的单元测试文件替换 assertion 字符串，这样评估与生产 CI 所做的匹配。到那时不要再把 assertion 字符串称为测试；它们是玩具测试，有玩具式的失败模式。

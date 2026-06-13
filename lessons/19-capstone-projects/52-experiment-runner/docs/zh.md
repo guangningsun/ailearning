@@ -1,94 +1,95 @@
-# Experiment Runner
+# 实验运行器
 
-> The loop is only as honest as its measurements. Build the runner that takes a spec, executes it in a sandboxed subprocess, and emits a json metrics blob the evaluator can trust.
+> 循环的诚实程度取决于它的测量。把运行器构建成：接收一个 spec，在沙箱子进程中执行，吐出一个评估器可以信任的 json 指标 blob。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track A lessons 20-29
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python
+**前置条件：** 阶段 19 Track A 课程 20-29
+**时间：** 约 90 分钟
 
-## Learning Objectives
-- Encode an experiment as a typed spec the runner can serialise to a subprocess.
-- Launch a subprocess with a hard wall clock timeout and a soft memory cap, and surface both as terminal conditions.
-- Capture stdout, stderr, and the structured metrics blob into a single result record.
-- Build an ablation table that sweeps one configuration knob at a time over a fixed base spec.
-- Keep every result deterministic given a seed so the evaluator sees the same numbers across runs.
+## 学习目标
 
-## Why a subprocess
+- 将实验编码为运行器可以序列化到子进程的类型化 spec。
+- 用硬性 wall clock 超时和软性内存上限启动子进程，并将两者作为终止条件暴露出来。
+- 将 stdout、stderr 和结构化指标 blob 捕获到单个结果记录中。
+- 构建一个消融表，在固定基础 spec 上逐个配置旋钮进行扫描。
+- 保持每个结果在给定种子下是确定性的，这样评估器在多次运行中看到相同的数字。
 
-A research loop runs untrusted code. The hypothesis came from a sampler, the experiment script came from the same path; treating either as safe in-process is asking for a crash that takes the orchestrator down. Subprocesses are the simplest isolation the language ships: a separate process, an independent address space, a signal handle on the parent side.
+## 为什么要用子进程
 
-The runner here does not implement full sandboxing. There is no cgroup, no seccomp filter, no namespace remapping. What it does have is a wall clock timeout, a polling loop for memory growth, and a kill path that terminates the process on either limit. That is the runtime contract every more elaborate sandbox extends. The lesson keeps the contract small enough to read in one sitting.
+研究循环运行不受信任的代码。假设来自采样器，实验脚本来自同一路径；将任何一个视为进程内安全都是自找崩溃，而且会把编排器一起拖下水。子进程是语言提供的最简单隔离：独立进程、独立地址空间、父端信号处理。
 
-## The ExperimentSpec shape
+这里的运行器没有实现完整沙箱。没有 cgroup、没有 seccomp 过滤器、没有命名空间重映射。它有的是 wall clock 超时、内存增长轮询循环和终止路径——在任一限制超出时终止进程。这是每个更复杂沙箱扩展的运行时契约。本课程保持契约小到可以一口气读完。
+
+## ExperimentSpec 的形状
 
 ```text
 ExperimentSpec
-  spec_id        : str            (stable id, "exp_001")
-  hypothesis_id  : int            (link back to the queue from lesson 50)
-  script_path    : str            (path to the python script to run)
-  config         : dict           (passed to the script as one json arg)
-  seed           : int            (deterministic seed for the experiment)
-  wall_timeout_s : float          (hard timeout, killed on exceed)
-  memory_cap_mb  : int            (soft cap, polled; killed on exceed)
-  metric_keys    : list[str]      (which fields the evaluator will read)
+  spec_id        : str            (稳定 id，"exp_001")
+  hypothesis_id  : int            (链接回课程 50 的队列)
+  script_path    : str            (要运行的 python 脚本路径)
+  config         : dict           (作为 json 参数传给脚本)
+  seed           : int            (实验的确定性种子)
+  wall_timeout_s : float          (硬超时，超出时杀死)
+  memory_cap_mb  : int            (软上限，轮询；超出时杀死)
+  metric_keys    : list[str]      (评估器将读取哪些字段)
 ```
 
-The script lives on disk; the runner writes the config to a temp file path that the script reads. The script is expected to print a single json line on stdout whose keys are a superset of `metric_keys`. Anything else on stdout is captured but ignored by the metrics parser.
+脚本存在于磁盘上；运行器将配置写入脚本读取的临时文件路径。脚本被期望在 stdout 上打印一行 json，其键是 `metric_keys` 的超集。stdout 上的其他任何内容都被捕获但被指标解析器忽略。
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart TD
-    A[ExperimentSpec] --> B[serialise config to temp file]
-    B --> C[spawn subprocess]
-    C --> D[stdout / stderr pipes]
-    C --> E[wall clock timer]
-    C --> F[memory poller]
-    E -- exceeded --> K[kill process]
-    F -- exceeded --> K
-    D --> P[parse final json line]
-    K --> R[result with terminal=timeout or oom]
-    P --> R[result with metrics]
+    A[ExperimentSpec] --> B[将配置序列化到临时文件]
+    B --> C[生成子进程]
+    C --> D[stdout / stderr 管道]
+    C --> E[wall clock 计时器]
+    C --> F[内存轮询器]
+    E -- 超限 --> K[杀死进程]
+    F -- 超限 --> K
+    D --> P[解析最终 json 行]
+    K --> R[结果 terminal=timeout 或 oom]
+    P --> R[结果 metrics]
     R --> O[ExperimentResult]
 ```
 
-The runner is one class with one main method. The poller is a small thread that wakes once every poll interval and reads the subprocess `psutil` equivalent from the proc filesystem when available, falling back to no op when the platform does not expose it.
+运行器是一个类一个主方法。轮询器是一个小线程，每隔轮询间隔唤醒一次，在可用时从 proc 文件系统读取子进程 `psutil` 等价物，在平台不暴露时回退到空操作。
 
-## Why a soft memory cap
+## 为什么要软性内存上限
 
-Hard memory caps need `resource.setrlimit` and only work on POSIX. The lesson ships a portable approach: poll the resident set size from the platform and kill the subprocess if it exceeds the cap. The cap is soft because the poller has a non zero interval; a process can spike above the cap between polls and then drop back. The runner records the maximum observed RSS so the evaluator can see how close the run came to the limit.
+硬性内存上限需要 `resource.setrlimit` 且仅在 POSIX 上工作。课程提供了一个可移植方法：从平台轮询常驻集大小，并在超出上限时杀死子进程。上限是软性的，因为轮询器有非零间隔；进程可能在两次轮询之间飙升超过上限然后降回来。运行器记录观察到的最大 RSS，这样评估器可以看到运行离限制有多近。
 
-On systems without process inspection support, the poller logs a one time warning and disables itself. The wall clock timeout still applies. The lesson tests cover both paths.
+在没有进程检查支持的系统上，轮询器记录一次警告并禁用自己。Wall clock 超时仍然适用。课程测试覆盖两条路径。
 
-## Capturing stdout and stderr
+## 捕获 stdout 和 stderr
 
-The runner reads both pipes drained on completion. Stdout is scanned line by line; the last line that parses as json with all required `metric_keys` is taken as the metrics blob. Earlier json lines are kept in the result as `intermediate_metrics`; the evaluator can use these for learning curves.
+运行器在完成时读取两个耗尽的管道。Stdout 逐行扫描；解析为带有所有必需 `metric_keys` 的 json 的最后一行被视为指标 blob。早期的 json 行作为 `intermediate_metrics` 保存在结果中；评估器可以用这些来绘制学习曲线。
 
-Stderr is captured verbatim into the result. The runner never raises on a non zero exit code; instead it records the code in the result. Any non zero exit is labelled `"crash"` even when the script printed metrics, so the evaluator treats partial runs as failures by default.
+Stderr 原样捕获到结果中。运行器永远不会因非零退出码而抛出异常；而是将其记录在结果中。任何非零退出都标记为 `"crash"`，即使脚本打印了指标，这样评估器默认将部分运行视为失败。
 
-## Ablation table
+## 消融表
 
 ```python
 def ablate(base: ExperimentSpec, knob: str, values: list[Any]) -> list[ExperimentSpec]:
     ...
 ```
 
-Given a base spec and a knob name, the helper returns one spec per value with `config[knob]` overridden. Each spec gets a derived `spec_id` (`f"{base.spec_id}_{knob}_{value}"`). The runner ships an `AblationRunner` that runs them in order and returns an `AblationTable` keyed by knob value.
+给定基础 spec 和旋钮名称，辅助函数返回每个值的一个 spec，其中 `config[knob]` 被覆盖。每个 spec 获得一个派生的 `spec_id`（`f"{base.spec_id}_{knob}_{value}"`）。运行器附带一个 `AblationRunner`，按顺序运行它们并返回按旋钮值索引的 `AblationTable`。
 
-Why one knob at a time. Full factorial sweeps blow up exponentially and produce results the evaluator cannot interpret. One knob at a time produces a clean axis the evaluator can plot. The lesson supports multi knob sweeps only as repeated single knob ablations, composed by the caller.
+为什么要一次一个旋钮。全因子扫描会指数级爆炸，产生评估器无法解释的结果。一次一个旋钮产生一条评估器可以绘制的清晰轴。课程仅将多次旋钮扫描作为重复的单旋钮消融支持，由调用方组合。
 
-## Determinism
+## 确定性
 
-Every spec carries a seed. The runner forwards the seed to the script via the config dict (`config["__seed"] = spec.seed`). The mock experiment scripts in `code/experiments/` honour the seed and produce identical metrics across runs. The evaluator in lesson fifty-three depends on this; without determinism a "regression" might be a different random initialisation.
+每个 spec 都带有种子。运行器通过 config 字典将种子转发给脚本（`config["__seed"] = spec.seed`）。`code/experiments/` 中的模拟实验脚本遵循种子并在运行中产生相同的指标。第五十三课的评估器依赖于此；没有确定性，"回归"可能是不同的随机初始化。
 
-## The mock experiment script
+## 模拟实验脚本
 
-The lesson ships one experiment script: `code/experiments/sparsity_experiment.py`. It is a real script that reads its config file, simulates a small training run with a numpy random pass, and prints a json metrics blob. The script honours a `sleep_s` knob for testing timeouts and an `allocate_mb` knob for testing the memory poller.
+课程附带一个实验脚本：`code/experiments/sparsity_experiment.py`。它是一个真实脚本，读取其配置文件，模拟一个带有 numpy 随机过程的小训练运行，并打印一个 json 指标 blob。脚本遵循一个 `sleep_s` 旋钮来测试超时，一个 `allocate_mb` 旋钮来测试内存轮询器。
 
-The simulation is not training anything real. It is a numerical computation that mimics the shape of a training loop: a loss curve, a final perplexity, a wall time. The point of the lesson is the runner, not the simulation. A real experiment script would import a model.
+模拟不是训练任何真实的东西。它是一个数值计算，模拟训练循环的形状：损失曲线、最終困惑度、wall time。课程的要点是运行器，不是模拟。真实实验脚本会导入一个模型。
 
-## Result shape
+## 结果形状
 
 ```text
 ExperimentResult
@@ -104,16 +105,16 @@ ExperimentResult
   stderr_tail          : str
 ```
 
-The evaluator reads `metrics` and `terminal` first. If terminal is anything other than `"ok"` the experiment counts as a failed run and the evaluator's verdict is automatic. Otherwise the metrics are passed through the significance test.
+评估器首先读取 `metrics` 和 `terminal`。如果 terminal 不是 `"ok"`，实验计为失败运行，评估器的裁决是自动的。否则，指标通过显著性检验。
 
-## How to read the code
+## 如何阅读代码
 
-`code/main.py` defines `ExperimentSpec`, `ExperimentResult`, `ExperimentRunner`, `AblationRunner`, and a deterministic demo. The subprocess management is one class. The memory poller is a small thread. The ablation helper is a single function.
+`code/main.py` 定义了 `ExperimentSpec`、`ExperimentResult`、`ExperimentRunner`、`AblationRunner` 和一个确定性演示。子进程管理是一个类。内存轮询器是一个小线程。消融辅助函数是一个函数。
 
-`code/experiments/sparsity_experiment.py` is the mock experiment used in tests. It reads its config file path from argv and writes a single json metrics line on completion.
+`code/experiments/sparsity_experiment.py` 是测试中使用的模拟实验。它从 argv 读取配置文件路径，并在完成时在 stdout 上写一行 json 指标。
 
-`code/tests/test_runner.py` covers the success path, the timeout path, the crash path, the ablation table, and the determinism check across two runs.
+`code/tests/test_runner.py` 覆盖了成功路径、超时路径、崩溃路径、消融表和跨两次运行的确定性检查。
 
-## Where this slots in
+## 这放在哪里
 
-Lesson fifty generates the hypothesis. Lesson fifty-one filters out anything the literature already settled. Lesson fifty-two runs the experiment for what is left. Lesson fifty-three reads the result, runs the significance test, and writes the verdict the orchestrator stores against the hypothesis id.
+第五十课生成假设。第五十一课过滤掉文献中已解决的任何内容。第五十二课为剩下的运行实验。第五十三课读取结果，运行显著性检验，并写出编排器存储在假设 id 上的裁决。

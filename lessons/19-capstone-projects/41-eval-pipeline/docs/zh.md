@@ -1,114 +1,114 @@
-# Capstone Lesson 41: Full Evaluation Pipeline
+# Capstone 第41课: 完整评估流水线
 
-> Training is the part you can monitor with loss curves. Evaluation is the part you have to design. This lesson builds a unified eval pipeline that takes any trained language model, runs four heterogeneous evals on it, aggregates the results into a per-task report, and ships a local mock LLM-as-judge so the loop runs without a network. The four evals cover the dimensions every shipping model needs: language modelling (perplexity), short-form correctness (exact-match), open-form similarity (token F1), and qualitative scoring (judge).
+> 训练是你可以用损失曲线监控的部分。评估是你必须设计的部分。本课构建一个统一的评估流水线，接收任何训练好的语言模型，对其运行四个异构评估，将结果聚合成每个任务的报告，并发货一个本地模拟 LLM-as-judge，使循环无需网络即可运行。四个评估覆盖了每个发布模型都需要维度：语言建模（困惑度）、短格式正确性（精确匹配）、开放格式相似性（token F1）和定性评分（judge）。
 
-**Type:** Build
-**Languages:** Python (torch, numpy)
-**Prerequisites:** Phase 19 lessons 30-37 (NLP LLM track: tokenizer, embedding table, attention block, transformer body, pre-training loop, checkpointing, generation, perplexity)
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python（torch、numpy）
+**前置条件：** 第 19 阶段课程 30-37（NLP LLM 路线：分词器、embedding 表、注意力块、Transformer 主体、预训练循环、checkpointing、生成、困惑度）
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Compute held-out perplexity with masked-token accounting on a tiny transformer.
-- Run an exact-match eval on short-form factual prompts.
-- Compute token-level F1 between predicted and reference strings with normalisation.
-- Build a local mock LLM-as-judge that scores model outputs on a 1-5 scale.
-- Aggregate the four evals into a single weighted report with per-task breakdown.
+- 在微型 Transformer 上计算留出集的困惑度，带有屏蔽 token  accounting。
+- 在短格式事实性 prompt 上运行精确匹配评估。
+- 在预测字符串和参考字符串之间计算带标准化的 token 级 F1。
+- 构建一个本地模拟 LLM-as-judge，以 1-5 规模对模型输出进行评分。
+- 将四个评估聚合成一个带有每个任务细分的单一加权报告。
 
-## The Problem
+## 问题
 
-A single metric never describes a language model. Perplexity says how well the model fits the language distribution but says nothing about whether it answers questions. Exact-match says whether the model produces the gold string but punishes correct paraphrases. Token F1 forgives paraphrase but is fooled by lexical overlap with wrong content. LLM-as-judge captures qualitative dimensions but is expensive and stochastic.
+单个指标永远无法描述语言模型。困惑度说明模型拟合语言分布的好坏，但不说它是否回答问题。精确匹配说明模型是否产生 gold 字符串，但惩罚正确的释义。Token F1 原谅释义，但被与错误内容的词汇重叠所迷惑。LLM-as-judge 捕捉定性维度，但代价高昂且具有随机性。
 
-The pipeline you actually want has all four. Each eval covers a dimension the others miss. Each runs on a different subset of held-out data shaped for that metric. The final report shows the per-task numbers side by side and an aggregate, so a reviewer can see at a glance which trade-offs the model is making.
+你真正需要的流水线有以上所有四个。每个评估覆盖其他评估遗漏的维度。每个在为该指标设计的数据留出子集上运行。最终报告并排显示每个任务的数字和聚合值，这样审查者可以一目了然地看到模型正在进行的权衡。
 
-This lesson builds that pipeline, end to end, in one file.
+本课端到端构建该流水线，在一个文件中。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart LR
-  Model[trained model] --> PPL[perplexity eval<br/>held-out LM]
-  Model --> EM[exact-match eval<br/>factual short-form]
-  Model --> F1[token F1 eval<br/>open-ended]
-  Model --> J[mock judge<br/>1-5 scoring]
-  PPL --> R[Report]
+  Model[训练好的模型] --> PPL[困惑度评估<br/>留出 LM]
+  Model --> EM[精确匹配评估<br/>事实性短格式]
+  Model --> F1[token F1 评估<br/>开放域]
+  Model --> J[模拟 judge<br/>1-5 评分]
+  PPL --> R[报告]
   EM --> R
   F1 --> R
   J --> R
-  R --> A[(aggregate score)]
+  R --> A[(聚合分数)]
 ```
 
-Each eval is a function from `(model, dataset) -> EvalResult`. The result carries the metric value, per-example details for inspection, and a name for the aggregate. The pipeline composes them with a config that says which evals to run and how to weight them.
+每个评估是一个函数从 `(model, dataset) -> EvalResult`。结果携带指标值、每个样本的详细信息供检查，以及用于聚合的名称。流水线用配置组合它们，配置说明运行哪些评估以及如何加权。
 
-## Perplexity, properly counted
+## 困惑度，正确计算
 
-Perplexity is `exp(mean negative log-likelihood per token)`. The implementation has two traps:
+困惑度是 `exp(每个 token 负对数似然的均值)`。实现有两个陷阱：
 
-- The mean must be over actual token positions, not over batch * sequence. Padding tokens have to be excluded from the denominator or perplexity will look better than it is.
-- The model predicts the next token, so logits at position `i` predict the token at position `i+1`. Off-by-one mistakes here are silent: the loss still trains, but the metric becomes meaningless.
+- 均值必须在实际 token 位置上计算，而不是在 batch * sequence 上。填充 token 必须从分母中排除，否则困惑度会看起来比实际更好。
+- 模型预测下一个 token，所以位置 `i` 的 logits 预测位置 `i+1` 的 token。这里的 off-by-one 错误是静默的：损失仍然训练，但指标变得毫无意义。
 
-The eval computes per-batch sums of `-log p(token)` over non-pad positions and a per-batch token count, then divides at the end. This is numerically safer than averaging per-batch perplexities (which under-weights short sequences) and matches the textbook definition.
+评估计算每个 batch 的非填充位置上的 `-log p(token)` 总和以及每个 batch 的 token 计数，然后在最后除。这在数值上比平均每个 batch 的困惑度（这会低估短序列）更安全，与教科书定义一致。
 
-## Exact-match, with normalisation
+## 精确匹配，带标准化
 
-The harness normalises both the prediction and the reference before comparing:
+harness 在比较之前标准化预测和参考：
 
-- Lowercase.
-- Strip surrounding whitespace.
-- Collapse internal whitespace runs to a single space.
-- Drop trailing terminal punctuation (`.`, `!`, `?`) if both sides differ only by punctuation.
+- 小写。
+- 去除周围空格。
+- 将内部空格序列折叠为单个空格。
+- 如果两者仅因标点符号不同而不同，则丢弃尾部终止标点（`.`、`!`、`?`）。
 
-Normalisation makes exact-match useful in practice. A model that says `"Paris"` is right; one that says `"Paris."` is also right; one that says `"  paris  "` is also right. The metric still requires the answer to be the same string after normalisation.
+标准化使精确匹配在实践中可用。说 `"Paris"` 的模型是正确的；说 `"Paris."` 的也是正确的；说 `"  paris  "` 的也是正确的。指标仍然要求标准化后答案是相同的字符串。
 
-## Token F1, the right way
+## Token F1，正确的方式
 
-Token F1 is the harmonic mean of precision and recall computed over the bag-of-tokens. Steps:
+Token F1 是在 token 袋上计算的精确率和召回率的调和均值。步骤：
 
-1. Normalise prediction and reference (same rules as exact-match).
-2. Split each into a list of tokens (whitespace tokenisation).
-3. Count the multiset intersection.
-4. Precision = `intersection_count / len(pred_tokens)`. Recall = `intersection_count / len(ref_tokens)`. F1 = harmonic mean.
+1. 标准化预测和参考（与精确匹配相同的规则）。
+2. 分割成 token 列表（空白分词）。
+3. 计算多重集交集。
+4. 精确率 = `intersection_count / len(pred_tokens)`。召回率 = `intersection_count / len(ref_tokens)`。F1 = 调和均值。
 
-If both prediction and reference are empty, F1 is 1 (vacuous match). If only one is empty, F1 is 0. This pattern matches the SQuAD evaluation reference and produces stable numbers across paraphrases.
+如果预测和参考都为空，F1 为 1（空真匹配）。如果只有一个为空，F1 为 0。此模式匹配 SQuAD 评估参考，并在释义上产生稳定的数字。
 
-## Local Mock LLM-as-Judge
+## 本地模拟 LLM-as-Judge
 
-A real judge is a frontier model behind an API. For this lesson the judge has to run offline. The mock judge is a deterministic scorer that takes an instruction, the model's prediction, and the reference, and returns a score in `{1, 2, 3, 4, 5}` plus a one-line rationale. The scoring rules are explicit:
+真正的 judge 是一个在 API 背后的前沿模型。对于本课，judge 必须离线运行。模拟 judge 是一个确定性评分器，接受指令、模型的预测和参考，并返回 `{1, 2, 3, 4, 5}` 中的分数加上一行理由。评分规则是明确的：
 
-- 5 if normalised prediction equals normalised reference.
-- 4 if token F1 between prediction and reference is at least 0.8.
-- 3 if token F1 is in `[0.5, 0.8)`.
-- 2 if token F1 is in `[0.2, 0.5)`.
-- 1 otherwise.
+- 5 如果标准化预测等于标准化参考。
+- 4 如果预测和参考之间的 token F1 至少为 0.8。
+- 3 如果 token F1 在 `[0.5, 0.8)`。
+- 2 如果 token F1 在 `[0.2, 0.5)`。
+- 1 否则。
 
-This is not a real judge, but it has the right interface. Swap in a real model later by changing one function. The pipeline does not care.
+这不是一个真正的 judge，但它有正确的接口。以后通过更改一个函数可以换入真正的模型。流水线不关心。
 
 ```mermaid
 flowchart LR
-  Inst[instruction] --> Judge[mock judge]
-  Pred[prediction] --> Judge
-  Ref[reference] --> Judge
-  Judge --> Score[1-5 score]
-  Judge --> Why[rationale]
+  Inst[指令] --> Judge[模拟 judge]
+  Pred[预测] --> Judge
+  Ref[参考] --> Judge
+  Judge --> Score[1-5 分数]
+  Judge --> Why[理由]
 ```
 
-## Aggregation
+## 聚合
 
-The aggregate is a weighted mean of normalised eval scores. Each eval reports its own number in `[0, 1]`:
+聚合是标准化评估分数的加权均值。每个评估在 `[0, 1]` 中报告自己的数字：
 
-- Perplexity: normalise as `1 / (1 + log(perplexity))`. A perplexity of 1 maps to 1, infinity maps to 0.
-- Exact-match: already in `[0, 1]`.
-- Token F1: already in `[0, 1]`.
-- Judge: divide by 5.
+- 困惑度：标准化为 `1 / (1 + log(perplexity))`。困惑度 1 映射到 1，无穷大映射到 0。
+- 精确匹配：已在 `[0, 1]` 中。
+- Token F1：已在 `[0, 1]` 中。
+- Judge：除以 5。
 
-Weights are configurable. The default mix is 0.2 perplexity, 0.3 exact-match, 0.3 token F1, 0.2 judge. The choice of weights is a product decision; the lesson exposes the knob so you can experiment.
+权重是可配置的。默认混合是 0.2 困惑度、0.3 精确匹配、0.3 token F1、0.2 judge。权重的选择是一个产品决策；本课暴露了这个旋钮，这样你就可以进行实验。
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart TD
-  Data[(held-out fixtures<br/>LM / EM / F1 / Judge)] --> Suite[EvalSuite]
-  Model[trained model] --> Suite
+  Data[(留出 fixtures<br/>LM / EM / F1 / Judge)] --> Suite[EvalSuite]
+  Model[训练好的模型] --> Suite
   Suite --> PE[perplexity_eval]
   Suite --> EE[exact_match_eval]
   Suite --> FE[token_f1_eval]
@@ -117,39 +117,39 @@ flowchart TD
   EE --> Agg
   FE --> Agg
   JE --> Agg
-  Agg --> R[FinalReport<br/>per-task + aggregate]
+  Agg --> R[最终报告<br/>每任务 + 聚合]
   R --> JSON[(report.json)]
-  R --> Pretty[stdout table]
+  R --> Pretty[stdout 表格]
 ```
 
-The `EvalSuite` is a thin orchestrator. Each individual eval is a free function that takes `(model, tokenizer, dataset, config)` and returns an `EvalResult`. The `Aggregator` collects results and produces the final report. The demo prints the table and writes a JSON copy that downstream CI can ingest.
+`EvalSuite` 是一个轻量级编排器。每个单独评估是一个接受 `(model, tokenizer, dataset, config)` 并返回 `EvalResult` 的自由函数。`Aggregator` 收集结果并生成最终报告。演示打印表格并写入 JSON 副本，供下游 CI 接收。
 
-## What you will build
+## 你将构建的内容
 
-The implementation is one `main.py` plus tests.
+实现是一个 `main.py` 加测试。
 
-1. `TinyGPT`: the same decoder-only architecture used in lessons 38-40, included so the lesson stands alone.
-2. `InstructionTokenizer`: byte tokeniser with INST / RESP / PAD specials.
-3. Four fixtures: an LM corpus, an EM set, an F1 set, and a judge set. Twenty examples each, deterministic.
-4. `perplexity_eval`: returns `EvalResult` with the perplexity value and per-token loss histogram.
-5. `exact_match_eval`: returns mean EM and per-example records.
-6. `token_f1_eval`: returns mean token F1 and per-example records.
-7. `mock_judge` and `judge_eval`: per-example score and rationale, mean score across the set.
-8. `Aggregator.normalise`: per-eval normalisation rule.
-9. `Aggregator.aggregate`: weighted mean and the assembled report.
-10. `run_demo`: trains a tiny model briefly, runs all four evals, prints the report table and writes the JSON, exits zero on success.
+1. `TinyGPT`：与第 38-40 课使用的相同仅解码器架构，包含在内以使本课独立存在。
+2. `InstructionTokenizer`：带 INST / RESP / PAD 特殊的字节分词器。
+3. 四个 fixtures：LM 语料库、EM 集合、F1 集合和 judge 集合。每个 20 个示例，确定性生成。
+4. `perplexity_eval`：返回带有困惑度值和每个 token 损失直方图的 `EvalResult`。
+5. `exact_match_eval`：返回平均 EM 和每个样本的记录。
+6. `token_f1_eval`：返回平均 token F1 和每个样本的记录。
+7. `mock_judge` 和 `judge_eval`：每个样本的分数和理由，跨集合的平均分数。
+8. `Aggregator.normalise`：每个评估的标准化规则。
+9. `Aggregator.aggregate`：加权均值和组装报告。
+10. `run_demo`：简要训练一个微型模型，运行所有四个评估，打印报告表格并写入 JSON，成功后以零退出。
 
-## Reading the report
+## 阅读报告
 
-The report has three layers. The top is the aggregate score. Below it are the four per-eval numbers. Below those are the per-example breakdowns for diagnostics. A failing CI run typically wants the aggregate, but a reviewer chasing a regression wants the per-example breakdown to see which inputs the model got wrong.
+报告有三个层次。顶层是聚合分数。下面是四个每个评估的数字。再下面是每个示例的细分用于诊断。失败的 CI 运行通常需要聚合分数，但追逐回归的审查者需要每个示例的细分，以查看模型在哪些输入上出错。
 
-The JSON dump uses stable keys so a CI dashboard can plot trend lines across versions. The pretty-printed table is for humans staring at the terminal after a training run.
+JSON 转储使用稳定的键，因此 CI 仪表板可以绘制跨版本的趋势线。格式化的表格供人们在训练运行后盯着终端查看。
 
-## Stretch goals
+## 拓展目标
 
-- Add a calibration eval: do the model's softmax probabilities match its accuracy? Bucket predictions by confidence and report the empirical accuracy per bucket.
-- Add a robustness eval: tag each example with a perturbation (typo, paraphrase, distractor) and report metric drop per perturbation.
-- Replace the mock judge with a real model behind an HTTP call. The function signature does not change.
-- Add per-task weight learning: instead of fixed weights, fit weights to a target preference order over models.
+- 添加校准评估：模型的 softmax 概率是否与其准确率匹配？按置信度将预测分桶，报告每个桶的经验准确率。
+- 添加鲁棒性评估：用扰动（拼写错误、释义、干扰项）标记每个示例，报告每个扰动的指标下降。
+- 用 HTTP 调用背后的真实模型替换模拟 judge。函数签名不变。
+- 添加每任务权重学习：不是固定权重，而是将权重拟合到模型的目標偏好顺序。
 
-The implementation gives you the four evals, the aggregator, and the report. Real evaluation pipelines layer many more dimensions on top; the pattern stays the same: one function per eval, one aggregator, one report.
+这个实现给了你四个评估、聚合器和报告。真实的评估流水线在上面叠加更多维度；模式保持不变：每个评估一个函数，一个聚合器，一个报告。

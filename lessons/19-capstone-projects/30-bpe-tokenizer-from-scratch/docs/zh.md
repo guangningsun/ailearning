@@ -1,99 +1,99 @@
-# BPE Tokenizer From Scratch
+# 从零实现 BPE 分词器
 
-> Bytes in, ids out, ids back to the same bytes. Build the tokenizer that every modern text model still starts from.
+> 输入字节，输出 id，id 再变回同样的字节。打造这个每台现代文本模型依然赖以起步的分词器。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 04 lessons, Phase 07 transformer lessons
-**Time:** ~90 minutes
+**类型：** 建造型
+**语言：** Python
+**前置条件：** 阶段 04 课程、阶段 07 Transformer 课程
+**时间：** 约 90 分钟
 
-## Learning Objectives
-- Train a Byte-Pair Encoding vocabulary from a raw text corpus by repeatedly merging the most frequent adjacent symbol pair.
-- Implement a deterministic merge table and apply it to fresh text to produce a stream of subword ids.
-- Round-trip arbitrary UTF-8 input to ids and back without information loss.
-- Reserve and protect special tokens (`<|endoftext|>`, `<|pad|>`) so they survive training and decoding.
-- Reason about why a byte-level alphabet is the right floor for a general-purpose tokenizer.
+## 学习目标
+- 通过反复合并训练语料中最频繁出现的相邻符号对，从原始文本语料库训练一个字节对编码词汇表。
+- 实现确定性合并表，并将其应用于新文本以产生子词 id 流。
+- 对任意 UTF-8 输入进行往返转换（编码为 id、再解码回字节），不丢失任何信息。
+- 预留并保护特殊令牌（`<|endoftext|>`、`<|pad|>`），使其在训练和解码过程中不受影响。
+- 理解为什么字节级字母表是通用分词器的正确底层选择。
 
-## The frame
+## 框架
 
-A language model never sees text. It sees integers. The map from a string to a list of integers and back is the tokenizer. Get this layer wrong and every loss curve in the training run is measuring the wrong thing.
+语言模型看到的不是文本，而是整数。从字符串到整数列表、再回到字符串的映射就是分词器。这一层如果出错，训练过程中每一条 loss 曲线都在测量错误的东西。
 
-The dominant family of subword tokenizers for general text models is Byte-Pair Encoding. The idea is small. Start from a known alphabet. Find the adjacent symbol pair that appears most often in the training corpus. Merge it into a new symbol. Repeat until the vocabulary reaches the target size. Encoding new text reuses the same merge list in the same order.
+通用文本模型中占主导地位的子词分词器家族是字节对编码（Byte-Pair Encoding）。思想很简洁：从一个已知字母表开始。找出训练语料中相邻符号对出现最频繁的那一对。将其合并为一个新符号。重复，直到词汇表达到目标大小。对新文本进行编码时，按相同顺序重用相同的合并列表。
 
-We will build the byte-level variant. The alphabet is the 256 raw bytes, not Unicode code points. That choice is what lets the tokenizer handle any UTF-8 input without falling back to an unknown token.
+我们构建的是字节级变体。字母表是 256 个原始字节，而非 Unicode 码点。正是这个选择使得分词器能够处理任意 UTF-8 输入，而不会回退到未知令牌。
 
-## The pipeline
+## 流水线
 
 ```mermaid
 flowchart LR
-    A[raw corpus text] --> B[byte split per word]
-    B --> C[count adjacent pair frequencies]
-    C --> D{pair table empty?}
-    D -- no --> E[merge most frequent pair]
-    E --> F[append merge to merge table]
-    F --> G[grow vocabulary by one id]
+    A[原始语料文本] --> B[按词切分为字节]
+    B --> C[统计相邻对频率]
+    C --> D{配对表为空？}
+    D -- 否 --> E[合并最频繁的对]
+    E --> F[将合并追加到合并表]
+    F --> G[词汇表增加一个 id]
     G --> C
-    D -- yes --> H[final vocab + merges]
-    H --> I[encode new text]
-    H --> J[decode ids back to bytes]
+    D -- 是 --> H[最终词汇表 + 合并表]
+    H --> I[编码新文本]
+    H --> J[将 id 解码回字节]
 ```
 
-The training side and the inference side share the merge table. That sharing is the contract. If you change the merge order at inference, you decode a different stream of ids.
+训练侧和推理侧共享合并表。这种共享即契约。如果在推理时改变了合并顺序，解码出的 id 流就会不同。
 
-## The byte alphabet
+## 字节字母表
 
-The first 256 ids are reserved for the raw bytes 0x00 through 0xFF. That guarantees every input string can be expressed in the vocabulary before any merge happens. After the byte block we reserve a small range for special tokens. The training loop never proposes those ids as merge targets because we keep them out of the pretokenized stream entirely.
+前 256 个 id 预留给原始字节 0x00 到 0xFF。这保证了任何输入字符串在任何合并发生之前都能用该词汇表表示。在字节块之后，我们为特殊令牌预留一个小范围。训练循环永远不会将这些 id 列为合并目标，因为我们完全将它们排除在预分词流之外。
 
-The pretokenizer splits the corpus on whitespace and punctuation boundaries before training sees it. Without that split the BPE merge step would happily learn merges that cross word boundaries and the vocabulary fills up with whole common phrases. With the split, merges stay inside a word and the result generalizes.
+预分词器在训练看到文本之前按空格和标点符号边界切分语料库。如果没有这个切分，BPE 合并步骤会愉快地学会跨越词边界的合并，词汇表就会被整个常用短语填满。有了这个切分，合并保持在词内，结果更具泛化性。
 
-## The training loop
+## 训练循环
 
-For each training step the loop does three things. It walks every word in the corpus and counts how often each adjacent pair of current symbols appears, weighted by how often the word itself appears. It picks the pair with the highest count. It rewrites every occurrence of that pair into a single new symbol whose id is the next free slot in the vocabulary. Then it records the merge.
+每个训练步骤的循环做三件事：遍历语料库中的每个词，统计当前符号的每个相邻对出现的次数（按该词本身出现的频率加权）。选出计数最高的那一对。将该对的每个出现重写为一个新符号，其 id 为词汇表中下一个空闲槽位。然后记录合并。
 
 ```mermaid
 sequenceDiagram
-    participant Corpus
-    participant PairCount
-    participant MergeTable
-    participant Vocab
-    Corpus->>PairCount: count adjacent pairs
-    PairCount->>MergeTable: pick top pair (a,b)
-    MergeTable->>Vocab: assign new id = a+b
-    MergeTable->>Corpus: rewrite every (a,b) to new id
-    Corpus->>PairCount: recount for next step
+    participant 语料库
+    participant 配对计数器
+    participant 合并表
+    participant 词汇表
+    语料库->>配对计数器: 统计相邻对
+    配对计数器->>合并表: 选出最高频对 (a,b)
+    合并表->>词汇表: 分配新 id = a+b
+    合并表->>语料库: 将每个 (a,b) 重写为新 id
+    语料库->>配对计数器: 为下一步重新统计
 ```
 
-The cost of each step is linear in the size of the corpus expressed as a list of symbol sequences. For a million words and a target vocabulary of ten thousand ids the loop runs to completion in seconds because the symbol sequences shrink as merges land.
+每一步的开销与语料库表示为符号序列列表的大小成线性关系。对于一百万个词和一万个 id 的目标词汇表，循环在秒级完成，因为符号序列随着合并落地而收缩。
 
-## Encoding fresh text
+## 编码新文本
 
-Inference does not call the merge counter. It applies the merge table in the same order it was learned. For a fresh word the encoder starts from the byte split. It scans the current sequence for the lowest-ranked merge (the earliest one that applies). It performs that merge. It scans again. The loop ends when no merge in the table applies to the current sequence.
+推理不调用合并计数器。它按学习到的相同顺序应用合并表。对于一个新词，编码器从字节切分开始。它扫描当前序列，寻找排名最低的合并（最早适用的那个）。执行该合并。再扫描。循环结束，直到表中没有合并适用于当前序列。
 
-The ordering by rank is the property that makes encoding deterministic and matches the training behavior on the same input. A merge that was learned first sits at the top of the table and gets applied first. If two merges could apply at the same position, the lower-rank one wins.
+按排名排序这一性质使得编码是确定性的，并与相同输入上的训练行为匹配。最早学到的合并位于表顶，最早被应用。如果两个合并可以在同一位置适用，排名更低的胜出。
 
-## Special tokens
+## 特殊令牌
 
-Special tokens are ids that the byte stream can never produce. We reserve them by hand. Two are enough for this lesson.
+特殊令牌是字节流永远无法产生的 id。我们手动预留。本课两个足够。
 
-- `<|endoftext|>` separates documents during pretraining. It tells the model "a new document starts here, do not let the previous one's context leak in."
-- `<|pad|>` fills out short sequences so a batch can be a rectangular tensor. The loss mask hides it during training.
+- `<|endoftext|>` 在预训练期间分隔文档。它告诉模型"这里开始一个新文档，不要让前一个文档的上下文泄露进来。"
+- `<|pad|>` 填充短序列，使批处理可以形成矩形张量。损失掩码在训练期间将其隐藏。
 
-The encoder accepts a flag to allow special tokens in the input. With the flag off, the strings `<|endoftext|>` and `<|pad|>` get tokenized as the bytes that spell them out. With the flag on, the literal strings get mapped to their reserved ids and are not subject to any merge.
+编码器接受一个标志，允许在输入中使用特殊令牌。关闭该标志时，字符串 `<|endoftext|>` 和 `<|pad|>` 被按字节拆分进行分词。开启该标志时，字面字符串被映射到其预留的 id，不受任何合并影响。
 
-## Round-trip guarantee
+## 往返保证
 
-Encoding then decoding must return the input bytes exactly. The decoder concatenates the byte expansion of every id in order. Since every id is either a raw byte or the concatenation of two previously known ids, the recursive expansion always terminates in raw bytes. Decoding then returns the UTF-8 string that those bytes spell.
+先编码再解码必须精确返回输入字节。解码器按顺序拼接每个 id 的字节展开。由于每个 id 要么是原始字节，要么是两个先前已知 id 的拼接，递归展开总是在原始字节处终止。解码后返回这些字节所拼出的 UTF-8 字符串。
 
-The test suite in this lesson checks that property on an unseen sentence, on a sentence with a Unicode emoji, and on a sentence that contains a literal `<|endoftext|>` token.
+本课的测试套件在未见过的句子、带 Unicode 表情的句子和包含字面 `<|endoftext|>` 令牌的句子上检查这一属性。
 
-## What this lesson does not do
+## 本课不涉及的内容
 
-It does not build a regex-driven pretokenizer in the style of the largest production tokenizers. The pretokenizer here is a small whitespace and punctuation split. It is enough to produce sensible merges on a small training corpus and the contract with the rest of the lesson chain stays the same. The next lesson treats the tokenizer as a black box and builds the sliding-window dataset on top of it.
+它不构建生产级最大分词器风格的正则驱动预分词器。这里的预分词器是一个简单的空格和标点切分。它足以在小型训练语料上产生合理的合并，与本课程链其余部分的契约保持一致。下一课将分词器视为黑盒，在此基础上构建滑动窗口数据集。
 
-It does not parallelize the pair counter. A loop in Python over a corpus of a few thousand words finishes in well under a second. For larger corpora the obvious move is to count pairs per word in parallel and reduce.
+它不对配对计数器做并行化。在几千词的语料上跑一个 Python 循环，不到一秒就跑完。对于更大的语料，显然的改进方向是按词并行计数然后归并。
 
-## How to read the code
+## 如何阅读代码
 
-`main.py` defines four objects. `BPETokenizer` holds the vocabulary, the merge table, and the special-token table. `train` is the training loop. `encode` is the inference path. `decode` is the byte concatenation. The demo at the bottom trains a small tokenizer on a built-in corpus, encodes a held-out sentence, decodes the ids back, and prints both. The tests in `code/tests/test_bpe.py` pin the round-trip property, the special-token reservation, and the merge ordering.
+`main.py` 定义了四个对象。`BPETokenizer` 持有词汇表、合并表和特殊令牌表。`train` 是训练循环。`encode` 是推理路径。`decode` 是字节拼接。底部的演示在一个内置语料上训练一个小型分词器，对一个保留句子进行编码，将 id 解码回来，并打印两者。`code/tests/test_bpe.py` 中的测试固定了往返属性、特殊令牌预留和合并顺序。
 
-Run the demo. Then change the target vocabulary size in the demo from 300 to 600 and watch how the encoded length of the held-out sentence drops. That curve is the BPE compression curve.
+运行演示。然后将演示中的目标词汇表大小从 300 改为 600，观察保留句子的编码长度如何下降。这条曲线就是 BPE 压缩曲线。

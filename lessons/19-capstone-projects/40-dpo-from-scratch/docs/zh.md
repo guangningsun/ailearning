@@ -1,62 +1,62 @@
-# Capstone Lesson 40: Direct Preference Optimization from Scratch
+# Capstone 第40课: 从零实现直接偏好优化
 
-> Reward models and PPO are the classical RLHF stack. DPO collapses that stack into a single supervised loss that fits a policy directly against preference pairs. This lesson derives the DPO loss from the reward-difference identity, ships a working reference model plus policy model, computes per-token log-probabilities, and trains a tiny transformer on a preference fixture of chosen and rejected completions. Tests pin the loss math and the gradient direction so you know the implementation matches the paper.
+> 奖励模型和 PPO 是经典的 RLHF 技术栈。DPO 将该技术栈压缩为一个单一的监督损失，直接拟合策略到偏好对上。本课从奖励差异恒等式推导 DPO 损失，发货一个可工作的参考模型加策略模型，计算每个 token 的对数概率，并在偏好 fixture 上训练一个微型 Transformer（chosen 和 rejected 的补全）。测试锁定损失数学和梯度方向，使你确信实现与论文一致。
 
-**Type:** Build
-**Languages:** Python (torch, numpy)
-**Prerequisites:** Phase 19 lessons 30-37 (NLP LLM track: tokenizer, embedding table, attention block, transformer body, pre-training loop, checkpointing, generation, perplexity)
-**Time:** ~90 minutes
+**类型：** 构建
+**语言：** Python（torch、numpy）
+**前置条件：** 第 19 阶段课程 30-37（NLP LLM 路线：分词器、embedding 表、注意力块、Transformer 主体、预训练循环、checkpointing、生成、困惑度）
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Derive the DPO loss as a sigmoid over a scaled log-ratio difference and connect it to the implicit reward.
-- Build a reference model + policy model pair with a frozen reference and a trainable policy.
-- Compute sequence-level log-probabilities under both models, masking prompt tokens.
-- Train the policy on `(prompt, chosen, rejected)` triples and watch the chosen log-prob rise relative to rejected.
-- Pin behaviour with tests on the loss math, the gradient sign, and the reference invariance.
+- 将 DPO 损失推导为缩放对数比差异上的 sigmoid，并连接到隐式奖励。
+- 构建一个参考模型 + 策略模型对，其中参考是冻结的，策略是可训练的。
+- 计算两个模型下的序列级对数概率，屏蔽提示 token。
+- 在 `(prompt, chosen, rejected)` 三元组上训练策略，观察 chosen 的对数概率相对于 rejected 上升。
+- 用测试锁定行为：损失数学、梯度符号和参考不变性。
 
-## The Problem
+## 问题
 
-You have an SFT model. It follows instructions, but its outputs are uneven; some completions are clear, some are wordy or wrong. You also have a small dataset of preference pairs: for the same prompt, a human marked one completion as chosen and the other as rejected.
+你有一个 SFT 模型。它能遵循指令，但输出参差不齐；一些补全清晰，一些冗长或错误。你还有一个小数据集的偏好对：对于相同的 prompt，一个人标记一个补全为 chosen，另一个为 rejected。
 
-The classical RLHF answer is a two-stage pipeline. Train a reward model on the preferences. Optimise the policy against the reward with PPO. This works but is expensive: two models in memory during PPO, KL control to keep the policy near the reference, reward hacking when the reward model is brittle.
+经典的 RLHF 答案是两阶段流水线。先从偏好训练奖励模型。用 PPO 针对奖励优化策略。这有效但代价高昂：PPO 期间两个模型在内存中，KL 控制以保持策略接近参考，当奖励模型脆弱时会出现奖励黑客。
 
-DPO replaces both stages with a single supervised loss. The reward model never exists explicitly. The policy is trained directly on the preference pairs, with an explicit KL penalty toward the SFT reference. Same optimal solution under the Bradley-Terry preference model, far less code.
+DPO 用单一监督损失替换两个阶段。奖励模型从不显式存在。策略直接在偏好对上训练，带有指向 SFT 参考的显式 KL 惩罚。在 Bradley-Terry 偏好模型下具有相同的最优解，代码却少得多。
 
-## The Concept
+## 概念
 
-Start from the Bradley-Terry model. Given a prompt `x` and two completions `y_w` (chosen) and `y_l` (rejected), the probability the human prefers `y_w` is
+从 Bradley-Terry 模型开始。给定 prompt `x` 和两个补全 `y_w`（chosen）和 `y_l`（rejected），人类偏好 `y_w` 的概率是
 
 ```text
 P(y_w > y_l | x) = sigmoid( r(x, y_w) - r(x, y_l) )
 ```
 
-where `r` is some latent reward function. RLHF first fits `r` from preferences, then trains a policy `pi` to maximise `r` with a KL anchor:
+其中 `r` 是某个潜在奖励函数。RLHF 首先从偏好拟合 `r`，然后训练策略 `pi` 最大化 `r`，并带有 KL 锚点：
 
 ```text
 max_pi   E_{x, y~pi} [ r(x, y) ] - beta * KL(pi || pi_ref)
 ```
 
-The DPO derivation observes that the optimal policy `pi*` under this objective has a closed form in terms of `r`:
+DPO 推导观察到该目标下的最优策略 `pi*` 关于 `r` 有闭合形式：
 
 ```text
 pi*(y | x) = (1/Z(x)) * pi_ref(y | x) * exp( r(x, y) / beta )
 ```
 
-Re-arrange for `r`:
+重新排列求 `r`：
 
 ```text
 r(x, y) = beta * ( log pi*(y | x) - log pi_ref(y | x) ) + beta * log Z(x)
 ```
 
-The `log Z(x)` term is the same for both `y_w` and `y_l` (it depends on `x`, not `y`), so it cancels when you compute the preference difference:
+`log Z(x)` 项对于 `y_w` 和 `y_l` 是相同的（它取决于 `x`，而不是 `y`），所以当你计算偏好差异时它会抵消：
 
 ```text
 r(x, y_w) - r(x, y_l) = beta * ( log pi_theta(y_w|x) - log pi_ref(y_w|x)
                                 - log pi_theta(y_l|x) + log pi_ref(y_l|x) )
 ```
 
-Substitute into the Bradley-Terry sigmoid and take negative log likelihood over preference pairs:
+代入 Bradley-Terry sigmoid，并对偏好对取负对数似然：
 
 ```text
 L_DPO(theta) = - E_{(x, y_w, y_l)} [
@@ -65,17 +65,17 @@ L_DPO(theta) = - E_{(x, y_w, y_l)} [
 ]
 ```
 
-This is the loss. It is a sigmoid over a single scalar per example, computed from four log-probabilities. No separate reward model. No PPO. No KL term in the loss; the KL constraint is baked into the closed-form derivation.
+这就是损失。它是对每个样本的一个标量取 sigmoid，由四个对数概率计算。没有单独的奖励模型。没有 PPO。损失中没有 KL 项；KL 约束被烘焙到闭合形式推导中。
 
 ```mermaid
 flowchart LR
-  Triple[(x, y_w, y_l)] --> Pol[policy<br/>pi_theta]
-  Triple --> Ref[reference<br/>pi_ref, frozen]
+  Triple[(x, y_w, y_l)] --> Pol[策略<br/>pi_theta]
+  Triple --> Ref[参考<br/>pi_ref，冻结]
   Pol --> LWP[log pi_theta y_w]
   Pol --> LLP[log pi_theta y_l]
   Ref --> LWR[log pi_ref y_w]
   Ref --> LLR[log pi_ref y_l]
-  LWP --> Diff[beta * log-ratio diff]
+  LWP --> Diff[beta * 对数比差异]
   LLP --> Diff
   LWR --> Diff
   LLR --> Diff
@@ -83,77 +83,77 @@ flowchart LR
   Sig --> NLL[- log sigmoid]
 ```
 
-## The Sign of the Gradient
+## 梯度的符号
 
-A useful sanity check before any training run. Take the gradient with respect to `log pi_theta(y_w | x)`:
+在任何训练运行之前的一个有用的合理性检查。取关于 `log pi_theta(y_w | x)` 的梯度：
 
 ```text
 d L_DPO / d log pi_theta(y_w | x) = - beta * (1 - sigmoid(z))
 ```
 
-where `z` is the argument to the sigmoid. This is negative for all `z`, which means: increasing the policy's log-probability of the chosen completion decreases the loss. Symmetrically, the gradient with respect to `log pi_theta(y_l | x)` is positive: increasing the rejected log-probability increases the loss. Training pushes the chosen up and the rejected down. The reference is frozen; it does not move.
+其中 `z` 是 sigmoid 的参数。这对于所有 `z` 都是负的，这意味着：增加策略对 chosen 补全的对数概率会降低损失。对称地，关于 `log pi_theta(y_l | x)` 的梯度是正的：增加 rejected 的对数概率会增加损失。训练推动 chosen 向上、rejected 向下。参考是冻结的；它不会移动。
 
-## The Data
+## 数据
 
-Twelve preference triples ship with the lesson. Each is `(prompt, chosen, rejected)`. The chosen completion is short and precise. The rejected is wordy, off-topic, or wrong. The pairs cover the same task families as lesson 39 (capital, arithmetic, list) so a policy that started from an SFT base has a reasonable starting point.
+12 个偏好三元组随本课附带。每个是 `(prompt, chosen, rejected)`。chosen 补全简短而精确。rejected 冗长、跑题或错误。这些对覆盖与第 39 课相同的任务家族（首都、算术、列表），因此从 SFT 基座开始的策略有一个合理的起点。
 
-The fixture is intentionally small. DPO works on tens of thousands of pairs in production; here, the point is that the loss math and the loop run end-to-end on a tiny dataset and the chosen-versus-rejected log-prob gap visibly grows.
+这个 fixture 刻意做得很小。DPO 在生产中在数万对上工作；这里，关键是损失数学和循环在一个小数据集上端到端运行，chosen-versus-rejected 对数概率差距明显增长。
 
-## Reference Invariance
+## 参考不变性
 
-A DPO implementation has to handle the reference model carefully. The reference is the SFT model frozen in place. Three properties have to hold:
+DPO 实现必须仔细处理参考模型。参考是 SFT 模型，冻结不动。三个属性必须成立：
 
-- The reference parameters never receive gradients.
-- The reference log-probabilities never change between epochs.
-- The policy starts from the same weights as the reference. (The optimal `theta` is the reference plus a learned update; initialising the policy as a copy of the reference is the well-defined start.)
+- 参考参数从不接收梯度。
+- 参考对数概率在 epoch 之间从不改变。
+- 策略从与参考相同的权重开始。（最优 `theta` 是参考加上学习到的更新；将策略初始化为参考的副本是一个有定义的起点。）
 
-The implementation enforces these by:
+实现通过以下方式强制执行这些：
 
-- Wrapping the reference in `torch.no_grad()` during forward passes.
-- Setting `requires_grad=False` on every reference parameter.
-- Constructing the policy via `policy.load_state_dict(reference.state_dict())` after the reference is built.
+- 在前向传播期间用 `torch.no_grad()` 包装参考。
+- 在每个参考参数上设置 `requires_grad=False`。
+- 在构建参考后通过 `policy.load_state_dict(reference.state_dict())` 构造策略。
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart TD
-  P[(preference triples)] --> Tok[InstructionTokenizer]
+  P[(偏好三元组)] --> Tok[InstructionTokenizer]
   Tok --> DS[PreferenceDataset]
-  DS --> DL[DataLoader<br/>per-row decode]
-  DL --> Pol[Policy TinyGPT]
-  DL --> Ref[Reference TinyGPT<br/>frozen]
-  Pol --> LP[log pi for chosen and rejected]
-  Ref --> LR[log pi_ref for chosen and rejected]
-  LP --> Loss[DPO loss<br/>sigmoid * log-ratio diff]
+  DS --> DL[DataLoader<br/>逐行解码]
+  DL --> Pol[策略 TinyGPT]
+  DL --> Ref[参考 TinyGPT<br/>冻结]
+  Pol --> LP[chosen 和 rejected 的 log pi]
+  Ref --> LR[chosen 和 rejected 的 log pi_ref]
+  LP --> Loss[DPO 损失<br/>sigmoid * 对数比差异]
   LR --> Loss
-  Loss --> Bwd[backward]
-  Bwd --> Opt[Adam optimiser]
+  Loss --> Bwd[反向]
+  Bwd --> Opt[Adam 优化器]
 ```
 
-The model is the same TinyGPT used in lesson 39 (decoder-only, causal, byte tokeniser). The reference and policy share the architecture; the policy's weights drift from the reference under training while the reference stays fixed.
+模型是第 39 课中使用的相同 TinyGPT（仅解码器、因果、字节分词器）。参考和策略共享架构；策略的权重在训练时偏离参考，而参考保持固定。
 
-## What you will build
+## 你将构建的内容
 
-The implementation is one `main.py` plus tests.
+实现是一个 `main.py` 加测试。
 
-1. `InstructionTokenizer`: byte tokeniser with `INST` and `RESP` specials. Same shape as lesson 39.
-2. `TinyGPT`: decoder-only transformer. Same shape as lesson 39 so the lesson is self-contained even if you skipped 39.
-3. `make_preferences`: returns twelve `(prompt, chosen, rejected)` triples.
-4. `sequence_log_prob`: given the model, a prompt prefix, and a completion, returns the sum of next-token log-probabilities over the completion (no prompt-position contribution).
-5. `dpo_loss`: takes the four log-probabilities and `beta`, returns the per-example loss tensor and the implicit reward delta for logging.
-6. `train_dpo`: per-epoch loop that computes chosen and rejected log-probs under policy and reference, applies the loss, and steps Adam.
-7. `evaluate_margins`: returns the mean chosen-rejected log-probability margin under the policy at any point.
-8. `run_demo`: builds reference and policy from a small warm-up pretrain, copies weights, trains for thirty steps, prints the per-step loss and margin, and exits zero on success.
+1. `InstructionTokenizer`：字节分词器，带有 `INST` 和 `RESP` 特殊 token。与第 39 课形状相同。
+2. `TinyGPT`：仅解码器 Transformer。与第 39 课形状相同，因此即使你跳过了 39，本课也能独立存在。
+3. `make_preferences`：返回 12 个 `(prompt, chosen, rejected)` 三元组。
+4. `sequence_log_prob`：给定模型、prompt 前缀和补全，返回补全上下一 token 对数概率的总和（不包括 prompt 位置的贡献）。
+5. `dpo_loss`：接受四个对数概率和 `beta`，返回每个样本的损失张量和用于日志记录的隐式奖励 delta。
+6. `train_dpo`：每个 epoch 的循环，计算策略和参考下的 chosen 和 rejected 对数概率，应用损失，并步进 Adam。
+7. `evaluate_margins`：返回策略在任何时刻的 mean chosen-rejected 对数概率差。
+8. `run_demo`：从小型预热预训练构建参考和策略，复制权重，训练 30 步，打印每步损失和差值，成功后以零退出。
 
-## Why DPO works
+## 为什么 DPO 有效
 
-DPO is mathematically equivalent to RLHF under the Bradley-Terry preference model, up to the parameterisation of the reward. The implicit reward `r(x, y) = beta * (log pi(y|x) - log pi_ref(y|x))` is identifiable from preferences up to a function of `x`, which cancels in the difference. The closed-form policy lets you skip the explicit reward model. The KL constraint is enforced structurally: any deviation of `pi` from `pi_ref` makes the log-ratio larger, and the sigmoid saturates, which damps the gradient when the policy moves too far. The reference is your safety net.
+在 Bradley-Terry 偏好模型下，DPO 在奖励的参数化方面与 RLHF 数学等价。隐式奖励 `r(x, y) = beta * (log pi(y|x) - log pi_ref(y|x))` 从偏好中是可识别的 up to `x` 的函数，这在差异中抵消了。闭合形式策略让你跳过显式奖励模型。KL 约束被结构性强制执行：`pi` 偏离 `pi_ref` 的任何偏差都会使对数比更大，而 sigmoid 饱和，这会在策略移动太远时抑制梯度。参考是你的安全网。
 
-## Stretch goals
+## 拓展目标
 
-- Add a length normalisation to the log-probability sum: divide by completion length. Length bias is a known DPO failure mode where the model preferentially chooses shorter completions because their log-probabilities are larger in absolute terms.
-- Add the IPO variant of the loss: replace the sigmoid + log with `(z - 1)^2`. Compare convergence on the fixture.
-- Add a label-smoothing parameter that interpolates between the hard chosen-rejected label and a uniform 0.5.
-- Replace the reference with a smaller cheaper model (knowledge distillation flavour).
+- 在对数概率总和中添加长度归一化：除以补全长度。长度偏差是一个已知的 DPO 失败模式，模型优先选择较短的补全，因为它们的绝对对数概率更大。
+- 添加 IPO 变体的损失：替换 sigmoid + log 为 `(z - 1)^2`。在 fixture 上比较收敛性。
+- 添加标签平滑参数，在硬 chosen-rejected 标签和均匀 0.5 之间进行插值。
+- 用更小更便宜的模型替换参考（知识蒸馏风格）。
 
-The implementation gives you the loss, the reference invariance, and the training loop. The math is the lesson. The code makes the math concrete.
+这个实现给了你损失、参考不变性和训练循环。数学就是本课。代码让数学变得具体。

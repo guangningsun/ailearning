@@ -1,29 +1,29 @@
-# Classical Metrics
+# 经典指标
 
-> BLEU, ROUGE-L, F1, exact-match, accuracy. Five metrics that still account for most published LLM eval numbers. Implement each from first principles so you know what the number means.
+> BLEU、ROUGE-L、F1、精确匹配、准确率。五个仍然占据了大多数已发布 LLM 评估数字的指标。从第一性原理实现每个指标，这样你才知道那个数字意味着什么。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track B foundations, lesson 70
-**Time:** ~90 min
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 Track B 基础，课程 70
+**时间：** 约 90 分钟
 
-## Learning objectives
+## 学习目标
 
-- Implement token-level exact-match, F1, and accuracy with explicit tokenisation rules.
-- Implement BLEU-4 from the ground up: modified n-gram precision, geometric mean over n equals 1 through 4, brevity penalty.
-- Implement ROUGE-L using longest common subsequence, with F-beta combination of precision and recall.
-- Dispatch on the metric_name field from lesson 70 so the runner stays metric-agnostic.
-- Pin the behaviour with reference vectors drawn from worked examples, not from a third-party library.
+- 实现带显式分词规则的词级精确匹配、F1 和准确率。
+- 从零实现 BLEU-4：修正 n 元语法精度、n 从 1 到 4 的几何平均、简短惩罚。
+- 使用最长公共子序列实现 ROUGE-L，结合精度的 F-beta 组合与召回率。
+- 基于课程 70 中的 metric_name 字段进行调度，使运行器保持指标无关。
+- 用来自详尽示例的参考向量来固定行为，而非来自第三方库。
 
-## Why reimplement
+## 为什么要重新实现
 
-You will read papers that report BLEU 28.3 and another that reports BLEU 0.283. You will find ROUGE-L scores that differ by ten points across two libraries because one truncates to lowercase and the other does not. The fastest way to stop being confused is to write the metrics yourself, then point at the line where the tokenizer is decided and the line where the smoothing is applied. After that, comparing numbers across papers becomes a matter of reading the metric setup, not arguing about libraries.
+你会看到论文报告 BLEU 28.3，也会看到另一篇报告 BLEU 0.283。你会发现两个库之间的 ROUGE-L 分数相差十分，因为一个将结果截断到小写而另一个没有。停止困惑的最快方法是自己写这些指标，然后指向分词器决定的那一行以及平滑应用的那一行。之后，跨论文比较数字就成了阅读指标设置的问题，而非争论库的问题。
 
-Stdlib plus numpy is enough. BLEU is counting and a clamp. ROUGE-L is dynamic programming. F1 is a set intersection on tokens. The hardest part is choosing a tokenizer and committing to it.
+标准库加 NumPy 就够了。BLEU 就是计数和一个 clamp。ROUGE-L 就是动态规划。F1 是 token 上的集合交集。最难的部分是选择分词器并坚持使用它。
 
-## Tokenisation
+## 分词
 
-The tokenizer is `re.findall(r"\w+", text.lower())`. Lowercase, alphanumeric runs, drop punctuation. Every metric in this lesson uses this exact tokenizer. The runner does not get to choose. If you swap tokenizers, you are running a different benchmark.
+分词器是 `re.findall(r"\w+", text.lower())`。小写、字母数字连续片段、丢弃标点。本课中每个指标都使用这个确切的分词器。运行器没有选择权。如果你换了分词器，你就是在运行一个不同的基准。
 
 ```python
 TOKEN_RE = re.compile(r"\w+", re.UNICODE)
@@ -31,62 +31,62 @@ def tokenize(text):
     return TOKEN_RE.findall(text.lower())
 ```
 
-This is a deliberate simplification. Production setups will care about CJK, contractions, and code identifiers. The point of the lesson is that the tokenizer is a contract, not a knob.
+这是一个刻意的简化。生产环境会关心 CJK、缩写和代码标识符。本课的重点是分词器是一份契约，而非一个旋钮。
 
-## Exact match
+## 精确匹配
 
 ```python
 def exact_match(pred, targets):
     return float(any(pred.strip() == t.strip() for t in targets))
 ```
 
-It returns 1.0 or 0.0 per task. The aggregate over a dataset is the mean. This is the workhorse for arithmetic, MCQ, and short classification tasks.
+它对每个任务返回 1.0 或 0.0。在数据集上的聚合就是平均值。这是算术、MCQ 和短分类任务的主力指标。
 
-## Token-level F1
+## 词级 F1
 
-Set up the token multiset for prediction and target. Precision is the multiset intersection divided by the multiset of the prediction. Recall is the same intersection divided by the multiset of the target. F1 is the harmonic mean. The implementation handles the empty-prediction and empty-target edge cases.
+为预测和目标设置 token 多重集。精确率是多重集交集除以预测的多重集。召回率是同样的交集除以目标的多重集。F1 是调和平均。实现处理了空预测和空目标的边缘情况。
 
 ```mermaid
 flowchart LR
-    A[pred text] -->|tokenize| P[pred tokens]
-    B[target text] -->|tokenize| T[target tokens]
-    P --> X[multiset intersection]
+    A[预测文本] -->|分词| P[预测 token]
+    B[目标文本] -->|分词| T[目标 token]
+    P --> X[多重集交集]
     T --> X
-    X --> PR[precision = inter / pred]
-    X --> RE[recall = inter / target]
+    X --> PR[精确率 = 交集 / 预测]
+    X --> RE[召回率 = 交集 / 目标]
     PR --> F[F1 = 2 P R / P + R]
     RE --> F
 ```
 
-For multi-target tasks, we take the best F1 over the target list. That matches the SQuAD-style behaviour widely reported in the literature.
+对于多目标任务，我们取目标列表上的最佳 F1。这匹配了文献中广泛报道的 SQuAD 风格行为。
 
 ## BLEU-4
 
-BLEU is the canonical machine-translation metric and it still shows up in summarisation work. The formulation we use is corpus-level BLEU-4 with the standard brevity penalty and additive-one smoothing on modified n-gram counts so a single missing 4-gram does not push the score to zero.
+BLEU 是标准的机器翻译指标，仍然出现在摘要工作中。我们使用的公式是语料库级 BLEU-4，附带标准简短惩罚和在修正 n 元语法计数上的加一平滑，这样单个缺失的 4 元语法不会把分数打到零。
 
-For each candidate-reference pair, we count modified n-gram precision for n equals 1, 2, 3, 4. Modified precision clips the candidate n-gram count by the maximum count of that n-gram in any reference, so a candidate cannot inflate by repeating one phrase. The geometric mean across the four precisions is wrapped by the brevity penalty.
+对于每个候选-参考对，我们计算 n 等于 1、2、3、4 的修正 n 元语法精确率。修正精确率将候选 n 元语法计数裁剪到任意参考中该 n 元语法的最大计数，这样候选就不能通过重复一个短语来虚高分数。四个精确率的几何平均由简短惩罚包裹。
 
 ```mermaid
 flowchart TD
-    A[candidate tokens] --> B[count n-grams n=1..4]
-    R[reference tokens] --> C[max count per n-gram]
-    B --> D[clipped n-gram count]
+    A[候选 token] --> B[计数 n 元语法 n=1..4]
+    R[参考 token] --> C[每个 n 元语法的最大计数]
+    B --> D[裁剪后的 n 元语法计数]
     C --> D
-    D --> E[modified precision p_n]
-    A --> F[candidate length c]
-    R --> G[reference length r]
+    D --> E[修正精确率 p_n]
+    A --> F[候选长度 c]
+    R --> G[参考长度 r]
     F --> BP[BP = 1 if c>=r else exp 1 - r/c]
     G --> BP
-    E --> M[geometric mean of p_n]
-    M --> S[BLEU = BP * geo mean]
+    E --> M[p_n 的几何平均]
+    M --> S[BLEU = BP * 几何平均]
     BP --> S
 ```
 
-The smoothing rule is the one Lin and Och called method 1: add one to both numerator and denominator of every n-gram precision before taking the log. This avoids `log 0` when a reference has no matching 4-gram and stays close to the unsmoothed value on long candidates.
+平滑规则是 Lin 和 Och 所说的方法 1：在取对数之前，给每个 n 元语法精确率的分子和分母都加一。这样当参考没有匹配的 4 元语法时避免了 `log 0`，并且在长候选上保持接近未平滑的值。
 
 ## ROUGE-L
 
-ROUGE-L compares the longest common subsequence of the candidate and reference token sequences. The LCS captures word order without forcing contiguity, which is why it is the default summarisation metric. We compute the LCS length with a standard dynamic-programming table, then derive recall as `lcs / reference length`, precision as `lcs / candidate length`, and combine with F-beta where beta equals one for the symmetric F1 form.
+ROUGE-L 比较候选和参考 token 序列的最长公共子序列。LCS 捕获词序而不强制连续性，这就是它成为默认摘要指标的原因。我们用标准动态规划表计算 LCS 长度，然后导出召回率 `lcs / 参考长度`、精确率 `lcs / 候选长度`，并用 beta 等于一的对称 F1 形式组合。
 
 ```python
 def lcs_length(a, b):
@@ -101,15 +101,15 @@ def lcs_length(a, b):
     return int(dp[n, m])
 ```
 
-The numpy table makes the implementation legible; pure Python lists would work too. Tasks that opt into ROUGE-L pay the O(n m) cost per task. For typical summary lengths that stays under a millisecond.
+NumPy 表使实现清晰可读；纯 Python 列表也可以工作。选择 ROUGE-L 的任务每个任务付出 O(n m) 的代价。对于典型的摘要长度，这保持在毫秒以下。
 
-## Accuracy
+## 准确率
 
-For multi-target classification tasks, accuracy reduces to exact-match against a single normalised target. We expose it as a separate function so the dispatcher can dispatch on `metric_name` without going through string comparisons inside the runner.
+对于多目标分类任务，准确率归约为对单一规范化目标的精确匹配。我们将其公开为一个独立函数，这样调度器可以基于 `metric_name` 调度，而无需在运行器内部进行字符串比较。
 
-## Dispatch contract
+## 调度契约
 
-The single entry point is `score(metric_name, prediction, targets)`. It returns a float in `[0, 1]`. The runner does not branch on metric name. It hands the call off and writes the result. This is the surface that lesson 75 will glue to the task spec from lesson 70.
+单一入口点是 `score(metric_name, prediction, targets)`。它返回 `[0, 1]` 范围内的浮点数。运行器不在指标名称上分支。它将调用转交并写入结果。这就是课程 75 将粘合到课程 70 的任务规范的表面。
 
 ```python
 def score(metric_name, pred, targets):
@@ -126,18 +126,18 @@ def score(metric_name, pred, targets):
     raise ValueError(f"unknown metric_name: {metric_name}")
 ```
 
-`code_exec` is handled in lesson 72 and slotted into the dispatcher there.
+`code_exec` 在课程 72 中处理，并在那里插入调度器。
 
-## What this lesson does not do
+## 本课不做什么
 
-It does not call a model. It does not normalise generations beyond what the post-process rules from lesson 70 already did. It does not compute confidence intervals. It does not do BLEURT or BERTScore (those need a model and live in a different lesson). The point is the floor: five metrics, one tokenizer, one dispatch table.
+本课不调用模型。除了课程 70 已有的后处理规则外，不对生成结果做进一步规范化。不计算置信区间。不做 BLEURT 或 BERTScore（那些需要模型，归入另一课程）。重点是地板：五个指标、一个分词器、一个调度表。
 
-## How to read the code
+## 如何阅读代码
 
-`main.py` defines each metric as a free function plus the dispatcher. The reference vectors live in the `_reference_examples` block at the bottom of the file. The demo runs the dispatcher against eight examples and prints per-metric scores. The tests in `code/tests/test_metrics.py` pin the reference vectors and stress every edge case (empty prediction, empty reference, no shared tokens, exact match, repeated phrase clipping).
+`main.py` 将每个指标定义为独立函数加上调度器。参考向量位于文件底部 `_reference_examples` 块中。演示对八个示例运行调度器并打印每个指标的分数。`code/tests/test_metrics.py` 中的测试固定了参考向量并压测每个边缘情况（空预测、空参考、无共享 token、精确匹配、重复短语裁剪）。
 
-Read `main.py` top to bottom. The functions are ordered by complexity. exact_match and accuracy are one line each. F1 is six lines. BLEU and ROUGE-L are the heavy parts and they include detailed comments on the smoothing rule and the LCS recurrence.
+从上到下阅读 `main.py`。函数按复杂度排序。exact_match 和 accuracy 各一行。F1 六行。BLEU 和 ROUGE-L 是重头戏，它们包含了关于平滑规则和 LCS 递推的详细注释。
 
-## Going further
+## 进一步探索
 
-The classical metrics are necessary, not sufficient. They reward surface overlap and miss meaning. The fix is to layer model-based metrics on top (BLEURT, BERTScore, GEval) once you trust the classical floor. That is a later lesson. For now: make these five work, pin them with tests, and you have a metric stack that is auditable, fast, and reproducible.
+经典指标是必要的，但不够充分。它们奖励表面重叠而忽略语义。一旦你信任了经典地板，就在上面叠加基于模型的指标（BLEURT、BERTScore、GEval）。那是后续课程。现在：让这五个工作起来，用测试固定它们，你就拥有了一个可审计、快速且可复现的指标栈。

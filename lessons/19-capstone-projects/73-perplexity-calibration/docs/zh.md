@@ -1,25 +1,25 @@
-# Perplexity and Calibration
+# 困惑度与校准
 
-> If your model says 90 percent confident on a thousand answers and gets six hundred right, it is not well calibrated. Calibration is half of trustworthy eval. The other half is perplexity, which tells you whether the model thinks the held-out text is plausible at all.
+> 如果你的模型在一千个答案上声称 90% 置信度，却只答对了六百个，那它的校准就不好。校准是可信评估的半壁江山。另一半是困惑度，它告诉你模型是否认为留出的文本是可信的。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track B foundations, lessons 70 and 71
-**Time:** ~90 min
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 Track B 基础，课程 70 和 71
+**时间：** 约 90 分钟
 
-## Learning objectives
+## 学习目标
 
-- Compute token-level perplexity on a held-out corpus from token negative log-probabilities supplied by the model adapter.
-- Compute the expected calibration error (ECE) of a classifier or multiple-choice eval from binned predicted probabilities.
-- Compute the Brier score (mean squared error against the indicator of correctness) and explain when it does what ECE does not.
-- Build the reliability diagram data needed to plot a confidence-versus-accuracy curve.
-- Wire all three into the eval harness so the runner can attach `perplexity`, `ece`, and `brier` numbers to a model report.
+- 根据模型适配器提供的 token 负对数概率，计算在留出语料库上的 token 级困惑度。
+- 根据分箱预测概率，计算分类器或多选评估的期望校准误差（ECE）。
+- 计算 Brier 分数（对正确性指示器的均方误差），并解释它在 ECE 不擅长的地方做什么。
+- 构建可靠性图所需的数据，用于绘制置信度对准确率曲线。
+- 将三者接入评估工具，使运行器能够将 `perplexity`、`ece` 和 `brier` 数值附加到模型报告上。
 
-## What perplexity tells you
+## 困惑度告诉你什么
 
-Perplexity is the exponentiated average negative log-likelihood per token. Lower is better. A perplexity of one means the model assigns probability one to every actual token. A perplexity of the vocabulary size means the model is uniform and learnt nothing. Real numbers fall in between: a strong 2026 base model on WikiText-103 sits around eight to twelve. A bad one on the same text sits at fifty plus.
+困惑度是每个 token 的指数化平均负对数似然。越低越好。困惑度为 1 意味着模型给每个实际 token 分配的 probability 为 1。困惑度等于词表大小意味着模型是均匀的，什么都没学到。真实数字落在两者之间：2026 年的强基础模型在 WikiText-103 上约为 8 到 12。同上文本上的差模型在 50 以上。
 
-The harness does not compute log-probabilities itself. Those come from the model adapter. The harness aggregates: it takes a list of per-token log-probabilities, a list of token counts per sequence, and returns corpus perplexity.
+harness 本身不计算对数概率。那些来自模型适配器。harness 做聚合：它接收每 token 对数概率列表、每个序列的 token 计数列表，返回语料库困惑度。
 
 ```python
 def perplexity(neg_log_probs, token_counts):
@@ -28,11 +28,11 @@ def perplexity(neg_log_probs, token_counts):
     return math.exp(total_nll / total_tokens)
 ```
 
-The implementation handles zero-token edge cases and asserts that the negative log-probabilities are non-negative. A common mistake is to forget the negation: an adapter that returns `log p` instead of `-log p` produces a perplexity below one, which is impossible. The function catches that as a contract violation.
+实现处理了零 token 边界情况，并断言负对数概率非负。一个常见错误是忘了取负：返回 `log p` 而不是 `-log p` 的适配器会产生小于 1 的困惑度，这是不可能的。函数将其作为契约违反捕获。
 
-## What ECE measures
+## ECE 衡量什么
 
-Expected calibration error groups predictions by their confidence into a fixed number of bins, then measures the average gap between confidence and accuracy across bins, weighted by bin size.
+期望校准误差将预测按置信度分入固定数量的箱，然后测量跨箱的平均置信度与准确率之间的差距，按箱大小加权。
 
 ```mermaid
 flowchart TD
@@ -43,24 +43,24 @@ flowchart TD
     E --> F[ECE = sum of weighted gaps]
 ```
 
-The standard formulation uses ten equal-width bins on `[0, 1]`. The implementation supports any positive integer count. We expose a `bins` parameter so the runner can choose between the publishing convention (10) and the comparison convention (15).
+标准公式在 `[0, 1]` 上使用十个等宽箱。实现支持任意正整数计数。我们暴露一个 `bins` 参数，这样运行器可以在发布惯例（10）和比较惯例（15）之间选择。
 
-ECE is biased by bin count and sample size. With ten bins and a hundred predictions, you cannot distinguish 0.02 ECE from random noise. The implementation returns the number of populated bins along with the ECE so the runner can refuse to report a single number on too few samples.
+ECE 受箱数和样本量偏差。使用十个箱和一百个预测，你无法区分 0.02 的 ECE 和随机噪声。实现返回填充箱的数量以及 ECE，这样运行器可以在样本太少时拒绝报告单一数字。
 
-## What Brier score does that ECE does not
+## Brier 分数在 ECE 不擅长的地方做什么
 
-ECE only cares about average gaps. A model that is overconfident on half the bins and underconfident on the other half can have low ECE while being poorly calibrated locally. The Brier score measures squared error against the true outcome per prediction, so it penalises spread directly.
+ECE 只关心平均差距。在一半箱上过度自信而在另一半箱上不够自信的模型可能具有低 ECE，但在局部校准很差。Brier 分数对每个预测的真实结果测量平方误差，因此它直接惩罚分布。
 
-For binary outcomes, Brier is `mean((p_i - y_i)^2)`. It decomposes into reliability, resolution, and uncertainty. We compute the score and the decomposition. The runner reports the scalar but logs the decomposition for the dashboard.
+对于二元结果，Brier 为 `mean((p_i - y_i)^2)`。它可分解为可靠性、分辨率和不确定性。我们计算分数和分解。运行器报告标量，但将分解记录到仪表板。
 
 ```python
 def brier(p, y):
     return float(np.mean((p - y) ** 2))
 ```
 
-## Reliability diagram data
+## 可靠性图数据
 
-A reliability diagram plots predicted confidence against empirical accuracy in each bin. The diagonal is perfect calibration. The function returns three arrays: per-bin average confidence, per-bin average accuracy, and per-bin count. The plotting code lives downstream; this lesson stops at the data shape.
+可靠性图在每个箱中绘制预测置信度对经验准确率。对角线是完美校准。函数返回三个数组：每箱平均置信度、每箱平均准确率和每箱计数。绘图代码在下游；本节课止步于数据形态。
 
 ```mermaid
 flowchart LR
@@ -73,26 +73,26 @@ flowchart LR
     E --> R
 ```
 
-The returned tuple is what a calling layer needs to draw the plot or compute a custom ECE variant (adaptive ECE, sweep ECE, etc.). We return numpy arrays so downstream code does not have to convert.
+返回的元组是调用层绘制图表或计算自定义 ECE 变体（自适应 ECE、扫描 ECE 等）所需的。我们返回 numpy 数组，这样下游代码不需要转换。
 
-## Confidence sources
+## 置信度来源
 
-The harness does not assume confidence comes from softmax. It accepts any number in `[0, 1]` per prediction. For multiple-choice tasks the natural confidence is `softmax over option log-likelihoods`. For free-text the natural confidence is the model's self-reported probability or the exponential of the average log-likelihood. The eval just consumes the number. Where it comes from is the adapter's job.
+harness 不假设置信度来自 softmax。它接受每个预测 `[0, 1]` 中的任意数字。对于多选任务，自然的置信度是 `选项对数似然的 softmax`。对于自由文本，自然的置信度是模型 self-reported 概率或平均对数似然的指数。评估只消费这个数字。它从哪里来是适配器的事。
 
-## Edge cases
+## 边界情况
 
-- All predictions wrong: ECE is the average confidence, Brier is high, perplexity is whatever the model thinks of the text.
-- All predictions correct with high confidence: ECE near zero, Brier near zero.
-- Perfectly uncertain predictor at p=0.5: ECE is 0.5 minus accuracy, Brier is 0.25 minus a correction term.
-- Empty input: ECE, Brier, and reliability return `0.0` (or zero-filled arrays). Perplexity returns `NaN` for the zero-token case. None of these paths emit a warning; the runner inspects the values and decides whether to report or skip.
+- 所有预测都错误：ECE 是平均置信度，Brier 很高，困惑度是模型对该文本的看法。
+- 所有预测都正确且置信度高：ECE 接近零，Brier 接近零。
+- 完美的不确定预测器在 p=0.5：ECE 是 0.5 减去准确率，Brier 是 0.25 减去一个校正项。
+- 空输入：ECE、Brier 和 reliability 返回 `0.0`（或零填充数组）。困惑度对零 token 情况返回 `NaN`。这些路径都不发出警告；运行器检查值并决定是否报告或跳过。
 
-These cases are baked into the tests. A real model on a real benchmark will not hit them, but a buggy adapter or a tiny sample will, and the runner should not crash.
+这些情况被烘焙到测试中。真实模型在真实基准上不会遇到它们，但有 bug 的适配器或小样本会，而且运行器不应该崩溃。
 
-## Dispatch
+## 分派
 
-Calibration is not a per-task metric like F1. It is a per-model report. The runner accumulates `(confidence, correct)` pairs across the entire eval and computes ECE, Brier, and reliability data once. Perplexity is computed over a held-out text corpus, separate from the task-by-task scoring.
+校准不是像 F1 这样的按任务指标。它是按模型报告。运行器在整个评估过程中累积 `(confidence, correct)` 对，并一次性计算 ECE、Brier 和可靠性数据。困惑度是在留出文本语料库上计算的，与逐任务的评分分开。
 
-The interface is:
+接口是：
 
 ```python
 report = CalibrationReport.from_predictions(confidences, correct)
@@ -102,18 +102,18 @@ report.reliability  # tuple of three numpy arrays
 report.populated_bins  # int
 ```
 
-`PerplexityResult.from_token_nll(neg_log_probs, token_counts)` returns the perplexity and the average negative log-likelihood per token.
+`PerplexityResult.from_token_nll(neg_log_probs, token_counts)` 返回困惑度和每个 token 的平均负对数似然。
 
-## What this lesson does not do
+## 本节课不做什么
 
-It does not call a model. It does not implement softmax. It does not estimate confidence from output tokens; that is the adapter's job. It does not do temperature scaling or Platt scaling; those are post-hoc fixes that live in a different lesson. The point of this lesson is to make the three numbers (perplexity, ECE, Brier) trustworthy and reproducible.
+它不调用模型。它不实现 softmax。它不从输出 token 估计置信度；那是适配器的事。它不做温度缩放或 Platt 缩放；那些是事后再修复的方法，属于另一节课。本节课的重点是让这三个数字（困惑度、ECE、Brier）可信且可复现。
 
-## How to read the code
+## 如何阅读代码
 
-`main.py` defines `perplexity`, `expected_calibration_error`, `brier_score`, `reliability_diagram`, and the `CalibrationReport` / `PerplexityResult` dataclasses. The demo runs on synthetic predictions where the ground truth is known: a well-calibrated model, an overconfident one, and an underconfident one. The tests in `code/tests/test_calibration.py` pin every edge case plus reference values for the synthetic predictors.
+`main.py` 定义了 `perplexity`、`expected_calibration_error`、`brier_score`、`reliability_diagram` 以及 `CalibrationReport` / `PerplexityResult` 数据类。演示在合成预测上运行，其中 ground truth 是已知的：一个校准良好的模型、一个过度自信的和一个不够自信的。`code/tests/test_calibration.py` 中的测试为每个边界情况以及合成预测器的参考值设置了 pin。
 
-Read `main.py` top to bottom. The function ordering goes scalar to vector to report. Each function has a short docstring with the math and the contract.
+从上到下阅读 `main.py`。函数顺序是从标量到向量到报告。每个函数都有一个简短的 docstring，包含数学和契约。
 
-## Going further
+## 深入学习
 
-Calibration is the most ignored axis in published eval. Most leaderboards report a single accuracy number and call it done. A model that wins on accuracy and loses on Brier is a worse production deployment than a model that scores a few points lower on accuracy but reliably reports its uncertainty. Once you have the calibration plumbing in place, add temperature scaling on a held-out validation slice, recompute ECE, and watch the gap shrink. That is a separate lesson, but the floor lives here.
+校准是发布评估中被忽视最多的轴。大多数 leaderboard 报告一个单一准确率数字就结束了。在准确率上获胜而在 Brier 上输掉的模型比准确率低几分但可靠报告其不确定性的模型是更差的生产部署。一旦你把校准管道搭建好，在留出的验证切片上添加温度缩放，重新计算 ECE，看看差距缩小。这是另一节课，但基础在这里。

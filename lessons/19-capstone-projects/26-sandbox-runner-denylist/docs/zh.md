@@ -1,84 +1,84 @@
-# Capstone Lesson 26: Sandbox Runner with Denylist and Path Jail
+# 阶段 19 第 26 课：带黑名单和路径监狱的沙箱运行器
 
-> The verification gate decides whether a tool call should run. The sandbox decides what happens when it does. This lesson ships a subprocess runner that refuses dangerous executables, refuses dangerous argv shapes, jails every file path to a project root, truncates oversized output, and kills runaway processes on a wall-clock timeout. It is the second of two layers that sit between the model and the operating system.
+> 验证门决定工具调用是否应该运行。沙箱决定运行时会发生什么。本课发出一subprocess 运行器，拒绝危险的可执行文件、拒绝危险的 argv 形状、将每个文件路径囚禁到项目根目录、截断过大的输出，并在壁钟超时杀死失控进程。它是位于模型和操作系统之间的两层中的第二层。
 
-**Type:** Build
-**Languages:** Python (stdlib)
-**Prerequisites:** Phase 19 · 25 (verification gates and observation budget), Phase 14 · 33 (instructions as constraints), Phase 14 · 38 (verification gates)
-**Time:** ~90 minutes
+**类型：** 构建型
+**语言：** Python（标准库）
+**前置条件：** 阶段 19 · 25（验证门和观测预算），阶段 14 · 33（作为约束的指令），阶段 14 · 38（验证门）
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Build a `Sandbox` class wrapping `subprocess.run` with timeout, capture, and truncation.
-- Refuse a command by name against a denylist and by structure against an argv inspector.
-- Refuse any path argument that resolves outside a declared project root.
-- Refuse shell metacharacters when shell mode is off.
-- Return a structured `SandboxResult` that downstream observability and the eval harness can ingest.
+- 构建一个包装 `subprocess.run` 的 `Sandbox` 类，带有超时、捕获和截断。
+- 按名称拒绝命令对黑名单，按结构拒绝命令对 argv 检查器。
+- 拒绝任何解析到声明的项目根目录之外的路径参数。
+- 当 shell 模式关闭时拒绝 shell 元字符。
+- 返回下游可观测性和 eval harness 可以摄取的结构化 `SandboxResult`。
 
-## The Problem
+## 问题
 
-A coding agent that can shell out can install backdoors, exfiltrate keys, brick a developer laptop, and rack up a cloud bill in a single turn. The least costly defense is to not give it shell. The second least costly is a sandbox that says no to a precise list of patterns.
+一个能够调用 shell 的编码 agent 可以在一轮中安装后门、窃取密钥、破坏开发人员笔记本电脑，并在单一轮次中累积云账单。最不昂贵的防御是不给它 shell。第二不昂贵的是一个沙箱，对精确的模式列表说"不"。
 
-Three classes of failure recur in agent traces.
+三个类别的失败在 agent trace 中反复出现。
 
-The first is dangerous executables. A model under pressure to fix a path issue will try `sudo`, `chmod -R 777`, `rm -rf`, `mkfs`, `dd`. None of these belong in an agent run. The denylist catches them by name and by alias.
+第一类是危险的可执行文件。压力下修复路径问题的模型会尝试 `sudo`、`chmod -R 777`、`rm -rf`、`mkfs`、`dd`。这些都不属于 agent 运行。黑名单按名称和别名捕获它们。
 
-The second is argv tricks. A model that has been told no shell will pipe an attack through an interpreter: `python3 -c "import os; os.system('rm -rf /')"`, `bash -c '...'`, `node -e '...'`, `perl -e '...'`. The sandbox needs to know that any interpreter run with a `-c`-like flag is just a shell call with extra steps.
+第二类是 argv 技巧。被告知不能使用 shell 的模型会通过解释器管道攻击：`python3 -c "import os; os.system('rm -rf /')"`、`bash -c '...'`、`node -e '...'`、`perl -e '...'`。沙箱需要知道任何带有 `-c` 类标志的解释器运行都只是带有额外步骤的 shell 调用。
 
-The third is path escape. The model is told to read `./src/main.py` and instead reads `../../etc/passwd`. The sandbox jails every path argument by resolving it through `os.path.realpath` and asserting the prefix.
+第三类是路径逃逸。模型被告知读取 `./src/main.py` 但实际读取 `../../etc/passwd`。沙箱通过 `os.path.realpath` 解析每个路径参数并断言前缀，将每个路径参数囚禁到项目中。
 
-The sandbox is not a security boundary in the operating system sense. A determined attacker with code execution can still break out. The sandbox is a development-time guardrail: it makes the common failure modes loud and stops the agent from doing damage out of sheer ineptitude.
+沙箱不是操作系统意义上的安全边界。有代码执行能力的坚定攻击者仍然可以逃逸。沙箱是一个开发时 guardrail：它使常见失败模式变得响亮，并阻止 agent 因纯粹的无能而造成损害。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart TD
-  Call[ToolCall<br/>already passed gate chain] --> Run["Sandbox.run()"]
-  Run --> S1[1. resolve executable against denylist<br/>rm, sudo, mkfs, ...]
-  S1 --> S2[2. inspect argv<br/>interpreter -c, shell metachars when shell=False]
-  S2 --> S3[3. resolve path-like arguments<br/>against project_root via realpath]
-  S3 --> S4[4. spawn subprocess<br/>capture, wall-clock timeout, env scrub]
-  S4 --> S5[5. truncate stdout/stderr to max_output_bytes]
+  Call[ToolCall<br/>已通过门链] --> Run["Sandbox.run()"]
+  Run --> S1[1. 根据黑名单解析可执行文件<br/>rm, sudo, mkfs, ...]
+  S1 --> S2[2. 检查 argv<br/>解释器 -c，当 shell=False 时的 shell 元字符]
+  S2 --> S3[3. 根据 project_root 解析路径类参数<br/>通过 realpath]
+  S3 --> S4[4. 生成 subprocess<br/>捕获，壁钟超时，环境清理]
+  S4 --> S5[5. 将 stdout/stderr 截断到 max_output_bytes]
   S5 --> Result[SandboxResult<br/>exit_code, stdout, stderr,<br/>truncated, timed_out, denied, reason]
 ```
 
-The sandbox has four refusal axes: name, argv, path, structure. Each axis is a pure function of the call, no subprocess yet. The subprocess only spawns after every axis has passed.
+沙箱有四个拒绝轴：名称、argv、路径、结构。每个轴都是调用的纯函数，此时还没有 subprocess。只有在每个轴都通过后才会生成 subprocess。
 
-The `SandboxResult` exit codes are the conventional ones: 0 success, non-zero failure, plus three sentinel codes for denied (-100), timed_out (-101), and truncated (the exit code is the real one, with a flag set). Downstream lessons read this structured result rather than parsing stderr.
+`SandboxResult` 退出码是常规的：0 成功，非零失败，外加三个 sentinel 代码用于 denied (-100)、timed_out (-101) 和 truncated（退出码是真实的，设置一个标志）。下游课程读取这个结构化结果而不是解析 stderr。
 
-## Architecture
+## 架构
 
 ```mermaid
 flowchart LR
-  Harness[AgentHarness<br/>lesson 20-25] -->|call| Sandbox[Sandbox<br/>denylist<br/>path jail<br/>argv inspect<br/>timeout<br/>truncation]
-  Sandbox -->|exec| Popen[subprocess.Popen]
+  Harness[AgentHarness<br/>课程 20-25] -->|调用| Sandbox[沙箱<br/>黑名单<br/>路径监狱<br/>argv 检查<br/>超时<br/>截断]
+  Sandbox -->|执行| Popen[subprocess.Popen]
   Sandbox --> Result[SandboxResult]
 ```
 
-The denylist is a frozenset of executable basenames. Aliases (`/bin/rm`, `/usr/bin/rm`) all resolve to the same basename. The argv inspector knows the interpreter shape: any argv where argv[0] is an interpreter and any later arg starts with `-c` or `-e` is denied. Shell metacharacters (`;`, `|`, `&`, `>`, `<`, backticks, `$()`) cause refusal when the call did not explicitly request a shell.
+黑名单是 executable basenames 的 frozenset。别名（`/bin/rm`、`/usr/bin/rm`）都解析到相同的 basename。argv 检查器知道解释器形状：当 argv[0] 是解释器且任何后续参数以 `-c` 或 `-e` 开头时会被拒绝。当调用未明确请求 shell 时，shell 元字符（`;`、`|`、`&`、`>`、`<`、反引号、`$()`）导致拒绝。
 
-The path jail is the most subtle piece. The sandbox accepts a `project_root` at construction. Any argument that looks like a path (contains `/` or matches an existing file) is normalized through `os.path.realpath`, then checked against the realpath of the project root. If the resolved target is not under the root, refusal. Symlink escape attempts (a symlink in the project root that points outside) are blocked by checking realpath, not the literal path.
+路径监狱是最微妙的部分。沙箱在构造时接受 `project_root`。任何看起来像路径的参数（包含 `/` 或匹配现有文件）通过 `os.path.realpath` 规范化，然后对照项目根目录的 realpath 检查。如果解析后的目标不在根目录下，则拒绝。通过检查 realpath（而不是字面路径）阻止符号链接逃逸尝试（项目根目录中指向外部的符号链接）。
 
-## What you will build
+## 你将要构建的内容
 
-The implementation is `main.py` plus a tests dir.
+实现是 `main.py` 加一个 tests 目录。
 
-1. `SandboxResult` dataclass: exit_code, stdout, stderr, truncated, timed_out, denied, reason, duration_ms.
-2. `SandboxConfig` dataclass: project_root, max_output_bytes, timeout_seconds, denylist, interpreter_block.
-3. `Sandbox` class: `run(argv, *, shell=False, cwd=None)` returns a `SandboxResult`.
-4. Internal refusal helpers: `_check_executable_denylist`, `_check_argv_interpreter`, `_check_shell_metachars`, `_check_path_jail`.
-5. Output truncation with a clear `truncated` flag and a marker line in the captured stream.
-6. Demo at the bottom: a sequence of legitimate and adversarial calls. Each is shown with its result.
+1. `SandboxResult` 数据类：exit_code、stdout、stderr、truncated、timed_out、denied、reason、duration_ms。
+2. `SandboxConfig` 数据类：project_root、max_output_bytes、timeout_seconds、denylist、interpreter_block。
+3. `Sandbox` 类：`run(argv, *, shell=False, cwd=None)` 返回 `SandboxResult`。
+4. 内部拒绝辅助函数：`_check_executable_denylist`、`_check_argv_interpreter`、`_check_shell_metachars`、`_check_path_jail`。
+5. 输出截断，带有清晰的 `truncated` 标志和捕获流中的标记行。
+6. 底部演示：一系列合法和对抗性调用。每个都显示其结果。
 
-The sandbox uses `subprocess.run` with `shell=False` by default and `capture_output=True`. The wall-clock timeout uses the `timeout` argument; on `TimeoutExpired`, the sandbox kills the process group and synthesizes a SandboxResult.
+沙箱使用 `shell=False` 作为默认值的 `subprocess.run` 和 `capture_output=True`。壁钟超时使用 `timeout` 参数；超时时，沙箱杀死进程组并合成一个 SandboxResult。
 
-## Why this is not a real sandbox
+## 为什么这不是一个真正的沙箱
 
-The lesson sandbox does not use namespaces, cgroups, seccomp, gVisor, Firecracker, or any kernel-level isolation. Anything the subprocess can do, the sandbox can do. The protection is structural: the agent is denied the most common dangerous invocations, and the loud refusal goes into observability instead of silently running.
+本课的沙箱不使用命名空间、cgroups、seccomp、gVisor、Firecracker 或任何内核级隔离。Subprocess 能做的任何事情，沙箱都能做。保护是结构性的：agent 被拒绝最常见的危险调用，响亮的拒绝进入可观测性而不是静默运行。
 
-For production agents you layer on top: run inside an unprivileged Docker container, run inside a microVM, drop capabilities, mount the project root read-only and a scratch dir read-write, set ulimit on memory and CPU, scrub the environment to a known-safe whitelist. Lesson 29 does some of this. Operating-system isolation is out of scope for this lesson.
+对于生产 agent，你在其上分层：在非特权 Docker 容器内运行，在 microVM 内运行，删除能力，将项目根目录挂载为只读和 scratch dir 读写，设置内存和 CPU 的 ulimit，将环境清理到已知安全的白名单。第二十九课做了一些这样的工作。操作系统隔离超出本课范围。
 
-## Running it
+## 运行它
 
 ```bash
 cd phases/19-capstone-projects/26-sandbox-runner-denylist
@@ -86,8 +86,8 @@ python3 code/main.py
 python3 -m pytest code/tests/ -v
 ```
 
-The demo creates a temp directory, drops a clean file into it, then runs a battery of calls. Legal calls succeed. Denied calls return SandboxResult with `denied=True` and a reason. Timeouts return `timed_out=True`. Truncation sets `truncated=True`. The demo prints a JSON table of outcomes and exits zero.
+演示创建一个临时目录，将一个干净的文件放入其中，然后运行一系列调用。合法调用成功。被拒绝的调用返回 `denied=True` 和原因的 SandboxResult。超时返回 `timed_out=True`。截断设置 `truncated=True`。演示打印一个 JSON 结果表，退出为零。
 
-## How this composes with the rest of Track A
+## 这如何与追踪 A 的其余部分组合
 
-Lesson 25 produced the gate chain. Lesson 26 is the executor that runs after a gate ALLOW. Lesson 27's eval harness compares the sandbox results against the expected exit-code per task. Lesson 28 emits a `gen_ai.tool.execution` span around each `Sandbox.run` invocation. Lesson 29's end-to-end demo wires a real coding agent through both layers.
+第二十五课产生了门链。第二十六课是门 ALLOW 后运行的可执行文件。第二十七课的 eval harness 将沙箱结果与每个任务的预期退出码进行比较。第二十八课围绕每个 `Sandbox.run` 调用发出 `gen_ai.tool.execution` 跨度。第二十九课的端到端演示通过两层连接一个真实的编码 agent。

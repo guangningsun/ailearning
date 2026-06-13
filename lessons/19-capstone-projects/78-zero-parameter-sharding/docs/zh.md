@@ -1,129 +1,129 @@
-# ZeRO Optimizer State Sharding
+# ZeRO 优化器状态分片
 
-> Adam stores two moment estimates per parameter, both in float32. A 7B-parameter model carries 56 GB of optimiser state. ZeRO stage 1 shards that across N ranks; each rank owns 1/N of the optimiser. After the local step the updated parameter shards broadcast back, every rank reconstructs the full model, and the next step begins. The win is a linear memory drop on the largest single allocation in the training stack.
+> Adam 为每个参数存储两个矩估计值，均为 float32。一个 7B 参数的模型携带 56 GB 的优化器状态。ZeRO 阶段 1 将其分片到 N 个 rank；每个 rank 拥有 1/N 的优化器。本地步骤完成后更新的参数分片广播回来，每个 rank 重建完整模型，下一步开始。收益是训练栈中最大单次分配的内存线性下降。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track C lessons 42-49
-**Time:** ~90 min
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 C 轨道课程 42-49
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Shard optimiser state (first moment, second moment, fp32 master copy) across N ranks so each rank owns 1/N.
-- Use reduce_scatter to deliver each rank only its shard's gradient sum, then allgather to broadcast the updated parameter shards back.
-- Compute the memory savings table for stage 1, stage 2, stage 3 against vanilla DDP.
-- Defend the choice of stage 1 vs stage 2 vs stage 3 on model size and bandwidth budget.
+- 将优化器状态（一阶矩、二阶矩、fp32 主副本）分片到 N 个 rank，使每个 rank 拥有 1/N。
+- 使用 reduce_scatter 向每个 rank 仅交付其分片的梯度总和，然后使用 allgather 广播更新后的参数分片。
+- 计算阶段 1、阶段 2、阶段 3 相对于 vanilla DDP 的内存节省表。
+- 根据模型大小和带宽预算论证阶段 1 vs 阶段 2 vs 阶段 3 的选择。
 
-## The Problem
+## 问题
 
-Vanilla DDP replicates everything: parameters, gradients, and optimiser state are present in full on every rank. For a 7B-parameter model in fp16 that means 14 GB of parameters, 14 GB of gradients, and 28 GB of optimiser state per rank. The optimiser state is the largest term and the easiest to shard because it is only touched during the step, not during forward or backward.
+Vanilla DDP 复制一切：参数、梯度和优化器状态在每个 rank 上都是完整存在的。对于一个采用 fp16 的 7B 参数模型，这意味着每个 rank 有 14 GB 参数、14 GB 梯度和 28 GB 优化器状态。优化器状态是最大项，也是最容易分片的，因为它只在 step 阶段被访问，不在前向或反向传播中。
 
-ZeRO stage 1 shards the optimiser state. Each rank holds 1/N of the Adam moments. After backward, instead of allreducing the full gradient and stepping locally, ZeRO reduce_scatters so each rank receives only its shard's summed gradient. The rank applies the optimiser step to its shard of the master parameters. The updated parameter shards then allgather back so every rank has the full model for the next forward. The optimiser memory drops by N. The wire traffic per step is the same as DDP: one reduce_scatter plus one allgather equals one allreduce by bandwidth. Memory wins, throughput holds.
+ZeRO 阶段 1 对优化器状态进行分片。每个 rank 持有 1/N 的 Adam 矩。反向传播后，ZeRO 不是全reduce 完整梯度并在本地 step，而是 reduce_scatter 使每个 rank 仅接收其分片的汇总梯度。该 rank 将优化器步骤应用到其主参数分片上。然后更新后的参数分片 allgather 回来，使每个 rank 在下一个前向时拥有完整模型。优化器内存下降 N 倍。每步的通信量与 DDP 相同：一次 reduce_scatter 加一次 allgather 等于一次 allreduce（按带宽计）。内存赢了，吞吐量保持。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart TD
-  A[forward + backward on full model] --> B[grads complete on every rank]
-  B --> C[reduce_scatter grads]
-  C --> D[rank r holds summed grad shard r]
-  D --> E[Adam step on shard r using local optimiser state]
-  E --> F[updated param shard r]
-  F --> G[allgather param shards]
-  G --> H[next forward sees full model again]
+  A[完整模型上前向 + 反向传播] --> B[梯度在每个 rank 上完成]
+  B --> C[reduce_scatter 梯度]
+  C --> D[rank r 持有汇总梯度分片 r]
+  D --> E[使用本地优化器状态对分片 r 进行 Adam 步骤]
+  E --> F[更新后的参数分片 r]
+  F --> G[allgather 参数分片]
+  G --> H[下一个前向再次看到完整模型]
 ```
 
-### Stages of ZeRO
+### ZeRO 的阶段
 
-| Stage | What is sharded | Memory per rank | Comm per step |
+| 阶段 | 分片内容 | 每 rank 内存 | 每步通信 |
 |-------|----------------|------------------|---------------|
-| DDP | nothing | params + grads + optim | 1x allreduce |
-| ZeRO-1 | optimiser state | params + grads + optim/N | 1x reduce_scatter + 1x allgather |
+| DDP | 无 | params + grads + optim | 1x allreduce |
+| ZeRO-1 | 优化器状态 | params + grads + optim/N | 1x reduce_scatter + 1x allgather |
 | ZeRO-2 | optim + grads | params + grads/N + optim/N | 1x reduce_scatter + 1x allgather |
-| ZeRO-3 | optim + grads + params | params/N + grads/N + optim/N | 1x allgather per layer + 1x reduce_scatter per layer |
+| ZeRO-3 | optim + grads + params | params/N + grads/N + optim/N | 每层 1x allgather + 每层 1x reduce_scatter |
 
-Stage 1 is the cheapest win because optimiser state dominates the budget. Stage 2 needs gradient-shard accumulation logic but the bandwidth is the same. Stage 3 (FSDP) pays per-layer comm for every forward and backward, gaining the parameter-shard memory drop. The lesson implements stage 1 in full.
+阶段 1 是最便宜的收益，因为优化器状态占预算主导地位。阶段 2 需要梯度分片累积逻辑，但带宽相同。阶段 3（FSDP）为每个前向和反向支付每层通信，获得参数分片内存下降。本课程完整实现阶段 1。
 
-### The memory math, real numbers
+### 内存数学，实际数字
 
-For a model with P parameters trained with Adam in mixed precision:
+对于采用 Adam 混合精度训练的 P 个参数的模型：
 
-| Term | Vanilla | ZeRO-1 | Why |
+| 项 | Vanilla | ZeRO-1 | 原因 |
 |------|---------|--------|-----|
-| fp16 params | 2P bytes | 2P bytes | needed for forward |
-| fp16 grads | 2P bytes | 2P bytes | needed for backward |
-| fp32 master copy | 4P bytes | 4P/N bytes | only the optim uses it |
-| fp32 first moment | 4P bytes | 4P/N bytes | only the optim uses it |
-| fp32 second moment | 4P bytes | 4P/N bytes | only the optim uses it |
-| Total | 16P bytes | 4P + 12P/N bytes |   |
+| fp16 参数 | 2P 字节 | 2P 字节 | 前向需要 |
+| fp16 梯度 | 2P 字节 | 2P 字节 | 反向需要 |
+| fp32 主副本 | 4P 字节 | 4P/N 字节 | 只有优化器使用 |
+| fp32 一阶矩 | 4P 字节 | 4P/N 字节 | 只有优化器使用 |
+| fp32 二阶矩 | 4P 字节 | 4P/N 字节 | 只有优化器使用 |
+| 总计 | 16P 字节 | 4P + 12P/N 字节 |   |
 
-At N=8: vanilla 16P, ZeRO-1 5.5P, a 65% drop. At N=64: vanilla 16P, ZeRO-1 4.19P, a 74% drop.
+在 N=8 时：vanilla 16P，ZeRO-1 5.5P，下降 65%。在 N=64 时：vanilla 16P，ZeRO-1 4.19P，下降 74%。
 
-### Why reduce_scatter beats allreduce-then-shard
+### 为什么 reduce_scatter 胜过 allreduce-then-shard
 
-Allreduce gives every rank the full summed gradient. If you only need shard r, the (N-1)/N of the gradient that was reduced is wasted on rank r. Reduce_scatter delivers exactly the shard each rank owns; the per-rank bytes are the same as allreduce (since allreduce is reduce_scatter + allgather) but the second half is replaced by the parameter-shard allgather later. Net wire is identical to DDP, memory is divided.
+Allreduce 给每个 rank 完整的汇总梯度。如果你只需要分片 r，被 reduce 的 (N-1)/N 梯度在 rank r 上被浪费了。Reduce_scatter 仅交付每个 rank 拥有的分片；每 rank 字节数与 allreduce 相同（因为 allreduce 是 reduce_scatter + allgather），但第二半被后续的参数分片 allgather 替换。净通信量与 DDP 相同，内存被分割。
 
-## Build It
+## 构建它
 
-`code/main.py` implements:
+`code/main.py` 实现：
 
-- `flatten_params(module)` and `unflatten_into(module, flat)` that pack a model's parameters into one contiguous tensor and unpack back. The flat layout is what makes sharding by rank a simple slice.
-- `ZeroOptimizer(model, world_size, rank, lr)` that owns the rank's shard of the master copy and Adam moments.
-- `step()` that runs reduce_scatter on the flat gradient, applies Adam to the rank's shard, and allgathers the updated parameters back.
-- A demo that trains a 3-layer MLP for 20 steps and prints the per-step memory budget alongside a vanilla DDP baseline.
+- `flatten_params(module)` 和 `unflatten_into(module, flat)` 将模型的参数打包到一个连续张量中并解包回去。扁平布局使按 rank 分片成为一个简单的切片操作。
+- `ZeroOptimizer(model, world_size, rank, lr)` 拥有主副本和 Adam 矩的 rank 分片。
+- `step()` 对扁平梯度运行 reduce_scatter，将 Adam 应用于 rank 的分片，并将更新的参数 allgather 回来。
+- 一个演示，训练一个 3 层 MLP 进行 20 步，并打印每步内存预算以及 vanilla DDP 基线。
 
-Run it:
+运行它：
 
 ```bash
 python3 code/main.py
 ```
 
-Output: per-step loss and the memory table that shows ZeRO-1 holds 1/N of the optimiser state on each rank versus DDP's full copy.
+输出：每步损失以及内存表，显示 ZeRO-1 在每个 rank 上持有 1/N 的优化器状态，而 DDP 是完整副本。
 
-## Production patterns in the wild
+## 生产环境中的模式
 
-Three patterns harden ZeRO enough to ship.
+三个模式使 ZeRO 足够坚固可以交付。
 
-**Sharded checkpointing matters.** ZeRO-1's optimiser state is split across ranks; the checkpoint has to record which rank owns what. Lesson 80 builds the sharded checkpoint manifest that resumes a ZeRO run on the same world size. Without it the saved state is unreadable at restart.
+**分片检查点很重要。** ZeRO-1 的优化器状态跨 rank 分割；检查点必须记录哪个 rank 拥有什么。第 80 课构建分片检查点清单，用于在相同 world size 上恢复 ZeRO 运行。没有它，保存的状态在重启时无法读取。
 
-**Mixed precision is the point.** ZeRO is a mixed-precision technique; the fp32 master copy is what is sharded. Running ZeRO without mixed precision pays the memory tax on the fp32 master without the corresponding fp16 forward win. Production runs always pair ZeRO with autocast or bf16 weights.
+**混合精度是关键。** ZeRO 是一种混合精度技术；fp32 主副本是被分片的内容。在没有混合精度的情况下运行 ZeRO 会支付 fp32 主副本的内存税，而没有相应的 fp16 前向收益。生产运行始终将 ZeRO 与 autocast 或 bf16 权重配对。
 
-**Stage 1 is a near-free win.** The comm is identical to DDP by bandwidth. The memory savings are linear in N. The only cost is the bookkeeping for the optimiser shard. Production stacks default to stage 1 unless the parameter shard memory is also a problem; then stage 2 or 3 trades comm for memory.
+**阶段 1 是一个近乎免费的收益。** 通信量按带宽计与 DDP 相同。内存节省随 N 线性增长。唯一代价是优化器分片的簿记工作。生产栈默认为阶段 1，除非参数分片内存也是问题；然后阶段 2 或 3 以通信换内存。
 
-## Use It
+## 使用它
 
-Production patterns:
+生产模式：
 
-- **DeepSpeed ZeRO.** The reference implementation. `deepspeed_config.json` selects stage 1/2/3 and partition sizes.
-- **PyTorch FSDP.** The PyTorch-native equivalent. `ShardingStrategy.SHARD_GRAD_OP` is ZeRO-2; `FULL_SHARD` is ZeRO-3.
-- **HuggingFace Accelerate.** Wraps both DeepSpeed and FSDP under a uniform config.
+- **DeepSpeed ZeRO。** 参考实现。`deepspeed_config.json` 选择阶段 1/2/3 和分区大小。
+- **PyTorch FSDP。** PyTorch 原生等价物。`ShardingStrategy.SHARD_GRAD_OP` 是 ZeRO-2；`FULL_SHARD` 是 ZeRO-3。
+- **HuggingFace Accelerate。** 在统一配置下包装 DeepSpeed 和 FSDP。
 
-## Ship It
+## 交付它
 
-Lesson 79 (pipeline parallel) is the orthogonal sharding axis: instead of sharding optimiser state across the same model, pipeline shards layers across ranks. Lesson 81 composes DDP + ZeRO on the end-to-end demo.
+第 79 课（流水线并行）是正交分片轴：不是跨相同模型分片优化器状态，而是将层跨 rank 分片。第 81 课在端到端演示上组合 DDP + ZeRO。
 
-## Exercises
+## 练习
 
-1. Extend to ZeRO-2 by sharding gradients: each rank only stores the gradient for its shard, achieved by zeroing out the non-shard portion after backward.
-2. Add a memory profiler that prints actual fp32 byte usage on rank 0 versus the formula prediction.
-3. Measure the per-step wall-clock time of vanilla DDP versus ZeRO-1 and decompose into forward, backward, comm.
-4. Implement gradient clipping under ZeRO-1: the L2 norm must be computed across all shards via allreduce of the local norm squared.
-5. Implement a "naive ZeRO" with allreduce instead of reduce_scatter, measure the wire-time difference. Defend the reduce_scatter choice with numbers.
+1. 通过分片梯度扩展到 ZeRO-2：每个 rank 仅存储其分片的梯度，方法是在反向传播后将非分片部分归零。
+2. 添加一个内存分析器，打印 rank 0 上的实际 fp32 字节使用量与公式预测的对比。
+3. 测量 vanilla DDP 与 ZeRO-1 的每步墙钟时间，并分解为前向、反向、通信。
+4. 在 ZeRO-1 下实现梯度裁剪：L2 范数必须通过对本地范数平方的 allreduce 跨所有分片计算。
+5. 实现一个"朴素 ZeRO"，使用 allreduce 而不是 reduce_scatter，测量通信时间差异。用数字论证 reduce_scatter 的选择。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| ZeRO-1 | "Shard the optimiser" | Each rank holds 1/N of fp32 master + Adam moments |
-| ZeRO-2 | "Shard grads too" | Each rank also drops the non-shard gradients after reduce_scatter |
-| ZeRO-3 | "Shard params" | Each rank holds 1/N of fp16 params; allgather per layer in forward |
-| Master copy | "fp32 weights" | The high-precision parameter copy the optimiser updates |
-| Reduce_scatter | "Split the sum" | Deliver each rank only its shard's summed gradient |
+| ZeRO-1 | "分片优化器" | 每个 rank 持有 1/N 的 fp32 主副本 + Adam 矩 |
+| ZeRO-2 | "也分片梯度" | 每个 rank 在 reduce_scatter 后也丢弃非分片梯度 |
+| ZeRO-3 | "分片参数" | 每个 rank 持有 1/N 的 fp16 参数；每层前向时 allgather |
+| Master copy | "fp32 权重" | 优化器更新的高精度参数副本 |
+| Reduce_scatter | "分割和" | 仅向每个 rank 交付其分片的汇总梯度 |
 
-## Further Reading
+## 延伸阅读
 
 - [Rajbhandari et al, ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054)
-- [DeepSpeed ZeRO documentation](https://www.deepspeed.ai/tutorials/zero/)
-- [PyTorch FSDP documentation](https://pytorch.org/docs/stable/fsdp.html)
-- Phase 19 Lesson 76 - the reduce_scatter and allgather this lesson stands on
-- Phase 19 Lesson 80 - sharded checkpointing the ZeRO state must use
+- [DeepSpeed ZeRO 文档](https://www.deepspeed.ai/tutorials/zero/)
+- [PyTorch FSDP 文档](https://pytorch.org/docs/stable/fsdp.html)
+- 第 19 课第 76 节 - 本课所依赖的 reduce_scatter 和 allgather
+- 第 19 课第 80 节 - ZeRO 状态必须使用的分片检查点

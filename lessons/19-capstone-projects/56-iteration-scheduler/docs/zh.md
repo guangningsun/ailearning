@@ -1,122 +1,122 @@
-# Iteration Scheduler
+# 迭代调度器
 
-> A research loop without a scheduler is a queue with delusions. The scheduler is where the loop decides what to stop exploring, and that decision is the whole game.
+> 没有调度器的研究循环是一个有着妄想的工作队列。调度器是循环决定停止探索什么的地方，而这个决定就是整场游戏。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 lessons 50-53
-**Time:** ~90 minutes
+**类型：** 构建型
+**语言：** Python
+**前置条件：** 阶段 19 第 50-53 节
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Model a research workflow as a hypothesis queue feeding parallel experiment slots whose results fan back in.
-- Run multiple experiments concurrently with asyncio so the scheduler can keep all slots busy.
-- Score each hypothesis branch with UCB so the scheduler can prune low-yield branches without abandoning exploration.
-- Fan out finished results to a paper-write stage and a re-queue stage so a high-yield branch spawns follow-up hypotheses.
-- Surface a per-iteration trace with branch scores, slot occupancy, and pruning decisions.
+- 将研究工作流建模为一个假设队列，喂养并行实验槽位，其结果反馈回来。
+- 使用 asyncio 并发运行多个实验，使调度器能够保持所有槽位忙碌。
+- 使用 UCB 对每个假设分支进行评分，使调度器能够在不放弃探索的情况下剪除低收益分支。
+- 将完成的结果扇出到论文写作阶段和重新入队阶段，使高收益分支产生后续假设。
+- 展示每轮迭代的追踪，包含分支分数、槽位占用率和剪枝决策。
 
-## Why a scheduler, not a worklist
+## 为什么是调度器，而不是工作列表
 
-A flat worklist runs jobs in submission order. That is fine when each job is independent. Research is not independent: a finding from experiment three changes the priority of experiments four and five. A scheduler that reads the result fan-in and reorders the queue gets more useful work done per unit of compute.
+扁平的工作列表按提交顺序运行作业。当每个作业独立时，这样很好。研究不是独立的：实验三的发现改变了实验四和实验五的优先级。读取结果反馈并重新排序队列的调度器每单位计算能完成更多有用的工作。
 
-The interesting design choice is the scoring rule. A greedy scorer always picks the current leader and never explores. A uniform scorer never exploits. UCB (upper confidence bound) is the middle path: exploit the leader while reserving capacity for branches that have been tried less.
+有趣的设计选择是评分规则。贪婪评分者总是选择当前的领先者，从不探索。均匀评分者从不利用。UCB（上置信界）是中间路径：利用领先者，同时为尝试较少的分支保留容量。
 
-## The system shape
+## 系统形状
 
 ```mermaid
 flowchart LR
-    Queue[Hypothesis queue] --> Sched[Scheduler]
-    Sched --> Slot1[Slot 1]
-    Sched --> Slot2[Slot 2]
-    Sched --> Slot3[Slot 3]
-    Slot1 --> Bus[Result bus]
+    Queue[假设队列] --> Sched[调度器]
+    Sched --> Slot1[槽位 1]
+    Sched --> Slot2[槽位 2]
+    Sched --> Slot3[槽位 3]
+    Slot1 --> Bus[结果总线]
     Slot2 --> Bus
     Slot3 --> Bus
-    Bus --> Score[UCB scorer]
+    Bus --> Score[UCB 评分器]
     Score --> Queue
-    Bus --> Paper[Paper write fan-out]
+    Bus --> Paper[论文写入扇出]
 ```
 
-The queue holds hypotheses. The scheduler picks the highest-UCB hypothesis when a slot frees. Each slot runs an experiment asynchronously. Finished experiments fan their result onto the bus. The bus updates UCB statistics on the originating branch and fans out to the paper-write stage when a branch's yield crosses a threshold.
+队列持有假设。当槽位空闲时，调度器选择 UCB 最高的假设。每个槽位异步运行实验。完成的实验将其结果扇出到总线。总线更新原始分支的 UCB 统计，并在分支收益越过阈值时扇出到论文写作阶段。
 
-## The Hypothesis shape
+## 假设的形状
 
 ```mermaid
 flowchart TB
-    Hyp[Hypothesis] --> Id[id]
-    Hyp --> Branch[branch id]
-    Hyp --> Payload[payload dict]
-    Hyp --> Stats[runs and reward sum]
-    Stats --> Runs[runs int]
-    Stats --> Sum[reward sum float]
+    Hyp[假设] --> Id[id]
+    Hyp --> Branch[分支 id]
+    Hyp --> Payload[有效载荷字典]
+    Hyp --> Stats[运行次数和奖励总和]
+    Stats --> Runs[运行次数整数]
+    Stats --> Sum[奖励总和浮点数]
 ```
 
-`branch` is the key for UCB statistics. Multiple hypotheses may share a branch (the branch is the research direction; the hypothesis is one trial within it). `runs` is the count of completed experiments for that branch, `reward_sum` is the cumulative reward. UCB reads both.
+`branch` 是 UCB 统计的关键。多个假设可能共享一个分支（分支是研究方向；假设是其中的一个试验）。`runs` 是该分支完成的实验计数，`reward_sum` 是累积奖励。UCB 读取两者。
 
-## UCB scoring
+## UCB 评分
 
-The UCB formula used in this lesson is the classic UCB1.
+本课程使用的 UCB 公式是经典的 UCB1。
 
 ```text
 ucb(branch) = mean_reward(branch) + c * sqrt( ln(total_runs) / runs(branch) )
 ```
 
-`total_runs` is the count of all experiments completed across all branches. `c` is the exploration weight; the lesson defaults to `sqrt(2)`. A branch with zero runs gets `+inf` so untried branches are always scheduled first. A branch with high mean reward keeps a high score until other branches catch up; a branch that runs many times without much reward gets eclipsed by less-run alternatives.
+`total_runs` 是所有分支完成实验的总数。`c` 是探索权重；课程默认为 `sqrt(2)`。运行次数为零的分支得到 `+inf`，因此未尝试的分支总是被优先调度。 mean reward 高的分支保持高分数，直到其他分支赶上；运行多次而奖励不多的分支会被运行较少的替代选项超越。
 
-The pruning gate is separate from the picker. Pruning removes a branch from future scheduling when its mean reward falls below an absolute floor (default `0.2`) after at least `prune_after_runs` trials (default `3`). This keeps the queue bounded.
+剪枝门与选择器分开。剪枝在分支的平均奖励低于绝对下限（默认 `0.2`）且至少运行了 `prune_after_runs` 次试验（默认 `3`）后，将其从未来调度中移除。这保持队列有界。
 
-## Parallel slots with asyncio
+## 使用 asyncio 的并行槽位
 
-The scheduler drives experiments with `asyncio.create_task`. Each task runs the experiment runner (an `async def` callable) that returns a `Result`. The main loop waits on the set of in-flight tasks with `asyncio.wait(..., return_when=asyncio.FIRST_COMPLETED)` and fires the scoring update on each completion.
+调度器使用 `asyncio.create_task` 驱动实验。每个任务运行实验运行器（一个 `async def` 可调用对象），返回 `Result`。主循环使用 `asyncio.wait(..., return_when=asyncio.FIRST_COMPLETED)` 等待一组进行中的任务，并在每次完成时触发评分更新。
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant S as Scheduler
-    participant Q as Hypothesis queue
-    participant R as Experiment runner
-    participant T as In-flight tasks
-    S->>Q: pop highest UCB
+    participant S as 调度器
+    participant Q as 假设队列
+    participant R as 实验运行器
+    participant T as 进行中的任务
+    S->>Q: 弹出最高 UCB
     S->>R: create_task(run(hypothesis))
-    R-->>T: Result (task completes)
+    R-->>T: Result (任务完成)
     S->>T: await wait(FIRST_COMPLETED)
-    S->>S: update UCB stats
-    S->>Q: re-queue follow-ups
+    S->>S: 更新 UCB 统计
+    S->>Q: 重新入队后续假设
 ```
 
-Three slots run concurrently. The main loop never blocks on a single experiment. The scheduler keeps starting new tasks as soon as a slot frees, until both the queue is empty and no tasks are in flight.
+三个槽位并发运行。主循环永远不会阻塞在单个实验上。调度器在槽位空闲时立即开始新任务，直到队列为空且没有任务在进行中。
 
-## Fan-out: paper triggers
+## 扇出：论文触发
 
-When a branch's mean reward crosses `paper_threshold` (default `0.7`) and that branch has not yet produced a paper, the scheduler fans a `paper.trigger` event onto an output list. Downstream the paper writer from lesson fifty-four would pick this up. In this lesson the trigger is captured as a list so tests can assert it.
+当分支的平均奖励越过 `paper_threshold`（默认 `0.7`）且该分支尚未产生论文时，调度器将 `paper.trigger` 事件扇出到输出列表。在下游，第五十四课的论文写作器会获取它。在本课程中，触发器被捕获为一个列表，以便测试可以断言它。
 
-## Fan-out: follow-up hypotheses
+## 扇出：后续假设
 
-When a high-yield result lands, the scheduler can call the user-supplied `expander` to produce one or more follow-up hypotheses on the same branch. The expander is a pure function from `Result` to `list[Hypothesis]`. The lesson ships a deterministic expander that produces two follow-ups for any result whose reward exceeds the paper threshold.
+当高收益结果落地时，调度器可以调用用户提供的 `expander` 来产生同一分支上的一个或多个后续假设。expander 是一个从 `Result` 到 `list[Hypothesis]` 的纯函数。课程附带了一个确定性 expander，为任何奖励超过论文阈值的 result 产生两个后续假设。
 
-## Budgets
+## 预算
 
-Two budgets protect the scheduler from runaway loops.
+两个预算保护调度器免受失控循环的影响。
 
 ```text
-max_experiments    : total count of experiments run across all branches
-max_seconds        : wall-clock cap (asyncio time)
+max_experiments    : 所有分支运行实验的总数
+max_seconds        : 挂钟时间上限 (asyncio 时间)
 ```
 
-When either fires, the scheduler stops scheduling new tasks, awaits the in-flight ones, and returns the final trace. The trace includes a `stop_reason`.
+当两者中任何一个触发时，调度器停止调度新任务，等待进行中的任务，并返回最终追踪。追踪包含 `stop_reason`。
 
-## The Trace and final report
+## 追踪和最终报告
 
-Each scheduling decision (pick, dispatch, result, prune, fan-out) emits one event. The final report summarises per-branch stats, total runs, total wall-clock, and the paper triggers fired. The next lesson, the end-to-end demo, reads this report to drive the paper writer.
+每个调度决策（选择、调度、结果、剪枝、扇出）发出一事件。最终报告总结每个分支的统计、总运行次数、总挂钟时间和发出的论文触发。下一课，端到端演示，读取此报告来驱动论文写作器。
 
-## How to read the code
+## 如何阅读代码
 
-`code/main.py` defines `Hypothesis`, `Result`, `BranchStats`, `IterationScheduler`, and a `make_deterministic_runner` factory that returns an asyncio experiment runner with predictable rewards. The runner sleeps for a fixed `delay_ms` (default `5ms`) so concurrency is observable.
+`code/main.py` 定义了 `Hypothesis`、`Result`、`BranchStats`、`IterationScheduler`，以及一个 `make_deterministic_runner` 工厂，返回具有可预测奖励的 asyncio 实验运行器。运行器睡眠固定的 `delay_ms`（默认 `5ms`），以便并发是可观察的。
 
-`code/tests/test_scheduler.py` covers: UCB picks untried branches first, parallel slot occupancy, paper triggers when threshold is crossed, branch pruning after low-yield trials, fan-out follow-up hypotheses, and budget exit (both experiment count and wall clock).
+`code/tests/test_scheduler.py` 覆盖了：UCB 首先选择未尝试的分支、并行槽位占用率、阈值跨过时的论文触发、低收益试验后的分支剪枝、扇出后续假设，以及预算退出（实验计数和挂钟时间）。
 
-## Going further
+## 进一步探索
 
-Three extensions a real implementation will want. First, persistent UCB stats across sessions: the current statistics live in memory; a real scheduler would checkpoint them so a restart preserves the exploration budget already spent. Second, multi-objective scoring: instead of a scalar reward, each result emits a vector and UCB becomes a Pareto-style picker. Third, contextual bandits: the picker conditions on hypothesis features (length, complexity) so similar hypotheses share exploration.
+真实实现会想要的三个扩展。第一，跨会话持久化 UCB 统计：当前统计存在于内存中；真正的调度器会对其进行检查点，以便重启保留已花费的探索预算。第二，多目标评分：不是标量奖励，而是每个结果发出一个向量，UCB 成为 Pareto 风格的选择器。第三，上下文赌博机：选择器以假设特征（长度、复杂度）为条件，因此相似的假设共享探索。
 
-The scheduler is the place where research becomes more than a worklist. Once UCB is wired and the slots run in parallel, every other improvement composes on top.
+调度器是研究变成不仅仅是工作队列的地方。一旦 UCB 连接好且槽位并行运行，每一个其他改进都构建在上面。

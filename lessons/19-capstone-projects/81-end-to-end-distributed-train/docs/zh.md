@@ -1,121 +1,121 @@
-# End-to-End Distributed Training
+# 端到端分布式训练
 
-> Lessons 76 through 80 each built one piece. This is the assembly: a tiny GPT trained across 4 simulated ranks with DDP for gradient sync, ZeRO-1 for optimiser-state sharding, and a sharded checkpoint at the halfway mark. The demo runs 20 steps, self-terminates, prints a loss curve plus a memory profile, and writes a resumable checkpoint.
+> 第 76 至 80 课每课实现了一个组件。这是它们的组装：一个小型 GPT 在 4 个模拟 rank 上进行训练，配合 DDP 梯度同步、ZeRO-1 优化器状态分片，以及在训练中途的检查点分片保存。演示运行 20 步，自动终止，打印损失曲线和内存profile，并写入可恢复的检查点。
 
-**Type:** Build
-**Languages:** Python
-**Prerequisites:** Phase 19 Track C lessons 42-49
-**Time:** ~90 min
+**类型：** 构建
+**语言：** Python
+**前置条件：** 阶段 19 C 轨道第 42-49 课
+**时间：** 约 90 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Compose DDP (lesson 77) plus ZeRO-1 (lesson 78) plus sharded checkpoints (lesson 80) into one training loop.
-- Train a 2-layer transformer language model on a small synthetic corpus for 20 steps across 4 simulated ranks.
-- Print a per-step loss table, a per-rank memory profile, and a checkpoint manifest that resumes byte-equal on the same world size.
-- Defend the composition: each piece is independently testable in earlier lessons and this lesson proves they compose.
+- 将 DDP（第 77 课）+ ZeRO-1（第 78 课）+ 分片检查点（第 80 课）组装进同一个训练循环。
+- 在一个小型合成语料上，用 4 个模拟 rank 训练一个 2 层 Transformer 语言模型 20 步。
+- 打印每步损失表、每个 rank 的内存 profile，以及一个检查点清单——在相同 world size 下重启后可逐字节一致恢复。
+- 验证组合的正确性：每个组件在前置课程中独立可测，本课证明它们可以组合。
 
-## The Problem
+## 问题
 
-A capstone is the proof that the pieces fit together. Lesson 76 implemented collectives. Lesson 77 wrapped them into DDP. Lesson 78 sharded optimiser state with reduce_scatter. Lesson 79 analysed pipeline. Lesson 80 saved a sharded checkpoint. Each lesson stood alone with its own test. A real training run uses every primitive at once; if the composition is wrong, the loss diverges, the checkpoint refuses to resume, or the per-rank memory grows when it should shrink.
+顶点课程就是证明各组件能够协同工作。第 76 课实现了集合通信。第 77 课将其包装为 DDP。第 78 课用 reduce_scatter 分片优化器状态。第 79 课分析了流水线。第 80 课保存了分片检查点。每课独立，有各自的测试。真实训练运行需要同时使用每一个原语；如果组合出错，损失会发散、检查点无法恢复，或者每个 rank 的内存本应减少却反而增长了。
 
-This lesson runs the end-to-end demo and verifies four invariants: (a) the loss decreases monotonically across the 20 steps within float noise, (b) every rank holds the same parameter norm at every step, (c) the per-rank optimiser memory equals the ZeRO-1 formula 12P/N bytes, and (d) the checkpoint at step 10 reloads byte-equal at restart. The demo self-terminates: 20 steps, single command, exit 0.
+本课运行端到端演示并验证四个不变量：(a) 损失在 20 步内随浮点噪声单调下降，(b) 每个 rank 在每一步都持有相同的参数范数，(c) 每个 rank 的优化器内存等于 ZeRO-1 公式 12P/N 字节，(d) 第 10 步的检查点在重启后可逐字节一致恢复。演示自动终止：20 步，单条命令，退出码 0。
 
-## The Concept
+## 概念
 
 ```mermaid
 flowchart TB
-  A[spawn 4 ranks] --> B[broadcast initial GPT params]
-  B --> C[for step in 20: forward + backward on rank-local batch]
-  C --> D[ZeRO-1 step: reduce_scatter grads + Adam on shard + allgather params]
-  D --> E[at step 10: save sharded checkpoint]
-  E --> F[continue to step 20]
-  F --> G[memory profile + resume verify + exit 0]
+  A[启动 4 个 ranks] --> B[广播初始 GPT 参数]
+  B --> C[for step in 20: 前向 + 反向在 rank-local batch 上]
+  C --> D[ZeRO-1 步骤: reduce_scatter 梯度 + Adam 分片 + allgather 参数]
+  D --> E[在第 10 步: 保存分片检查点]
+  E --> F[继续到第 20 步]
+  F --> G[内存 profile + 恢复验证 + 退出 0]
 ```
 
-### The mini GPT
+### 小型 GPT
 
-The model is small on purpose: 2 transformer blocks, embed dim 32, 4 attention heads, vocab 64, sequence length 16, batch 4. A few thousand parameters. Big enough to exercise every wiring decision (multi-head attention runs the standard masked path; LayerNorm has weights to sync; the LM head is a separate linear projection back to the vocab). Small enough that 20 steps on 4 CPU ranks finish in seconds.
+模型有意做得很小：2 层 Transformer 块，embed dim 32，4 个注意力头，词表 64，序列长度 16，batch 4。几千个参数。足够大以锻炼每一个连接决策（多头注意力走标准 masked 路径；LayerNorm 有权重需要同步；LM head 是一个独立线性投影映射回词表）。足够小以至于在 4 个 CPU rank 上跑 20 步只需几秒钟。
 
-### The composition rules
+### 组合规则
 
-| Lesson piece | What it owns | What it leaves to the loop |
+| 课程组件 | 它负责什么 | 交给循环什么 |
 |--------------|--------------|----------------------------|
-| DDP broadcast | Initial parameter sync | One call at construct time |
-| ZeRO-1 step | Gradient sync, master copy update, parameter broadcast | One call per step replacing optimiser.step |
-| Sharded checkpoint | Persist per-rank state, manifest with sha256 | Called on rank 0 with state collected via allgather |
-| Training loop | Forward, backward, loss logging | Calls the three above in order |
+| DDP 广播 | 初始参数同步 | 构造时调用一次 |
+| ZeRO-1 步骤 | 梯度同步、主副本更新、参数广播 | 每步调用一次，替代 optimizer.step |
+| 分片检查点 | 持久化每个 rank 的状态，带 sha256 的清单 | 在 rank 0 调用，状态通过 allgather 收集 |
+| 训练循环 | 前向、反向、损失日志 | 按顺序调用上述三个 |
 
-The loop does not know about reduce_scatter or rendezvous files. The ZeRO and checkpoint modules expose narrow interfaces that the loop composes.
+循环不知道 reduce_scatter 或 rendezvous 文件。ZeRO 和检查点模块暴露窄接口，循环组合它们。
 
-### Why a tiny GPT and not just an MLP
+### 为什么用小型 GPT 而不是 MLP
 
-The MLP from lesson 77 was sufficient to verify gradient sync. A tiny GPT adds three things: a separate LM head over the vocab (in this lesson, untied for clarity; full GPT typically ties the head to the token embedding), softmax+cross-entropy as the loss (more numerical edge cases than MSE), and an asymmetric forward (embeddings then attention then MLP per layer). Sticking with an MLP for the capstone would hide whether the composition handles LayerNorm or the embedding layer's grad shape correctly.
+第 77 课的 MLP 足以验证梯度同步。小型 GPT 增加了三样东西：一个独立的 LM head 映射到词表（本课中为清晰起见不绑定；完整 GPT 通常将 head 绑定到 token embedding）、softmax+交叉熵作为损失（比 MSE 有更多数值边界情况）、以及非对称前向（每层依次为 embeddings、注意力、MLP）。在顶点课程中继续用 MLP 会掩盖组合是否正确处理了 LayerNorm 或 embedding 层的梯度形状。
 
-### Self-terminating means exit 0
+### 自动终止意味着退出码 0
 
-The loop runs a fixed 20 steps and exits. No `while True`, no human intervention, no resume from external state. A capstone you can leave running unattended and find a complete log when it finishes is a capstone that proves the system is wired correctly. If any piece deadlocks the demo never returns and the test rig catches it.
+循环固定运行 20 步然后退出。没有 `while True`，不需要人工干预，不依赖外部状态恢复。一个可以无人值守运行、完成时带着完整日志的顶点课程，才能证明系统连接正确。如果任何一个环节死锁，演示永远不会返回，测试框架会捕获它。
 
-## Build It
+## 构建
 
-`code/main.py` implements:
+`code/main.py` 实现：
 
-- `MiniGPT`: 2-layer transformer with masked self-attention and a separate LM head.
-- `make_corpus(seed, total_tokens)`: deterministic next-token-prediction data.
-- `_train_worker`: spawned per rank; broadcasts init params, runs the loop, calls ZeRO step, writes the sharded checkpoint at step 10.
-- `verify_resume`: after the main run, reloads the step-10 checkpoint in-process and asserts the saved master shards match the in-memory snapshot byte-for-byte.
-- `main`: orchestrates the whole demo, prints the loss table, the memory profile, and the verification result.
+- `MiniGPT`：2 层 Transformer，带 masked 自注意力和独立的 LM head。
+- `make_corpus(seed, total_tokens)`：确定性下一 token 预测数据。
+- `_train_worker`：每个 rank 派生；广播初始参数，运行循环，调用 ZeRO 步骤，在第 10 步写入分片检查点。
+- `verify_resume`：主运行后，在进程内重新加载第 10 步的检查点，并断言保存的主分片与内存中快照逐字节一致。
+- `main`：编排整个演示，打印损失表、内存 profile 和验证结果。
 
-Run it:
+运行：
 
 ```bash
 python3 code/main.py
 ```
 
-Output: a 20-row loss table, a 4-row per-rank memory profile, a checkpoint manifest, and a "RESUME VERIFIED" line on success.
+输出：一个 20 行的损失表、一个 4 行的每个 rank 内存 profile、一个检查点清单，以及成功后的一条 "RESUME VERIFIED" 行。
 
-## Production patterns in the wild
+## 生产环境中的模式
 
-Three patterns finish the composition for real runs.
+三个模式将组合完成真实训练运行。
 
-**Checkpoint every K minutes, not every K steps.** Step time varies with seq length and microbatch count. A 10-minute checkpoint cadence catches the same compute regardless of model size. The lesson uses step-based for simplicity; production uses wall-clock-based.
+**每 K 分钟检查一次，而不是每 K 步。** 步时间随序列长度和 microbatch 数量变化。每 10 分钟检查一次能捕捉相同的计算量，与模型大小无关。本课为简单起见用步数触发；生产用墙上时钟时间。
 
-**Detect divergence early.** Production runs add a NaN guard after backward and a loss-spike detector; if loss jumps by more than 2x in one step, roll back to the previous checkpoint instead of letting the optimiser march into a degenerate state. The lesson's loss curve is smooth so the guard is unused but the hook stays.
+**尽早检测发散。** 生产运行在反向传播后加入 NaN 防护和损失尖峰检测器；如果损失在某一步跳升超过 2 倍，就回滚到上一个检查点，而不是让优化器走入退化状态。本课的损失曲线很平滑，所以这个防护用不上，但钩子保留着。
 
-**Aggregate the memory profile across ranks.** Per-rank memory differs by rank in real runs (rank with the largest pipeline stage holds more activations). Production logs the max across ranks plus the mean; the lesson prints per-rank to show the formula matches.
+**跨 rank 汇总内存 profile。** 真实运行中每个 rank 的内存因 rank 而异（拥有最大流水线阶段的 rank 持有更多激活）。生产环境记录跨 rank 的最大值和平均值；本课打印每个 rank 以展示公式匹配情况。
 
-## Use It
+## 使用
 
-Production patterns:
+生产模式：
 
-- **DeepSpeed.** Combines DDP + ZeRO + pipeline + activation checkpointing under one config. The lesson's composition is the DeepSpeed shape in miniature.
-- **PyTorch FSDP.** The native equivalent. `FullyShardedDataParallel` with `ShardingStrategy.SHARD_GRAD_OP` is ZeRO-2.
-- **NeMo and Megatron-LM.** Add tensor parallel for the very largest models; otherwise the composition is the same shape.
+- **DeepSpeed。** 将 DDP + ZeRO + 流水线 + 激活检查点组合在一个配置下。本课的组合是 DeepSpeed 形态的微型版本。
+- **PyTorch FSDP。** 原生等价物。`FullyShardedDataParallel` 配合 `ShardingStrategy.SHARD_GRAD_OP` 等同于 ZeRO-2。
+- **NeMo 和 Megatron-LM。** 为超大型模型添加张量并行；否则组合形态相同。
 
-## Ship It
+## 交付
 
-The full track ends here. The 6 lessons together are the distributed-training subsystem a real team would build before adopting DeepSpeed; the abstraction has been proven against gloo and the failure modes have been exercised. Phase 17 (infrastructure and production) is the place to take this to a real cluster.
+完整轨道在此结束。6 课一起构成了真实团队在采用 DeepSpeed 前会构建的分布式训练子系统；抽象已在 gloo 上得到验证，失败模式已被充分练习。第 17 阶段（基础设施和生产）是将其迁移到真实集群的地方。
 
-## Exercises
+## 练习
 
-1. Add a tensor-parallel split of the attention head and verify the loss matches the single-rank baseline. Two ranks: half the heads per rank, allreduce of the attention output.
-2. Add gradient accumulation across 4 microbatches and prove the gradient equals the gradient of one big batch.
-3. Add a resume-from-step-10 path that actually continues training to step 20 and produces the same final loss as the original run.
-4. Add a metrics export (loss, grad norm, step time) to JSONL so the run can be visualised after the fact.
-5. Add a NaN guard that rolls back to the previous checkpoint on a loss spike, and force a spike with a one-step LR multiplier to exercise the rollback.
+1. 添加注意力头的张量并行分割，验证损失与单 rank 基线一致。两个 rank：每个 rank 一半的头，注意力输出做 allreduce。
+2. 添加跨 4 个 microbatch 的梯度累积，证明累积梯度等于一个大 batch 的梯度。
+3. 添加从第 10 步恢复的路径，实际继续训练到第 20 步，并产生与原始运行相同的最终损失。
+4. 添加指标导出（损失、梯度范数、步时间）到 JSONL，以便事后可视化运行过程。
+5. 添加 NaN 防护，在损失尖峰时回滚到上一个检查点，并用一步学习率乘数强制产生尖峰以练习回滚。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说 | 实际含义 |
 |------|----------------|------------------------|
-| End-to-end | "Wire it all up" | One run composes every piece, not a unit test per piece |
-| Memory profile | "GB per rank" | Bytes held on each rank for params, grads, optimiser state |
-| Resume contract | "Save and load" | Per-rank state byte-equal after a checkpoint round-trip |
-| Self-terminating | "Bounded run" | Fixed step count, exit 0 on completion, no human in the loop |
+| 端到端 | "把它们全部连接起来" | 一次运行组合每一个组件，而非每个组件一个单元测试 |
+| 内存 profile | "每个 rank 的 GB" | 每个 rank 持有的参数、梯度、优化器状态的字节数 |
+| 恢复契约 | "保存并加载" | 检查点往返后每个 rank 的状态逐字节一致 |
+| 自动终止 | "有界运行" | 固定步数，完成时退出码 0，循环中无人介入 |
 
-## Further Reading
+## 延伸阅读
 
-- [DeepSpeed end-to-end training tutorial](https://www.deepspeed.ai/getting-started/)
-- [PyTorch FSDP advanced tutorial](https://pytorch.org/tutorials/intermediate/FSDP_advanced_tutorial.html)
-- [Megatron-LM training script reference](https://github.com/NVIDIA/Megatron-LM)
-- Phase 19 Lessons 76-80 - each piece this lesson composes
-- Phase 17 - moving the composition to a real cluster
+- [DeepSpeed 端到端训练教程](https://www.deepspeed.ai/getting-started/)
+- [PyTorch FSDP 高级教程](https://pytorch.org/tutorials/intermediate/FSDP_advanced_tutorial.html)
+- [Megatron-LM 训练脚本参考](https://github.com/NVIDIA/Megatron-LM)
+- 阶段 19 第 76-80 课——本课组合的各个组件
+- 阶段 17——将组合迁移到真实集群
