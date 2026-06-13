@@ -1,120 +1,120 @@
-# Model, System, and Dataset Cards
+# 模型卡、系统卡与数据集卡
 
-> Three documentation formats structure AI transparency. Model Cards (Mitchell et al. 2019) — nutrition labels for models: training data, quantitative disaggregated analyses, ethical considerations, caveats; only 0.3% of Hugging Face model cards document ethical considerations (Oreamuno et al. 2023). Datasheets for Datasets (Gebru et al. 2018, CACM) — motivation, composition, collection process, labeling, distribution, maintenance; electronics-datasheet analogy. Data Cards (Pushkarna et al., Google 2022) — modular layered detail (telescopic, periscopic, microscopic) as boundary objects for diverse readers. 2024-2025 developments: automated generation via LLMs (CardGen, Liu et al. 2024); model-card detail correlates with up to 29% download increase on HF (Liang et al. 2024); verifiable attestations (Laminator, Duddu et al. 2024); sustainability reporting additions for carbon/water (Jouneaux et al. July 2025); EU/ISO regulatory cards emerging. System Cards (Sidhpurwala 2024; Meta system-level transparency; "Blueprints of Trust" arXiv:2509.20394) — end-to-end AI system documentation covering security capabilities, prompt-injection protection, data-exfiltration detection, alignment with human values.
+> 三种文档格式构建 AI 透明度。模型卡（Mitchell 等人 2019）—— 模型的营养标签：训练数据、定量分类分析、伦理考量、注意事项；Hugging Face 模型卡中仅有 0.3% 记录了伦理考量（Oreamuno 等人 2023）。数据集说明书（Gebru 等人 2018，ACM CACM）—— 动机、组成、收集过程、标注、分发、维护；电子数据表类比。数据卡（Pushkarna 等人，Google 2022）—— 模块化分层细节（望远镜式、潜望镜式、显微镜式）作为不同读者的边界对象。2024-2025 年发展：LLM 自动生成（CardGen，Liu 等人 2024）；模型卡详细程度与 HF 下载量增加高达 29% 相关（Liang 等人 2024）；可验证声明（Laminator，Duddu 等人 2024）；碳/水可持续性报告附加项（Jouneaux 等人，2025 年 7 月）；欧盟/ISO 监管卡正在涌现。系统卡（Sidhpurwala 2024；Meta 系统级透明度；"信任蓝图" arXiv:2509.20394）—— 涵盖安全能力、提示词注入保护、数据泄露检测、与人类价值观对齐的端到端 AI 系统文档。
 
-**Type:** Build
-**Languages:** Python (stdlib, model-card + datasheet + system-card generator)
-**Prerequisites:** Phase 18 · 18 (safety frameworks), Phase 18 · 24 (regulatory)
-**Time:** ~60 minutes
+**类型：** 构建型
+**语言：** Python（标准库，模型卡 + 说明书 + 系统卡生成器）
+**前置条件：** 阶段 18 · 18（安全框架），阶段 18 · 24（监管）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Describe the original Mitchell et al. 2019 model card and the Gebru et al. 2018 datasheet.
-- Describe Data Cards' telescopic/periscopic/microscopic layering.
-- Describe System Cards and their end-to-end coverage.
-- State three 2024-2025 developments (automated generation, verifiable attestations, sustainability reporting).
+- 描述原始的 Mitchell 等人 2019 模型卡和 Gebru 等人 2018 数据集说明书。
+- 描述数据卡的望远镜式/潜望镜式/显微镜式分层。
+- 描述系统卡及其端到端覆盖范围。
+- 陈述三个 2024-2025 年的发展（自动生成、可验证声明、可持续性报告）。
 
-## The Problem
+## 问题
 
-Regulatory frameworks (Lesson 24) and lab safety policies (Lesson 18) both require documentation. Documentation formats evolved from model-specific (model cards) to dataset-specific (datasheets) to system-specific (system cards). Each addresses a different scope of transparency. The 2024-2025 automation and verifiable-attestation work addresses the long-standing adoption problem.
+监管框架（第 24 课）和实验室安全策略（第 18 课）都需要文档。文档格式从模型特定（模型卡）发展到数据集特定（说明书）再发展到系统特定（系统卡）。每个对应不同的透明度范围。2024-2025 年的自动化和可验证声明工作解决了长期存在的采用问题。
 
-## The Concept
+## 概念
 
-### Model Cards (Mitchell et al. 2019)
+### 模型卡（Mitchell 等人 2019）
 
-Sections:
-- Model details.
-- Intended use.
-- Factors (relevant demographic or environmental factors for evaluation).
-- Metrics.
-- Evaluation data.
-- Training data.
-- Quantitative analyses (disaggregated by factors).
-- Ethical considerations.
-- Caveats and recommendations.
+章节：
+- 模型详情。
+- 预期用途。
+- 因素（用于评估的相关人口统计或环境因素）。
+- 指标。
+- 评估数据。
+- 训练数据。
+- 定量分析（按因素分类）。
+- 伦理考量。
+- 注意事项与建议。
 
-Adoption problem: Oreamuno et al. 2023 audit of Hugging Face model cards found only 0.3% document ethical considerations.
+采用问题：Oreamuno 等人 2023 年对 Hugging Face 模型卡的审计发现，仅有 0.3% 记录了伦理考量。
 
-### Datasheets for Datasets (Gebru et al. 2018)
+### 数据集说明书（Gebru 等人 2018）
 
-Electronics-datasheet analogy. Sections:
-- Motivation (why was the dataset created).
-- Composition (what is in it).
-- Collection process (how was it assembled).
-- Labeling (if applicable).
-- Uses (intended, prohibited, risks).
-- Distribution.
-- Maintenance.
+电子数据表类比。章节：
+- 动机（为何创建该数据集）。
+- 组成（其中有什么）。
+- 收集过程（如何组装）。
+- 标注（如果适用）。
+- 用途（预期用途、禁止用途、风险）。
+- 分发。
+- 维护。
 
-Published in CACM 2021. The datasheet is the upstream documentation; the model card depends on the datasheet being accurate.
+2021 年发表于 ACM CACM。说明书是上游文档；模型卡依赖于说明书的准确性。
 
-### Data Cards (Pushkarna et al., Google 2022)
+### 数据卡（Pushkarna 等人，Google 2022）
 
-Modular layered detail. Three zoom levels:
-- **Telescopic.** High-level summary for non-experts.
-- **Periscopic.** Middle-level overview for ML practitioners.
-- **Microscopic.** Detailed feature-level documentation for auditors.
+模块化分层细节。三个缩放级别：
+- **望远镜式。** 为非专家提供的高层摘要。
+- **潜望镜式。** 为 ML 从业者提供的中层概述。
+- **显微镜式。** 为审计员提供的详细特征级文档。
 
-Boundary-object framing: different readers extract different information from the same document.
+边界对象框架：不同读者从同一文档中提取不同信息。
 
-### System Cards
+### 系统卡
 
-Scope: end-to-end AI system including model + safety stack + deployment context. Sections typically include:
-- Security capabilities.
-- Prompt-injection protection.
-- Data-exfiltration detection.
-- Alignment with stated human values.
-- Incident response.
+范围：端到端 AI 系统，包括模型 + 安全栈 + 部署上下文。典型章节包括：
+- 安全能力。
+- 提示词注入保护。
+- 数据泄露检测。
+- 与声明的人类价值观对齐。
+- 事件响应。
 
-Sidhpurwala 2024 and Meta system-level transparency work. "Blueprints of Trust" (arXiv:2509.20394) formalizes the System Card as the deployment-layer complement to Model Cards.
+Sidhpurwala 2024 和 Meta 系统级透明度工作。"信任蓝图"（arXiv:2509.20394）将系统卡正式定位为模型卡的部署层补充。
 
-### 2024-2025 developments
+### 2024-2025 年发展
 
-- **CardGen (Liu et al. 2024).** Automated model-card generation via LLMs; reports higher objectivity than many human-authored cards on the standardized Mitchell 2019 fields.
-- **Download correlation (Liang et al. 2024).** Detailed model cards correlate with up to 29% higher download rates on HF — adoption pressure is now market-driven, not only compliance-driven.
-- **Laminator (Duddu et al. 2024).** Verifiable attestations via hardware TEE / cryptographic signatures — allows the model card to carry a proof-of-claim, not just a claim.
-- **Sustainability (Jouneaux et al. July 2025).** Additions for carbon, water, and compute-energy footprint; emerging ISO standards.
-- **Regulatory cards.** EU AI Act (Lesson 24) GPAI Code of Practice Transparency chapter requires model cards as a compliance artifact.
+- **CardGen（Liu 等人 2024）。** 通过 LLM 自动生成模型卡；报告称在标准化 Mitchell 2019 字段上比许多人-authored 的模型卡客观性更高。
+- **下载量相关性（Liang 等人 2024）。** 详细的模型卡与 HF 上高达 29% 的更高下载率相关——采用压力现在是市场驱动的，而不仅仅是合规驱动的。
+- **Laminator（Duddu 等人 2024）。** 通过硬件 TEE / 加密签名实现可验证声明——允许模型卡携带声明的证明，而不仅仅是声明本身。
+- **可持续性（Jouneaux 等人，2025 年 7 月）。** 碳、水和计算能源足迹的附加项；新兴的 ISO 标准。
+- **监管卡。** 欧盟 AI 法案（第 24 课）GPAI 行为守则透明度章节要求模型卡作为合规制品。
 
-### Where this fits in Phase 18
+### 这在阶段 18 中的位置
 
-Lessons 24-25 are regulatory and CVE layers. Lesson 26 is the documentation layer. Lesson 27 is training-data governance, which is the datasheet's upstream. Lesson 28 is the research ecosystem that produces evaluations referenced in cards.
+第 24-25 课是监管层和 CVE 层。第 26 课是文档层。第 27 课是训练数据治理，这是说明书的上游。第 28 课是研究生态系统，它产生卡中引用的评估。
 
-## Use It
+## 使用它
 
-`code/main.py` generates a minimal model card, datasheet, and system card for a toy deployment. Each follows the canonical section structure. You can inspect the format and compare the three scopes.
+`code/main.py` 为一个示例部署生成最小的模型卡、说明书和系统卡。每个都遵循规范化的章节结构。你可以检查格式并比较三种范围。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-card-audit.md`. Given a model card, datasheet, or system card, it audits section coverage, numerical disaggregation, and whether verifiable attestations are present.
+本课产出 `outputs/skill-card-audit.md`。给定一个模型卡、说明书或系统卡，它审计章节覆盖范围、定量分类和可验证声明是否存在。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Inspect the generated cards. Identify sections that are weak (placeholder-only) and specify what evidence would strengthen them.
+1. 运行 `code/main.py`。检查生成的卡片。识别较弱的章节（仅为占位符），并指定哪些证据可以加强它们。
 
-2. Extend the model card with a quantitative disaggregated analysis across two demographic groups (Lesson 20).
+2. 用两个人口统计群体（第 20 课）的定量分类分析扩展模型卡。
 
-3. Read Oreamuno et al. 2023 on the 0.3% adoption rate. Propose one structural change to the model card specification that would increase ethical-considerations adoption.
+3. 阅读 Oreamuno 等人 2023 年关于 0.3% 采用率的论文。为模型卡规范提出一个结构性修改，以增加伦理考量的采用。
 
-4. Laminator (Duddu et al. 2024) uses TEEs for verifiable attestations. Design a model-card field that carries a cryptographic attestation of an evaluation result and describe the verifier's role.
+4. Laminator（Duddu 等人 2024）使用 TEE 进行可验证声明。设计一个携带评估结果加密证明的模型卡字段，并描述验证者的角色。
 
-5. Write a System Card (System Card, not Model Card) for one of your past projects or a hypothetical deployment. Identify the highest-value section for third-party auditors.
+5. 为你过去的一个项目或假设部署写一个系统卡（系统卡，不是模型卡）。识别对第三方审计员最有价值的章节。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|------------------------|
-| Model Card | "the Mitchell card" | Mitchell et al. 2019 standard documentation for ML models |
-| Datasheet | "the Gebru datasheet" | Gebru et al. 2018 standard documentation for datasets |
-| Data Card | "the Pushkarna card" | Google 2022 modular layered data documentation |
-| System Card | "the deployment card" | End-to-end AI system documentation including safety stack |
-| Boundary object | "different readers, one doc" | Data Cards framing: same document serves diverse audiences |
-| Verifiable attestation | "the Laminator attestation" | Cryptographic or TEE proof attached to a documentation claim |
-| Sustainability field | "carbon / water footprint" | Emerging 2025 addition for environmental accounting |
+| 模型卡 | "Mitchell 卡" | Mitchell 等人 2019 年 ML 模型标准文档 |
+| 说明书 | "Gebru 说明书" | Gebru 等人 2018 年数据集标准文档 |
+| 数据卡 | "Pushkarna 卡" | Google 2022 年模块化分层数据文档 |
+| 系统卡 | "部署卡" | 包括安全栈的端到端 AI 系统文档 |
+| 边界对象 | "不同读者，一份文档" | 数据卡框架：同一文档服务于不同受众 |
+| 可验证声明 | "Laminator 声明" | 附加在文档声明上的加密或 TEE 证明 |
+| 可持续性字段 | "碳/水足迹" | 2025 年新兴的环境核算附加项 |
 
-## Further Reading
+## 进一步阅读
 
-- [Mitchell et al. — Model Cards for Model Reporting (arXiv:1810.03993, FAT* 2019)](https://arxiv.org/abs/1810.03993) — the canonical model card
-- [Gebru et al. — Datasheets for Datasets (CACM 2021, arXiv:1803.09010)](https://arxiv.org/abs/1803.09010) — datasheet paper
-- [Pushkarna et al. — Data Cards (Google 2022)](https://arxiv.org/abs/2204.01075) — layered data documentation
-- [Sidhpurwala et al. — Blueprints of Trust (arXiv:2509.20394)](https://arxiv.org/abs/2509.20394) — System Card formalization
+- [Mitchell 等人 — 模型卡用于模型报告（arXiv:1810.03993，FAT* 2019）](https://arxiv.org/abs/1810.03993) — 规范模型卡
+- [Gebru 等人 — 数据集说明书（ACM CACM 2021，arXiv:1803.09010）](https://arxiv.org/abs/1803.09010) — 说明书论文
+- [Pushkarna 等人 — 数据卡（Google 2022）](https://arxiv.org/abs/2204.01075) — 分层数据文档
+- [Sidhpurwala 等人 — 信任蓝图（arXiv:2509.20394）](https://arxiv.org/abs/2509.20394) — 系统卡正式化

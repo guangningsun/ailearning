@@ -1,111 +1,112 @@
-# Differential Privacy for LLMs
+# LLM 的差分隐私
 
-> DP-SGD remains the standard — noise-injected gradient updates provide formal (epsilon, delta) guarantees. Overhead in compute, memory, and utility is substantial; parameter-efficient DP fine-tuning (LoRA + DP-SGD) is the common 2025 configuration (ACM 2025). Two bodies of evidence in tension: canary-based membership inference (Duan et al., 2024) reports limited success against language models; training-data extraction (Carlini et al., 2021; Nasr et al., 2025) recovers substantial verbatim memorization. Resolution (arXiv:2503.06808, March 2025): the gap is in what is measured — inserted canaries vs "most extractable" data. New canary designs enable loss-based MIA without shadow models and yield the first nontrivial DP audit of an LLM trained on real data with realistic DP guarantees. Alternatives: PMixED (arXiv:2403.15638) — private prediction at inference time via mixture of experts on next-token distributions; DP synthetic data generation (Google Research 2024). Emerging attack: Differential Privacy Reversal via LLM Feedback — confidence-score leakage.
+> DP-SGD 仍是标准方案——在梯度更新中注入噪声，提供形式化的 (ε, δ) 保证。计算、内存和实用性的开销相当大；参数高效 DP 微调（LoRA + DP-SGD）是 2025 年的常见配置（ACM 2025）。两组证据之间存在张力：基于金丝雀的成员推断（Duan 等人，2024）报告对语言模型效果有限；训练数据提取（Carlini 等人，2021；Nasr 等人，2025）可恢复大量逐字记忆的内容。结论（arXiv:2503.06808，2025 年 3 月）：差距在于测量对象的不同——插入的金丝雀 vs"最容易提取"的数据。新的金丝雀设计使基于损失的无影子模型 MIA 成为可能，并在真实数据上对 LLM 进行了首次具有实际意义 DP 保证的非平凡审计。替代方案：PMixED（arXiv:2403.15638）——通过专家混合对下一个 token 分布进行推理时的私人预测；DP 合成数据生成（Google Research 2024）。新兴攻击：差分隐私逆转通过 LLM 反馈——置信度分数泄露。
 
-**Type:** Build
-**Languages:** Python (stdlib, DP-SGD noise-injection and ε-δ accountant demonstration)
-**Prerequisites:** Phase 01 · 09 (information theory), Phase 10 · 01 (large-model training)
-**Time:** ~60 minutes
+**类型：** 构建
+**语言：** Python（标准库，DP-SGD 噪声注入和 ε-δ 账户器演示）
+**前置条件：** 阶段 01 · 09（信息论），阶段 10 · 01（大模型训练）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Define (epsilon, delta)-differential privacy and state the DP-SGD recipe.
-- Explain the 2024-2025 tension: canary MIA vs training-data extraction give different pictures.
-- Describe PMixED and why inference-time private prediction is an alternative to DP training.
-- Describe the Differential Privacy Reversal via LLM Feedback attack.
+- 定义（ε, δ）-差分隐私，并阐述 DP-SGD 配方。
+- 解释 2024-2025 年的张力：金丝雀 MIA 与训练数据提取给出不同图景。
+- 描述 PMixED，以及为什么推理时的私人预测是 DP 训练的替代方案。
+- 描述差分隐私逆转通过 LLM 反馈攻击。
 
-## The Problem
+## 问题
 
-LLMs memorize. Carlini et al. 2021 showed production language models reproduce verbatim training text on demand. DP is the formal defense: train so that the output is provably insensitive to any single training example. The 2024-2025 evidence shows DP-SGD is necessary but the deployed ε values may not match the threat model.
+LLM 会记忆。Carlini 等人 2021 年证明生产级语言模型可以按需复现逐字的训练文本。DP 是形式化防御：训练使得输出可证明地对任何单个训练样本不敏感。2024-2025 年的证据表明 DP-SGD 是必要的，但部署的 ε 值可能与威胁模型不匹配。
 
-## The Concept
+## 概念
 
-### (ε, δ)-differential privacy
+### （ε, δ）-差分隐私
 
-A randomized algorithm M is (ε, δ)-DP if for any two datasets differing in one example and any event S:
-P(M(D) in S) <= e^ε * P(M(D') in S) + δ.
+对于任意两个相差一个样本的数据集 D 和 D'，以及任意事件 S，如果一个随机算法 M 满足：
+P(M(D) ∈ S) ≤ e^ε × P(M(D') ∈ S) + δ，
+则称 M 是 (ε, δ)-DP。
 
-Interpretation: the output distribution is close enough (parametrized by ε) that the contribution of any single individual cannot be reliably inferred, except with probability δ.
+解释：输出分布足够接近（由 ε 参数化），使得任何单个个体的贡献都无法被可靠推断，δ 概率除外。
 
 ### DP-SGD
 
-Abadi et al. 2016. The standard recipe:
-1. Sample a mini-batch.
-2. Compute per-example gradients.
-3. Clip each per-example gradient to a threshold C.
-4. Sum the clipped gradients and add Gaussian noise with std σ * C.
-5. Use the noisy sum to update parameters.
+Abadi 等人 2016 年。标准配方：
+1. 采样一个小批次。
+2. 计算每个样本的梯度。
+3. 将每个样本梯度裁剪到阈值 C。
+4. 求裁剪后梯度的和，并加入标准差为 σ × C 的高斯噪声。
+5. 用带噪声的和来更新参数。
 
-Privacy cost is tracked by an accountant (Moments Accountant, Rényi DP accountant). Reported ε values in the LLM literature vary widely by threat model, data sensitivity, and utility target; there is no universally "safe" default ε. Published examples span roughly ε ≈ 1–10 in some LLM training settings, but these are illustrative — not recommended defaults. Lower ε generally requires more noise and can increase utility loss.
+隐私成本由账户器追踪（矩账户器，Rényi DP 账户器）。LLM 文献中报告的 ε 值因威胁模型、数据敏感性和效用目标差异很大；没有普遍"安全"的默认 ε。已发表的例子在某些 LLM 训练设置中大约 ε ≈ 1–10，但这些仅供参考——不是推荐默认值。更低的 ε 通常需要更多噪声，可能增加效用损失。
 
 ### LoRA + DP-SGD
 
-Full DP-SGD of a frontier model is prohibitive. LoRA (Hu et al. 2022) limits gradient updates to a small adapter, reducing per-example gradient storage. LoRA + DP-SGD is the common 2025 configuration. DP guarantees apply to the adapter; the base model is held fixed.
+对前沿模型进行完整 DP-SGD 代价高昂。LoRA（Hu 等人 2022）将梯度更新限制在一个小型适配器上，减少了每样本梯度的存储。LoRA + DP-SGD 是 2025 年的常见配置。DP 保证适用于适配器；基础模型保持固定。
 
-### The 2024-2025 tension
+### 2024-2025 年的张力
 
-Two lines of evidence:
+两组证据：
 
-- **Canary MIA (Duan et al. 2024).** Insert unique canaries into training data, measure whether a membership-inference attacker can identify them. Reports limited success on language models. Suggests MIA is hard.
-- **Training-data extraction (Carlini 2021, Nasr et al. 2025).** Prompt the model with a prefix; measure whether it recovers verbatim text from training. Reports substantial memorization. Suggests MIA is easy in the relevant sense.
+- **金丝雀 MIA（Duan 等人 2024）。** 在训练数据中插入唯一的金丝雀，测量成员推断攻击者是否能识别它们。报告对语言模型效果有限。表明 MIA 很困难。
+- **训练数据提取（Carlini 2021，Nasr 等人 2025）。** 用前缀提示模型；测量它是否能恢复训练中的逐字文本。报告了大量记忆。表明 MIA 在相关意义上很容易。
 
-March 2025 resolution (arXiv:2503.06808): the two measure different things. MIA asks "is example e in D?" on inserted canaries. Extraction asks "what can I recover of D?" The "most extractable" example is what matters for privacy; canaries under-report this because they are not optimized to be extractable.
+2025 年 3 月的结论（arXiv:2503.06808）：两者测量的是不同东西。MIA 问"样本 e 是否在 D 中？"针对插入的金丝雀。提取问"我能恢复 D 的什么？"最重要的是"最容易提取"的样本；金丝雀低估了这一点，因为它们没有被优化为可提取的。
 
-New canary designs. Loss-based MIA without shadow models. First nontrivial DP audit of an LLM on real data with realistic DP guarantees.
+新金丝雀设计。无影子模型的基于损失的 MIA。首次在真实数据上对 LLM 进行具有实际意义 DP 保证的非平凡审计。
 
-### Alternatives to DP training
+### DP 训练的替代方案
 
-- **PMixED (arXiv:2403.15638).** Private prediction at inference time. Mixture of experts on next-token distributions; each expert sees a shard of training data; aggregation adds noise for DP. Avoids DP training entirely.
-- **DP synthetic data generation (Google Research 2024).** LoRA-fine-tune with DP-SGD, sample synthetic data, train a downstream classifier on the synthetic data.
+- **PMixED（arXiv:2403.15638）。** 推理时的私人预测。每个专家看到训练数据的一个分片；对下一个 token 分布进行专家混合；聚合时添加 DP 噪声。完全避免 DP 训练。
+- **DP 合成数据生成（Google Research 2024）。** 用 DP-SGD 对 LoRA 进行微调，采样合成数据，在合成数据上训练下游分类器。
 
-Both sidestep the utility cost of full DP training at the cost of a different threat model.
+两者都绕过了完整 DP 训练的效用成本，但代价是威胁模型不同。
 
-### Differential Privacy Reversal via LLM Feedback
+### 差分隐私逆转通过 LLM 反馈
 
-Emerging 2025 attack. Use a DP-trained model's confidence scores as an oracle to re-identify individuals. Even when outputs do not leak, confidence distributions can.
+新兴的 2025 年攻击。用 DP 训练模型的置信度分数作为预言机来重新识别个体。即使输出不泄露，置信度分布也可能泄露。
 
-The defense: do not expose confidences, or truncate/quantize them before exposure. This is an additional requirement beyond (ε, δ)-DP training.
+防御：不要暴露置信度，或在暴露前截断/量化它们。这是（ε, δ）-DP 训练之外的额外要求。
 
-### Where this fits in Phase 18
+### 这在阶段 18 中的位置
 
-Lessons 20-21 are bias/fairness. Lesson 22 is privacy. Lesson 23 is provenance via watermarking. Lesson 27 covers the regulatory data-provenance layer.
+第 20-21 课是偏见/公平性。第 22 课是隐私。第 23 课是通过水印的溯源。第 27 课涵盖监管数据溯源层。
 
-## Use It
+## 使用它
 
-`code/main.py` simulates DP-SGD on a toy binary-classification dataset. You can sweep the noise multiplier σ and the clipping norm C and track the (ε, δ) budget and the accuracy cost. A "canary attack" inserts a unique training example and measures whether a log-loss test can detect it before and after DP.
+`code/main.py` 在一个玩具二分类数据集上模拟 DP-SGD。你可以扫过噪声乘数 σ 和裁剪范数 C，追踪 (ε, δ) 预算和准确性成本。"金丝雀攻击"插入一个唯一的训练样本，测量对数损失检验是否能在 DP 前后检测到它。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-dp-audit.md`. Given a DP claim on a language model deployment, it audits: the (ε, δ) values, the accountant used, the MIA evaluation protocol, and whether confidence-exposure vectors have been assessed.
+本课产出 `outputs/skill-dp-audit.md`。给定一个关于语言模型部署的 DP 声明，它审计：(ε, δ) 值、使用的账户器、MIA 评估协议，以及是否已评估置信度暴露向量。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Sweep σ in {0.5, 1.0, 2.0} and report the (ε, δ)-accuracy trade-off. Identify the point at which utility collapses.
+1. 运行 `code/main.py`。扫过 σ ∈ {0.5, 1.0, 2.0} 并报告 (ε, δ)-准确性权衡。找出效用崩溃的点。
 
-2. Implement a canary insertion and a log-loss test. Measure detection rate before and after DP-SGD at σ = 1.0.
+2. 实现金丝雀插入和对数损失检验。在 σ = 1.0 时测量 DP-SGD 前后的检测率。
 
-3. Read Nasr et al. 2025 on training-data extraction. Why does extraction success not collapse under moderate ε? What does this imply about MIA-as-evaluation?
+3. 阅读 Nasr 等人 2025 年关于训练数据提取的论文。为什么在中等 ε 下提取成功率不会崩溃？这对 MIA-as-evaluation 意味着什么？
 
-4. Design a deployment using PMixED (arXiv:2403.15638) that operates entirely at inference time. What is the threat model that PMixED addresses that DP-SGD does not?
+4. 设计一个使用 PMixED（arXiv:2403.15638）的部署，完全在推理时运行。PMixED 解决的威胁模型是什么而 DP-SGD 没有？
 
-5. Sketch the DP Reversal via LLM Feedback attack. Design a countermeasure that limits confidence-score leakage and estimate its deployment cost.
+5. 概述 DP 逆转通过 LLM 反馈攻击。设计一种限制置信度分数泄露的对策，并估计其部署成本。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|-----------------|------------------------|
-| DP | "(ε, δ)-differential privacy" | Formal privacy: output distribution close under neighbouring-dataset change |
-| DP-SGD | "noise-injected SGD" | Gradient clipping + Gaussian noise addition; standard DP training |
-| LoRA + DP-SGD | "efficient private fine-tune" | DP-SGD on low-rank adapters; standard 2025 configuration |
-| MIA | "membership inference" | Attack that determines whether an example was in training data |
-| Canary | "inserted watermark example" | Unique training example used to measure DP leakage |
-| PMixED | "private inference mixture" | Inference-time DP via mixture-of-experts on next-token distributions |
-| DP Reversal | "confidence leakage attack" | Attack that uses a model's confidence as an oracle for re-identification |
+| DP | "（ε, δ）-差分隐私" | 形式化隐私：相邻数据集变化下输出分布接近 |
+| DP-SGD | "噪声注入的 SGD" | 梯度裁剪 + 高斯噪声添加；标准 DP 训练 |
+| LoRA + DP-SGD | "高效私人微调" | 低秩适配器上的 DP-SGD；2025 年标准配置 |
+| MIA | "成员推断" | 确定样本是否在训练数据中的攻击 |
+| 金丝雀 | "插入的水印样本" | 用于测量 DP 泄露的唯一训练样本 |
+| PMixED | "私人推理混合" | 通过下一个 token 分布的专家混合进行推理时 DP |
+| DP 逆转 | "置信度泄露攻击" | 使用模型置信度作为重新识别的预言机的攻击 |
 
-## Further Reading
+## 延伸阅读
 
-- [Abadi et al. — DP-SGD (arXiv:1607.00133)](https://arxiv.org/abs/1607.00133) — the standard DP training algorithm
-- [Carlini et al. — Extracting Training Data (arXiv:2012.07805)](https://arxiv.org/abs/2012.07805) — the canonical extraction paper
-- [Duan et al. — Canary MIA on LLMs (arXiv:2402.07841, 2024)](https://arxiv.org/abs/2402.07841) — limited-success MIA
-- [Kowalczyk et al. — Auditing DP for LLMs (arXiv:2503.06808, March 2025)](https://arxiv.org/abs/2503.06808) — resolution of the tension
-- [PMixED (arXiv:2403.15638)](https://arxiv.org/abs/2403.15638) — inference-time private prediction
+- [Abadi 等人 — DP-SGD（arXiv:1607.00133）](https://arxiv.org/abs/1607.00133) —— 标准 DP 训练算法
+- [Carlini 等人 — 提取训练数据（arXiv:2012.07805）](https://arxiv.org/abs/2012.07805) —— 经典提取论文
+- [Duan 等人 — LLM 上的金丝雀 MIA（arXiv:2402.07841，2024）](https://arxiv.org/abs/2402.07841) —— 效果有限的 MIA
+- [Kowalczyk 等人 — LLM 的 DP 审计（arXiv:2503.06808，2025 年 3 月）](https://arxiv.org/abs/2503.06808) —— 张力的结论
+- [PMixED（arXiv:2403.15638）](https://arxiv.org/abs/2403.15638) —— 推理时私人预测

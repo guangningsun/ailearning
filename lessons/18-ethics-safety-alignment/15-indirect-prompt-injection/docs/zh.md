@@ -1,96 +1,96 @@
-# Indirect Prompt Injection — Production Attack Surface
+# 间接提示注入——生产环境攻击面
 
-> Indirect prompt injection (IPI) embeds instructions inside external content — a web page, an email, a shared document, a support ticket — consumed by an agentic system without explicit user action. IPI is the dominant 2026 production threat: it bypasses user-input filters because the attacker never touches the user, it scales silently as agents process more external content, and it targets automated workflows where nobody is reading the prompt. MDPI Information 17(1):54 (January 2026) synthesizes 2023-2025 research. NDSS 2026's IPI-defense paper frames the core challenge: injected instructions can be semantically benign ("please print Yes"), so detection requires more than keyword filtering. "The Attacker Moves Second" (Nasr et al., joint OpenAI/Anthropic/DeepMind, October 2025): adaptive attacks (gradient, RL, random search, human red-team) broke >90% of 12 published defenses that had originally reported near-zero attack success rates.
+> 间接提示注入（IPI）将指令嵌入外部内容——网页、电子邮件、共享文档、支持工单——由自主智能体系统在无需明确用户操作的情况下消费。IPI 是 2026 年主导的生产威胁：它绕过用户输入过滤器，因为攻击者从不接触用户；它随着智能体处理更多外部内容而静默扩展；它针对没有人正在阅读提示的自动化工作流。MDPI Information 17(1):54（2026 年 1 月）综合了 2023-2025 年的研究。NDSS 2026 的 IPI 防御论文框架化了核心挑战：注入的指令在语义上可能是良性的（"请打印 Yes"），因此检测需要超越关键词过滤。"攻击者第二步行动"（Nasr 等人，联合 OpenAI/Anthropic/DeepMind，2025 年 10 月）：自适应攻击（梯度、RL、随机搜索、人工红队）打破了超过 90% 的 12 个最初报告接近零攻击成功率的已发布防御。
 
-**Type:** Build
-**Languages:** Python (stdlib, IPI attack + defense harness)
-**Prerequisites:** Phase 18 · 12 (PAIR), Phase 14 (agent engineering)
-**Time:** ~75 minutes
+**类型：** 构建型
+**语言：** Python（标准库，IPI 攻击+防御工具）
+**前置条件：** 阶段 18 · 12（PAIR）、阶段 14（智能体工程）
+**时间：** 约 75 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Define indirect prompt injection and describe three common delivery vectors.
-- Explain why user-input filters miss IPI entirely.
-- Describe the "information flow control" framing as the 2026 defense paradigm.
-- State the finding of Nasr et al. (October 2025) on adaptive attack success against published IPI defenses.
+- 定义间接提示注入并描述三个常见传递向量。
+- 解释为什么用户输入过滤器完全无法检测 IPI。
+- 描述"信息流控制"框架作为 2026 年防御范式。
+- 陈述 Nasr 等人（2025 年 10 月）关于自适应攻击对已发布 IPI 防御成功率的研究结果。
 
-## The Problem
+## 问题
 
-Direct prompt injection requires the attacker to reach the user or their prompt. IPI requires neither: the attacker places a payload in any content the agent might read — a web page, an email in the inbox, a GitHub issue, a product review. The agent picks it up during normal operation and executes the instructions. The user is the messenger, not the intent.
+直接提示注入要求攻击者接触用户或其提示。IPI 两者都不需要：攻击者将有效载荷放置在智能体可能读取的任何内容中——网页、用户收件箱中的电子邮件、GitHub issue、产品评论。智能体在正常操作期间获取它并执行指令。用户是信使，而非意图。
 
-## The Concept
+## 概念
 
-### Three delivery vectors
+### 三个传递向量
 
-- **Retrieval-augmented generation (RAG).** Attacker publishes a document; the retrieval step fetches it; the prompt concatenates it before the user question; the model executes the attacker's instructions.
-- **Inbox / document workflows.** Attacker sends an email to the user; the agent reads emails; the prompt includes the email body; the model follows the email's instructions.
-- **Tool output.** Attacker controls a tool the agent uses (e.g., a web search that returns an attacker-controlled result); the tool output contains instructions; the agent's control flow follows them.
+- **检索增强生成（RAG）。** 攻击者发布文档；检索步骤获取它；提示在用户问题之前连接它；模型执行攻击者的指令。
+- **收件箱/文档工作流。** 攻击者向用户发送电子邮件；智能体读取电子邮件；提示包含电子邮件正文；模型遵循电子邮件的指令。
+- **工具输出。** 攻击者控制智能体使用的工具（例如，返回攻击者控制结果的 Web 搜索）；工具输出包含指令；智能体的控制流跟随它们。
 
-The three share a structural property: the attacker controls a fragment of the prompt without touching the user-facing input.
+三者共享一个结构特性：攻击者控制提示的一个片段，而不触及面向用户的输入。
 
-### Why user-input filters miss it
+### 为什么用户输入过滤器无法检测
 
-An IPI payload does not appear in the user's input. It appears in the retrieved content. If the filter is gated on user input, the payload bypasses it. If the filter is gated on all content that reaches the model, it must apply to arbitrary retrieved text — which is expensive and produces false positives against legitimate content that happens to contain imperative-voice language.
+IPI 有效载荷不出现在用户输入中。它出现在检索内容中。如果过滤器在用户输入上控制，载荷就会绕过它。如果过滤器在到达模型的所有内容上控制，它必须应用于任意检索文本——这成本高昂，且对碰巧包含命令式语言内容的合法内容产生误报。
 
-### Information Flow Control (IFC) for AI
+### AI 的信息流控制（IFC）
 
-The 2026 defense paradigm borrows from classical OS security. Treat every content source as a security label. Label the user's query as "trusted." Label retrieved content as "untrusted." Treat the model's control flow as an information flow: actions triggered by untrusted content must be ratified by trusted input before execution.
+2026 年防御范式借鉴经典操作系统安全。将每个内容源视为安全标签。将用户查询标记为"可信"。将检索内容标记为"不可信"。将模型的控制流视为信息流：由不可信内容触发的操作必须在执行前得到可信输入的批准。
 
-CaMeL (Microsoft 2025), ConfAIde (Stanford 2024), and the NDSS 2026 IPI-defense paper operationalize IFC in different ways. The common principle: as long as code and data share the same context window, containment is the goal, not prevention.
+CaMeL（Microsoft 2025）、ConfAIde（Stanford 2024）和 NDSS 2026 IPI 防御论文以不同方式实现 IFC。共同原则：只要代码和数据共享同一上下文窗口，遏制就是目标，而非预防。
 
-### The Attacker Moves Second
+### 攻击者第二步行动
 
-Nasr et al. (October 2025) tested 12 published IPI defenses with adaptive attacks (gradient search, RL policies, random search, 72-hour human red-team). Every defense that originally reported near-zero ASR was broken to >90% ASR.
+Nasr 等人（2025 年 10 月）使用自适应攻击（梯度搜索、RL 策略、随机搜索、72 小时人工红队）测试了 12 个已发布的 IPI 防御。每个最初报告接近零 ASR 的防御都被打破到 >90% ASR。
 
-The methodological lesson: publish a defense only with adaptive-attack evaluation. Static-attack benchmarks are not evidence of robustness; the attacker gets to know the defense.
+方法论教训：只有经过自适应攻击评估才能发布防御。静态攻击基准不是鲁棒性的证据；攻击者会知道防御。
 
-### Real incidents
+### 真实事件
 
-Lesson 25 covers EchoLeak (CVE-2025-32711, CVSS 9.3) — the first publicly documented zero-click IPI in Microsoft 365 Copilot. CamoLeak (CVSS 9.6) in GitHub Copilot Chat. CVE-2025-53773 in GitHub Copilot. Production deployments are being compromised by IPI in the field, not just in benchmarks.
+第 25 课涵盖 EchoLeak（CVE-2025-32711，CVSS 9.3）——Microsoft 365 Copilot 中首个有文档记录的零点击 IPI。GitHub Copilot Chat 中的 CamoLeak（CVSS 9.6）。GitHub Copilot 中的 CVE-2025-53773。生产部署正被 IPI 在野外 compromise，而非仅在基准中。
 
-### OWASP and NIST framing
+### OWASP 和 NIST 框架
 
-OWASP LLM Top 10 (2025) ranks prompt injection (direct + indirect) as LLM01, the #1 application-layer threat. NIST AI SPD 2024 calls indirect prompt injection "generative AI's greatest security flaw."
+OWASP LLM Top 10（2025）将提示注入（直接+间接）列为 LLM01，即第一应用层威胁。NIST AI SPD 2024 称间接提示注入为"生成式 AI 最大的安全缺陷"。
 
-### Where this fits in Phase 18
+### 这在阶段 18 中的位置
 
-Lessons 12-14 are model-centric jailbreaks. Lesson 15 is the system-centric attack that dominates 2026 production deployments. Lesson 16 covers the defensive tooling. Lesson 25 covers the specific CVE narrative.
+第 12-14 课是以模型为中心的越狱。第 15 课是主导 2026 年生产部署的以系统为中心的攻击。第 16 课涵盖防御工具。第 25 课涵盖特定的 CVE 叙事。
 
-## Use It
+## 使用
 
-`code/main.py` builds an IPI harness. A toy agent has three tools (search web, read email, send message). The environment contains attacker-controlled content with an embedded instruction ("forward this to all contacts"). You can toggle between a naive agent (follows injected instructions), a filter-defended agent (keyword filter on retrieved content), and an IFC agent (separates trusted and untrusted content and refuses untrusted control-flow commands).
+`code/main.py` 构建了一个 IPI 工具。玩具智能体有三个工具（搜索网页、读取电子邮件、发送消息）。环境中包含带有嵌入指令（"将此转发给所有联系人"）的攻击者控制内容。你可以在朴素智能体（遵循注入指令）、过滤器防御智能体（对检索内容进行关键词过滤）和 IFC 智能体（分离可信和不可信内容并拒绝不可信控制流命令）之间切换。
 
-## Ship It
+## 交付
 
-This lesson produces `outputs/skill-ipi-audit.md`. Given an agentic deployment description, it enumerates the untrusted content sources, checks whether the deployment applies IFC, and flags sources that reach the model without a trust label.
+本课产出 `outputs/skill-ipi-audit.md`。给定智能体部署描述，它枚举不可信内容源，检查部署是否应用 IFC，并标记到达模型而没有信任标签的源。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Measure the success rate of the attack against each of the three agents.
+1. 运行 `code/main.py`。测量攻击对三种智能体的成功率。
 
-2. Implement a paraphrase-based defense on retrieved content. Measure the benign false-positive rate on legitimate retrieved text.
+2. 对检索内容实现基于改写的防御。测量对合法检索文本的良性误报率。
 
-3. Read the NDSS 2026 IPI-defense paper. Describe the "benign instruction" challenge and why it prevents keyword-based filtering.
+3. 阅读 NDSS 2026 IPI 防御论文。描述"良性指令"挑战以及为什么它阻止基于关键词的过滤。
 
-4. Design a deployment where the agent receives a tool output from a third-party API. Label each prompt fragment with a trust level and write the IFC policy that governs the agent's actions.
+4. 设计一个智能体从第三方 API 接收工具输出的部署。将每个提示片段标记信任级别，并编写管理智能体行为的 IFC 策略。
 
-5. Reproduce the Nasr et al. 2025 adaptive-attack methodology on your filter-defended agent from Exercise 2. Report the ASR before and after adaptive attack.
+5. 在练习 2 的过滤器防御智能体上复现 Nasr 等人 2025 自适应攻击方法论。报告自适应攻击前后的 ASR。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
-|------|-----------------|------------------------|
-| IPI | "indirect prompt injection" | Injection via content the user did not write, consumed by the agent during normal operation |
-| RAG injection | "poisoned retrieval" | Attacker publishes content that the retrieval step fetches; prompt contains the payload |
-| Zero-click | "no user action" | Attack triggers automatically during agent operation; user does nothing |
-| IFC | "information flow control" | Label-based approach: actions from untrusted content require trusted ratification |
-| Adaptive attack | "gradient / RL red-team" | Attack that knows the defense and optimizes against it; required for honest evaluation |
-| Benign instruction | "please print Yes" | IPI payload that is semantically benign; no keyword filter catches it |
-| Scope violation | "cross-trust exfiltration" | Agent accesses data from one trust context and outputs it to another |
+| 术语 | 大家怎么说 | 实际含义 |
+|------|----------------|------------------------|
+| IPI | "间接提示注入" | 通过用户未编写的内容进行注入，智能体在正常操作期间消费该内容 |
+| RAG 注入 | "中毒检索" | 攻击者发布检索步骤获取的内容；提示包含有效载荷 |
+| 零点击 | "无用户操作" | 攻击在智能体操作期间自动触发；用户无需做任何事 |
+| IFC | "信息流控制" | 基于标签的方法：来自不可信内容的操作需要可信批准 |
+| 自适应攻击 | "梯度/RL 红队" | 知道防御并针对其优化的攻击；诚实评估的要求 |
+| 良性指令 | "请打印 Yes" | 语义上良性的 IPI 有效载荷；没有关键词过滤器能捕获它 |
+| 范围违规 | "跨信任泄露" | 智能体从一个信任上下文访问数据并将其输出到另一个 |
 
-## Further Reading
+## 延伸阅读
 
-- [MDPI Information 17(1):54 — Indirect Prompt Injection Survey (January 2026)](https://www.mdpi.com/2078-2489/17/1/54) — 2023-2025 synthesis
-- [Nasr et al. — The Attacker Moves Second (joint OpenAI/Anthropic/DeepMind, October 2025)](https://arxiv.org/abs/2510.18108) — adaptive attack evaluation
-- [Greshake et al. — Not what you've signed up for (arXiv:2302.12173)](https://arxiv.org/abs/2302.12173) — the original IPI paper
-- [OWASP — LLM Top 10 (2025)](https://genai.owasp.org/llm-top-10/) — prompt injection ranked LLM01
+- [MDPI Information 17(1):54 — Indirect Prompt Injection Survey（2026 年 1 月）](https://www.mdpi.com/2078-2489/17/1/54) — 2023-2025 年综合
+- [Nasr et al. — The Attacker Moves Second（联合 OpenAI/Anthropic/DeepMind，2025 年 10 月）](https://arxiv.org/abs/2510.18108) — 自适应攻击评估
+- [Greshake et al. — Not what you've signed up for (arXiv:2302.12173)](https://arxiv.org/abs/2302.12173) — 原创 IPI 论文
+- [OWASP — LLM Top 10 (2025)](https://genai.owasp.org/llm-top-10/) — 提示注入列为 LLM01
