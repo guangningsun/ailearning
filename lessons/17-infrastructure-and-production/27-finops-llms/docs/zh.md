@@ -1,81 +1,81 @@
-# FinOps for LLMs — Unit Economics and Multi-Tenant Attribution
+# LLM FinOps——单位经济学与多租户归属
 
-> Traditional FinOps breaks on LLM spend. Costs are token-transactions, not resource-uptime. Tags don't map — an API call is a transaction, not an asset. Engineering decisions (prompt design, context window, output length) are financial decisions. The 2026 playbook has three attribution dimensions to instrument on day one: per-user (`user_id`) for seat pricing and expansion, per-task (`task_id` + `route`) for product surface cost and prioritization, per-tenant (`tenant_id`) for unit economics and renewal. Four token layers — prompt, tool, memory, response — one bucket hides spend. Enforcement ladder for multi-tenant products: rate limits per tenant (2-3x expected peak, clear 429 + retry-after); daily spend cap (1.5-3x contracted ceiling; triggers rate tightening + alert); kill switches on spend z-score > 4 (auto-pause + page on-call). Attribution patterns: tag-and-aggregate, telemetry-joiner (trace-ID → billing; highest accuracy), sampling-and-extrapolation, model-based allocation, event-sourced, real-time streaming. Unit metric: cost per resolved query, cost per generated artifact — not $/M tokens. Retroactive tagging always misses; instrument at request creation.
+> 传统 FinOps 在 LLM 支出上失效。成本是令牌级事务，而非资源运行时间。标签无法映射——一次 API 调用是一个事务，而非一个资产。工程决策（提示设计、上下文窗口、输出长度）就是财务决策。2026 年的 playbook 有三个归属维度需要在第一天就埋点：按用户（`user_id`）用于席位定价和扩张，按任务（`task_id` + `route`）用于产品表面成本和优先级，按租户（`tenant_id`）用于单位经济学和续订。四个令牌层级——提示、工具、记忆、响应——放在一个桶里会掩盖支出。多租户产品的执行阶梯：按租户限速（期望峰值的 2-3 倍，清晰的 429 + Retry-After）；按租户日支出上限（合同上限的 1.5-3 倍；触发限速收紧 + 告警）；支出 z-score > 4 时触发终止开关（自动暂停 + 寻呼值守）。归属模式：标签聚合、遥测连接器（trace ID → 计费；最高精度）、采样外推、基于模型的分配、事件溯源、实时流。单位指标：每个已解决查询的成本、每个生成制品的成本——而非每百万令牌美元。事后标签永远有遗漏；在请求创建时埋点。
 
-**Type:** Learn
-**Languages:** Python (stdlib, toy cost-attribution simulator with kill switch)
-**Prerequisites:** Phase 17 · 13 (Observability), Phase 17 · 14 (Caching)
-**Time:** ~60 minutes
+**类型：** 学习型
+**语言：** Python（标准库 + 演示用成本归属模拟器，带终止开关）
+**前置条件：** 阶段 17 · 13（可观测性），阶段 17 · 14（缓存）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Explain why traditional FinOps (tags + tiers) breaks on LLM spend and name the three new attribution dimensions.
-- Enumerate the four token layers (prompt, tool, memory, response) and why single-bucket billing hides cost.
-- Design an enforcement ladder (rate → spend cap → kill switch) for a multi-tenant product.
-- Pick a unit metric (cost per resolved query / artifact) instead of $/M tokens.
+- 解释为什么传统 FinOps（标签 + 分层）在 LLM 支出上失效，并说出三个新的归属维度。
+- 列举四个令牌层级（提示、工具、记忆、响应），以及单一桶计费为何掩盖成本。
+- 为多租户产品设计执行阶梯（限速 → 支出上限 → 终止开关）。
+- 选择一个单位指标（每个已解决查询的成本 / 每个制品的成本）而非每百万令牌美元。
 
-## The Problem
+## 问题
 
-Your bill says $40,000. You don't know:
-- Which tenant spent it.
-- Which product feature drove it.
-- Whether any individual user was abusive.
-- Whether prompt bloat, tool calls, or memory amplification was the culprit.
+你的账单是 $40,000。但你不知道：
+- 哪个租户花的。
+- 哪个产品功能驱动的。
+- 是否有任何个别用户存在滥用。
+- 是提示臃肿、工具调用，还是记忆放大是罪魁祸首。
 
-Tag-and-aggregate on provider-side works for cloud resources (EC2, S3) where tags propagate to line items. LLM API calls do not auto-tag — you have to stamp user/task/tenant at the call site and carry through. Retroactive attribution always misses edge cases.
+供应商端的标签聚合适用于云资源（EC2、S3），因为标签会传播到账单行项目。LLM API 调用不会自动打标签——你必须在调用点stamp user/task/tenant 并贯穿始终。事后归属总有遗漏。
 
-## The Concept
+## 概念
 
-### Three attribution dimensions
+### 三个归属维度
 
-**Per-user** (`user_id`): who is costing what. Drives seat pricing, expansion conversations, identifies power users.
+**按用户**（`user_id`）：谁在花多少钱。驱动席位定价、扩张对话，识别高价值用户。
 
-**Per-task** (`task_id` + `route`): which product surface costs what. Drives feature prioritization, kill-expensive-features decisions.
+**按任务**（`task_id` + `route`）：哪个产品表面花多少钱。驱动功能优先级排序、"砍掉昂贵功能"决策。
 
-**Per-tenant** (`tenant_id`): which customer is profitable. Drives unit economics, renewal pricing, tier thresholds.
+**按租户**（`tenant_id`）：哪个客户盈利。驱动单位经济学、续订定价、分层阈值。
 
-Instrument all three at call site on day one. Retroactive is always worse.
+在第一天就在调用点埋点所有三个维度。事后永远更差。
 
-### Four token layers
+### 四个令牌层级
 
-| Layer | Example | Typical % of total |
+| 层级 | 示例 | 占总量典型比例 |
 |-------|---------|---------------------|
-| Prompt | system + user input | 40-60% |
-| Tool | tool-call results fed back | 20-40% (agent workloads) |
-| Memory | prior conversation / retrieved docs | 10-30% |
-| Response | model output | 10-30% |
+| 提示 | 系统 + 用户输入 | 40-60% |
+| 工具 | 工具调用结果反馈 | 20-40%（代理工作负载） |
+| 记忆 | 先前对话 / 检索文档 | 10-30% |
+| 响应 | 模型输出 | 10-30% |
 
-Bucketing all four together makes optimization blind. Break them out in your attribution schema.
+把四个混在一个桶里使优化变成盲区。在归属模式中将它们拆开。
 
-### Enforcement ladder
+### 执行阶梯
 
-1. **Rate limit** per tenant. 2-3x expected peak. Return 429 with `Retry-After`. Tenant sees friction; no surprise bill.
+1. **限速** 按租户。期望峰值的 2-3 倍。返回 429 并带 `Retry-After`。租户感知到摩擦；不会收到意外账单。
 
-2. **Daily spend cap** per tenant. 1.5-3x contracted ceiling. Trigger: tighten rate limit + alert customer-success.
+2. **日支出上限** 按租户。合同上限的 1.5-3 倍。触发：收紧限速 + 告警客户成功团队。
 
-3. **Kill switch** on spend z-score > 4 relative to tenant baseline. Auto-pause tenant; page on-call; escalate to ops + CS.
+3. **终止开关** 当支出 z-score > 4（相对于租户基线）。自动暂停租户；寻呼值守；升级至运维 + 客服。
 
-### Attribution patterns
+### 归属模式
 
-- **Tag-and-aggregate**: stamp metadata headers; aggregate later. Simple; rough.
-- **Telemetry joiner**: join traces to billing via trace IDs. Highest accuracy. What mature teams do.
-- **Sampling + extrapolation**: sample 5-10%, multiply. Cost-effective for rough spend; misses tails.
-- **Model-based allocation**: regression to infer cost driver. For legacy data without tags.
-- **Event-sourced**: cost as events in a stream (Kafka / Kinesis). Real-time.
-- **Real-time streaming**: dashboard updates sub-second.
+- **标签聚合**：stamp 元数据头；稍后聚合。简单；粗糙。
+- **遥测连接器**：通过 trace ID 连接跟踪与计费。最高精度。成熟团队的做法。
+- **采样 + 外推**：采样 5-10%，乘以倍数。成本有效，适合粗略支出；遗漏尾部。
+- **基于模型的分配**：回归推断成本驱动因素。适用于没有标签的遗留数据。
+- **事件溯源**：将成本作为流中的事件（Kafka / Kinesis）。实时。
+- **实时流**：仪表板亚秒级更新。
 
-### Cost per X is the unit metric
+### 成本每 X 是单位指标
 
-$/M tokens is vendor speak. Product metrics:
+每百万令牌美元是供应商的话术。产品指标：
 
-- Cost per resolved support ticket.
-- Cost per generated article.
-- Cost per successful agent task.
-- Cost per user-session-minute.
+- 每个已解决的支持工单的成本。
+- 每篇生成文章的成本。
+- 每个成功的代理任务的成本。
+- 每个用户会话分钟的成本。
 
-Tie cost to a product outcome. Otherwise optimization is unanchored.
+将成本与产品结果挂钩。否则优化无锚点。
 
-### Cost attribution trace shape
+### 成本归属跟踪形状
 
 ```
 trace_id: abc123
@@ -93,58 +93,58 @@ trace_id: abc123
   batch: false
 ```
 
-Emit on every call. Store in data lake. Aggregate per dimension. Phase 17 · 13 observability stack is where this lives.
+每条调用时发出。存储在数据湖中。按维度聚合。阶段 17 · 13 可观测性栈是这些数据所在之处。
 
-### The compounded-savings stack
+### 复合节省栈
 
-Stack: cache + batch + route + gateway. With all four:
-- Cache L2 (Phase 17 · 14): ~10x cheaper input.
-- Batch (Phase 17 · 15): 50% off.
-- Route to cheap model (Phase 17 · 16): 60% cost reduction.
-- Gateway efficiency (Phase 17 · 19): redundancy + retries.
+栈：缓存 + 批处理 + 路由 + 网关。四个全部启用时：
+- L2 缓存（阶段 17 · 14）：~10 倍便宜的输入。
+- 批处理（阶段 17 · 15）：5 折。
+- 路由至廉价模型（阶段 17 · 16）：60% 成本降低。
+- 网关效率（阶段 17 · 19）：冗余 + 重试。
 
-Best-case stacked: ~5-10% of naive baseline. Most teams have 2-3 levers engaged; few stack all four.
+最佳情况堆叠：约为朴素基线的 ~5-10%。大多数团队启用了 2-3 个杠杆；很少有人全栈。
 
-### Numbers you should remember
+### 需记住的数字
 
-- Attribution dimensions: per-user, per-task, per-tenant.
-- Four token layers: prompt, tool, memory, response.
-- Kill switch: spend z-score > 4.
-- Unit metric: cost per resolved query, not $/M tokens.
-- Stacked optimizations: ~5-10% of baseline possible.
+- 归属维度：按用户、按任务、按租户。
+- 四个令牌层级：提示、工具、记忆、响应。
+- 终止开关：支出 z-score > 4。
+- 单位指标：每个已解决查询的成本，而非每百万令牌美元。
+- 堆叠优化：约为基线的 ~5-10% 可达。
 
-## Use It
+## 使用它
 
-`code/main.py` simulates a multi-tenant LLM service with the three-tier enforcement ladder. Injects an abusive tenant and demonstrates the kill switch firing.
+`code/main.py` 模拟了一个带三层执行阶梯的多租户 LLM 服务。注入一个滥用租户并演示终止开关触发。
 
-## Ship It
+## 交付它
 
-This lesson produces `outputs/skill-finops-plan.md`. Given product and scale, designs the attribution schema and enforcement ladder.
+本课产出 `outputs/skill-finops-plan.md`。给定产品和规模，设计归属模式和控制执行阶梯。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. At what z-score does the kill switch fire? How do you pick the threshold?
-2. Design a per-tenant, per-task cost dashboard. What are the 5 views you build first?
-3. Your largest tenant is unit-economics-negative. Propose three interventions ordered by customer impact.
-4. Compute cost per resolved ticket for a support product: 3M tokens/ticket, ~800 tickets/day, GPT-5 cached rate.
-5. Argue whether retroactive tagging can ever work. When is it acceptable?
+1. 运行 `code/main.py`。终止开关在哪个 z-score 时触发？你如何选择阈值？
+2. 设计一个按租户、按任务的成本仪表板。你首先构建哪 5 个视图？
+3. 你最大的租户单位经济学为负。提出三个按客户影响排序的干预措施。
+4. 计算支持产品的每个已解决工单成本：每个工单 300 万令牌，约 800 个工单/天，GPT-5 缓存费率。
+5. 论证事后标签是否可行。什么时候可接受？
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Per-user attribution | "user-level cost" | `user_id` stamped on every call |
-| Per-task attribution | "feature cost" | `task_id` + `route` identify product surface |
-| Per-tenant attribution | "customer cost" | `tenant_id`; drives unit economics |
-| Four token layers | "cost layers" | prompt + tool + memory + response |
-| Rate limit | "429 guard" | Per-tenant ceiling enforced at gateway |
-| Daily spend cap | "daily ceiling" | Tenant-scoped budget with alert |
-| Kill switch | "auto-pause" | Spend z-score > 4 triggers auto-suspension |
-| Cost per resolved | "product unit metric" | Cost tied to product outcome, not tokens |
-| Telemetry joiner | "trace-to-billing" | Highest-accuracy attribution pattern |
-| Stacked optimization | "cache+batch+route+gateway" | Compounding savings to ~5-10% baseline |
+| 按用户归属 | "用户级成本" | `user_id` stamp 在每条调用上 |
+| 按任务归属 | "功能成本" | `task_id` + `route` 识别产品表面 |
+| 按租户归属 | "客户成本" | `tenant_id`；驱动单位经济学 |
+| 四个令牌层级 | "成本层级" | 提示 + 工具 + 记忆 + 响应 |
+| 限速 | "429 防护" | 在网关执行的按租户上限 |
+| 日支出上限 | "日预算上限" | 租户范围的预算 + 告警 |
+| 终止开关 | "自动暂停" | 支出 z-score > 4 触发自动挂起 |
+| 每个已解决的成本 | "产品单位指标" | 成本与产品结果挂钩，而非令牌 |
+| 遥测连接器 | "跟踪到计费" | 最高精度归属模式 |
+| 堆叠优化 | "缓存+批处理+路由+网关" | 复合节省至约为基线的 ~5-10% |
 
-## Further Reading
+## 延伸阅读
 
 - [FinOps Foundation — FinOps for AI Overview](https://www.finops.org/wg/finops-for-ai-overview/)
 - [FinOps School — Cost per Unit 2026 Guide](https://finopsschool.com/blog/cost-per-unit/)

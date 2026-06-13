@@ -1,126 +1,126 @@
-# Cold Start Mitigation for Serverless LLMs
+# Serverless LLM 冷启动缓解
 
-> A 20 GB model image takes 5-10 minutes (7B) to 20+ minutes (70B) to go from cold to serving. In a true serverless world, that is not a warm-up — it is an outage. Mitigations operate at five layers: pre-seeded node images (Bottlerocket on AWS, dual-volume arch), model streaming (NVIDIA Run:ai Model Streamer, native in vLLM), GPU memory snapshots (Modal checkpoints, up to 10x faster restart), warm pools (`min_workers=1`), tiered loading (ServerlessLLM's NVMe→DRAM→HBM pipeline, 10-200x latency reduction), and live migration that moves input tokens (KB) rather than KV cache (GB). Modal publishes 2-4s cold starts as a floor; Baseten 5-10s default, sub-second with pre-warming. This lesson teaches you to measure, budget, and stack the five layers.
+> 一个 20 GB 的模型镜像从冷状态到开始服务，7B 模型需要 5-10 分钟，70B 需要 20 分钟以上。在真正的无服务器世界里，这不是预热——这是宕机。缓解措施分为五层：预填充节点镜像（Bottlerocket on AWS，双卷架构）、模型流式加载（NVIDIA Run:ai Model Streamer，vLLM 原生支持）、GPU 内存快照（Modal 检查点，重启快 10 倍）、暖池（`min_workers=1`）、分层加载（ServerlessLLM 的 NVMe→DRAM→HBM 流水线，延迟降低 10-200 倍），以及 жив迁移——迁移输入 token（KB）而非 KV 缓存（GB）。Modal 公布冷启动底线为 2-4 秒；Baseten 默认 5-10 秒，预热后亚秒级。本课教你测量、预算和叠加这五层。
 
-**Type:** Learn
-**Languages:** Python (stdlib, toy cold-start path simulator)
-**Prerequisites:** Phase 17 · 02 (Inference Platform Economics), Phase 17 · 03 (GPU Autoscaling)
-**Time:** ~60 minutes
+**类型：** 学习型
+**语言：** Python（标准库，含 toy 冷启动路径模拟器）
+**前置条件：** 阶段 17 · 02（推理平台经济学），阶段 17 · 03（GPU 自动扩缩容）
+**时间：** 约 60 分钟
 
-## Learning Objectives
+## 学习目标
 
-- Enumerate the five layers of cold-start mitigation and name one tool or pattern at each layer.
-- Compute total cold-start time as a sum of (node provision) + (weights download) + (weights load into HBM) + (engine init) for a 70B model.
-- Explain why live migration transfers input tokens (KB) not KV cache (GB) and what the penalty is (recomputation).
-- Name the warm-pool trade-off (pay for idle GPU or accept cold-start tail) and the SLA threshold at which `min_workers > 0` becomes mandatory.
+- 列举冷启动缓解的五层，并说出每层的一个工具或模式。
+- 计算 70B 模型的总冷启动时间 =（节点供给）+（权重下载）+（权重加载到 HBM）+（引擎初始化）。
+- 解释为什么 жив迁移迁移输入 token（KB）而非 KV 缓存（GB），以及其代价（重计算）。
+- 说出暖池的权衡（为空闲 GPU 付费还是接受冷启动尾延迟），以及 `min_workers > 0` 成为必选的 SLA 阈值。
 
-## The Problem
+## 问题
 
-Your serverless LLM endpoint scales to zero overnight. At 8 a.m. traffic spikes. The first request waits while:
+你的无服务器 LLM 端点过夜缩容到零。早上 8 点流量突增。第一个请求等待过程中：
 
-1. Karpenter provisions a GPU node: 45-60s.
-2. The container pulls a 30 GB image with weights: 120-300s.
-3. The engine loads weights into HBM: 45-120s depending on model size and storage speed.
-4. vLLM or TRT-LLM initializes CUDA graphs, KV cache pool, tokenizer: 10-30s.
+1. Karpenter 供给一个 GPU 节点：45-60 秒。
+2. 容器拉取 30 GB 含权重的镜像：120-300 秒。
+3. 引擎将权重加载到 HBM：45-120 秒（取决于模型大小和存储速度）。
+4. vLLM 或 TRT-LLM 初始化 CUDA 图、KV 缓存池、分词器：10-30 秒。
 
-Total: 220-510s (roughly 3-8 minutes) before one token comes back. Your SLA is 2s. You ship a warm-pool (`min_workers=1`) and the problem seems to vanish — but now you pay for one idle GPU 24x7. If your service has 5 products each with one warm replica, that's 5 × 24 × 30 = 3,600 GPU-hours/month whether or not a single user called.
+总计：220-510 秒（约 3-8 分钟）才能返回第一个 token。你的 SLA 是 2 秒。你上了暖池（`min_workers=1`），问题似乎消失了——但现在你为 7×24 小时的一个空闲 GPU 付费。如果你的服务有 5 个产品各一个暖副本，那就是 5 × 24 × 30 = 3600 GPU-小时/月，无论是否有一个用户调用。
 
-Cold-start mitigation is how to keep the serverless economics while approximating the latency of always-on.
+冷启动缓解就是在保持无服务器经济性的同时，逼近常驻延迟。
 
-## The Concept
+## 概念
 
-### Layer 1 — pre-seeded node images (Bottlerocket)
+### 第一层——预填充节点镜像（Bottlerocket）
 
-On AWS, Bottlerocket's dual-volume architecture separates OS from data. Snapshot the data volume with your container image pre-pulled; reference the snapshot ID in your `EC2NodeClass`. New nodes boot with weights already on local NVMe — steps 2 and part of 3 vanish. Works with Karpenter natively. Typical savings: 2-4 minutes per cold start for large models.
+在 AWS 上，Bottlerocket 的双卷架构将 OS 与数据分离。用预先拉取好的容器镜像快照数据卷；在 `EC2NodeClass` 中引用快照 ID。新节点启动时权重已在本地 NVMe 上——第 2 步和第 3 步部分消失。与 Karpenter 原生配合。大型模型每次冷启动节省 2-4 分钟。
 
-Equivalent on GCP: custom VM images with pre-baked container layers. On Azure: managed disk snapshots with the same pattern.
+GCP 上的等价方案：带预烘焙容器层的自定义 VM 镜像。Azure 上：相同模式的管理磁盘快照。
 
-### Layer 2 — model streaming (Run:ai Model Streamer)
+### 第二层——模型流式加载（Run:ai Model Streamer）
 
-Instead of loading the full file before answering the first request, stream weights into GPU memory layer-by-layer and start processing as soon as the first transformer block is resident. The NVIDIA Run:ai Model Streamer ships native in vLLM 2026. Works with S3, GCS, and local NVMe. Cuts weight-load time roughly in half for large models by overlapping I/O with compute setup.
+不是在响应第一个请求前加载完整文件，而是将权重逐层流入 GPU 内存，并在第一个 transformer 块就位后立即开始处理。NVIDIA Run:ai Model Streamer 在 vLLM 2026 中原生提供。支持 S3、GCS 和本地 NVMe。通过将 I/O 与计算设置重叠，将权重加载时间减半。
 
-### Layer 3 — GPU memory snapshots (Modal)
+### 第三层——GPU 内存快照（Modal）
 
-Modal takes a checkpoint of the GPU state (weights, CUDA graphs, KV cache region) after first load. Subsequent restarts deserialize directly into HBM — 10x faster than re-initializing. This is the closest thing to "boot a warm GPU in 2 seconds." Trade-off: snapshots are per-GPU-topology, so if Karpenter migrates you to a different SKU, you re-checkpoint.
+Modal 在首次加载后对 GPU 状态（权重、CUDA 图、KV 缓存区域）进行检查点保存。后续重启直接反序列化到 HBM——比重新初始化快 10 倍。这是"2 秒启动一个热 GPU"最接近的东西。权衡：快照与 GPU 拓扑绑定，因此如果 Karpenter 将你迁移到不同 SKU，你需要重新做检查点。
 
-### Layer 4 — warm pools (min_workers=1)
+### 第四层——暖池（min_workers=1）
 
-Simplest mitigation: keep one replica always ready. Cost is one GPU's hourly rate 24x7. The arithmetic is brutal on small models (you pay $0.85-$1.50/hr to avoid a 30s cold start) and kind to large ones (pay $4/hr to avoid a 5-minute cold start). The SLA threshold where warm pools become mandatory: typically TTFT P99 < 60s on a 70B+ model.
+最简单的缓解措施：保持一个副本始终就绪。代价是一个 GPU 的小时费率 7×24 小时。对于小型模型这笔算术很残酷（为避免 30 秒冷启动支付 $0.85-$1.50/小时）而对大型模型很友好（为避免 5 分钟冷启动支付 $4/小时）。暖池成为必选的 SLA 阈值：通常 70B+ 模型的 TTFT P99 < 60 秒。
 
-### Layer 5 — tiered loading (ServerlessLLM)
+### 第五层——分层加载（ServerlessLLM）
 
-ServerlessLLM treats storage as a hierarchy: NVMe (fast but big), DRAM (medium but tiered), HBM (tiny but instant). Weights are pre-loaded to DRAM; load-on-demand into HBM. Paper reports 10-200x latency reduction on cold loads versus naive disk-to-HBM. Production adoption is early but integrations with vLLM exist.
+ServerlessLLM 将存储视为层次结构：NVMe（快但大）、DRAM（中速但分层）、HBM（小但即时）。权重预加载到 DRAM；按需加载到 HBM。据论文报告，冷加载延迟比朴素 disk-to-HBM 降低 10-200 倍。生产采用处于早期阶段，但已与 vLLM 集成。
 
-### Layer 6 — live migration (bonus pattern)
+### 第六层—— жив迁移（附加模式）
 
-When a node becomes unavailable (spot eviction, node drain), traditional pattern is cold-start another replica and drain request queue. Live migration moves the input tokens (kilobytes) to a destination that has the model loaded and recomputes KV cache on the destination. Recomputation is cheaper than transferring GB of KV cache over the network. Applicable to disaggregated deployments.
+当节点不可用时（spot 驱逐、节点排空），传统模式是冷启动另一个副本并排空请求队列。 жив迁移将输入 token（千字节）转移到已加载模型的目的地，并在目的地重计算 KV 缓存。重计算比通过网络传输 GB 级 KV 缓存更便宜。适用于分解式部署。
 
-### The warm-pool math
+### 暖池数学
 
-For a service with P99 TTFT SLA of 2s, the question is not "warm pool yes/no" but "how many warm replicas, and which paths get them."
+对于 P99 TTFT SLA 为 2 秒的服务，问题不是"暖池是/否"而是"多少个暖副本，哪条路径获得它们"。
 
-- High-value interactive paths (live chat, voice agent): `min_workers=1-2`.
-- Background batch paths (nightly classification): scale-to-zero accepted, 5-10 minute cold start tolerable.
-- Premium tier: `min_workers` per tenant with dedicated capacity.
+- 高价值交互路径（实时聊天、语音代理）：`min_workers=1-2`。
+- 后台批处理路径（夜间分类）：可接受缩容到零，5-10 分钟冷启动可容忍。
+- 高级层：每个租户 `min_workers`，配专用容量。
 
-### Measure before optimizing
+### 优化前先测量
 
-Cold-start anatomy for a 70B model on a fresh node (illustrative):
+新节点上 70B 模型的冷启动解剖（示例）：
 
-| Phase | Time | Mitigation |
+| 阶段 | 时间 | 缓解措施 |
 |-------|------|-----------|
-| Node provision | 50s | Bottlerocket + pre-seeded image, warm pool |
-| Image pull | 180s | Pre-seeded data volume (eliminate) |
-| Weights to HBM | 75s | Model streamer (halve); GPU snapshot (eliminate) |
-| Engine init | 20s | Persistent CUDA graph cache |
-| First forward | 3s | Min inherent latency |
-| **Total cold** | **328s** | |
-| **Total with mitigations** | **~15s** | 22x reduction |
+| 节点供给 | 50s | Bottlerocket + 预填充镜像，暖池 |
+| 镜像拉取 | 180s | 预填充数据卷（消除） |
+| 权重到 HBM | 75s | 模型流式加载器（减半）；GPU 快照（消除） |
+| 引擎初始化 | 20s | 持久化 CUDA 图缓存 |
+| 首次前向 | 3s | 最小固有延迟 |
+| **冷启动总计** | **328s** | |
+| **加缓解措施后** | **约 15s** | 22 倍降低 |
 
-### Numbers you should remember
+### 应记住的数字
 
-- Modal cold start: 2-4s (with GPU snapshots).
-- Baseten default cold start: 5-10s; sub-second with pre-warming.
-- Raw 70B cold start: 3-8 minutes.
-- Run:ai Model Streamer: ~2x weight-load speedup.
-- ServerlessLLM tiered loading: 10-200x latency reduction (paper numbers).
+- Modal 冷启动：2-4 秒（带 GPU 快照）。
+- Baseten 默认冷启动：5-10 秒；预热后亚秒级。
+- 70B 原始冷启动：3-8 分钟。
+- Run:ai Model Streamer：权重加载加速约 2 倍。
+- ServerlessLLM 分层加载：延迟降低 10-200 倍（论文数字）。
 
-## Use It
+## 使用方法
 
-`code/main.py` models a cold-start path with and without each mitigation. Reports total cold-start time, warm-pool cost, and the break-even request rate above which warm pool pays for itself.
+`code/main.py` 模拟有/无各缓解措施的冷启动路径。报告总冷启动时间、暖池成本，以及暖池比通过 SLO 下额外请求丢弃支付冷启动税更划算的盈亏平衡请求率。
 
-## Ship It
+## 交付
 
-This lesson produces `outputs/skill-cold-start-planner.md`. Given SLA, model size, and traffic shape, picks which mitigations to stack.
+本课产出 `outputs/skill-cold-start-planner.md`。给定 SLA、模型大小和流量形状，选择要叠加的缓解措施。
 
-## Exercises
+## 练习
 
-1. Run `code/main.py`. Compute the break-even request rate above which a warm replica is cheaper than paying the cold-start tax via extra request drops at SLO.
-2. You deploy a 13B model with P99 TTFT SLA of 3s. Pick the minimum mitigation stack (fewest layers) that achieves it.
-3. Bottlerocket pre-seeding eliminates image pull but weights still load from snapshot to HBM. Compute wall-clock for a 70B model if the snapshot-backed NVMe reads at 7 GB/s.
-4. Your serverless provider offers GPU snapshots (Modal) and your team refuses because "snapshots leak PII." Argue both sides — what is the realistic risk, and what is the mitigation (ephemeral snapshots, encryption, namespace isolation)?
-5. Design a tiered warm-pool policy: how many warm replicas for paid users, trial users, and batch workloads? Show the math.
+1. 运行 `code/main.py`。计算暖副本比通过 SLO 下额外请求丢弃支付冷启动税更划算的盈亏平衡请求率。
+2. 你部署一个 13B 模型，P99 TTFT SLA 为 3 秒。选择达到该目标的最轻量缓解措施栈（层数最少）。
+3. Bottlerocket 预填充消除了镜像拉取，但权重仍从快照加载到 HBM。如果快照支持的 NVMe 读取速度为 7 GB/s，计算 70B 模型的壁钟时间。
+4. 你的无服务器提供商提供 GPU 快照（Modal），你的团队拒绝因为"快照泄露 PII"。论证双方——现实风险是什么，缓解措施是什么（临时快照、加密、命名空间隔离）？
+5. 设计一个分层暖池策略：付费用户、试用用户和批处理工作负载各多少个暖副本？给出数学推导。
 
-## Key Terms
+## 关键术语
 
-| Term | What people say | What it actually means |
+| 术语 | 大家怎么说的 | 实际含义 |
 |------|----------------|------------------------|
-| Cold start | "the big pause" | Time from request to first token on a fresh replica |
-| Warm pool | "always-on minimum" | `min_workers >= 1` to keep at least one replica ready |
-| Pre-seeded image | "baked AMI" | Node image with container weights pre-resident |
-| Bottlerocket | "AWS node OS" | AWS container-optimized OS with dual-volume snapshot support |
-| Model streamer | "streaming load" | Overlap weights I/O with compute setup |
-| GPU snapshot | "checkpoint to HBM" | Serialize post-load GPU state; deserialize on restart |
-| Tiered loading | "NVMe + DRAM + HBM" | Hierarchy of storage tiers; load on demand |
-| Live migration | "move tokens" | Transfer input (KB), recompute KV on destination |
-| `min_workers` | "warm replicas" | Serverless minimum keep-alive count |
-| Scale-to-zero | "full serverless" | No cost when idle; accept full cold-start tax |
+| 冷启动 | "大暂停" | 从请求到全新副本第一个 token 的时间 |
+| 暖池 | "常驻最小值" | `min_workers >= 1` 保持至少一个副本就绪 |
+| 预填充镜像 | "烘焙 AMI" | 节点镜像中容器权重已就位 |
+| Bottlerocket | "AWS 节点 OS" | AWS 容器优化 OS，支持双卷快照 |
+| 模型流式加载器 | "流式加载" | 将权重 I/O 与计算设置重叠 |
+| GPU 快照 | "检查点到 HBM" | 序列化加载后 GPU 状态；重启时反序列化 |
+| 分层加载 | "NVMe + DRAM + HBM" | 存储层层次结构；按需加载 |
+| жив迁移 | "移动 token" | 传输输入（KB），在目的地重计算 KV |
+| `min_workers` | "暖副本" | 无服务器最小保活数量 |
+| 缩容到零 | "完全无服务器" | 空闲时零成本；接受完整冷启动代价 |
 
-## Further Reading
+## 扩展阅读
 
-- [Modal — Cold start performance](https://modal.com/docs/guide/cold-start) — Modal's published benchmarks and checkpoint architecture.
-- [AWS Bottlerocket](https://github.com/bottlerocket-os/bottlerocket) — pre-seeded data volume snapshot pattern.
-- [NVIDIA Run:ai Model Streamer](https://github.com/run-ai/runai-model-streamer) — overlap weights load with compute setup.
-- [Baseten — Cold-start mitigation](https://www.baseten.co/blog/cold-start-mitigation/) — pre-warming playbook.
-- [ServerlessLLM paper (USENIX OSDI'24)](https://www.usenix.org/conference/osdi24/presentation/fu) — tiered loading design.
-- [NVIDIA — Disaggregated LLM Inference on Kubernetes](https://developer.nvidia.com/blog/deploying-disaggregated-llm-inference-workloads-on-kubernetes/) — live migration for disaggregated deployments.
+- [Modal — 冷启动性能](https://modal.com/docs/guide/cold-start) — Modal 公布的基准和检查点架构。
+- [AWS Bottlerocket](https://github.com/bottlerocket-os/bottlerocket) — 预填充数据卷快照模式。
+- [NVIDIA Run:ai Model Streamer](https://github.com/run-ai/runai-model-streamer) — 将权重加载与计算设置重叠。
+- [Baseten — 冷启动缓解](https://www.baseten.co/blog/cold-start-mitigation/) — 预热 playbook。
+- [ServerlessLLM 论文（USENIX OSDI'24）](https://www.usenix.org/conference/osdi24/presentation/fu) — 分层加载设计。
+- [NVIDIA — Kubernetes 上分解式 LLM 推理](https://developer.nvidia.com/blog/deploying-disaggregated-llm-inference-workloads-on-kubernetes/) — 分解式部署的 жив迁移。
